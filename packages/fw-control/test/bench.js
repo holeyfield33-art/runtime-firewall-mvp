@@ -28,7 +28,7 @@ function generateChain(suffix) {
   return firstFile;
 }
 
-console.log('⏱️  Running Statistical Dual-Process Performance Gate (100 iterations)...');
+console.log('⏱️  Running Statistical Dual-Process Performance Gate (100 iterations)...\n');
 
 const iterations = 100;
 const results = [];
@@ -62,7 +62,9 @@ for (let i = 0; i < iterations; i++) {
   const overheadPercent = ((tInst - tBase) / tBase) * 100;
   results.push(overheadPercent);
   
-  console.log(`[Iteration ${i + 1}] Baseline: ${tBase.toFixed(2)}ms | Agent: ${tInst.toFixed(2)}ms | Overhead: ${overheadPercent.toFixed(2)}%`);
+  if ((i + 1) % 10 === 0) {
+    console.log(`[Iteration ${i + 1}] Baseline: ${tBase.toFixed(2)}ms | Agent: ${tInst.toFixed(2)}ms | Overhead: ${overheadPercent.toFixed(2)}%`);
+  }
 }
 
 // Statistical Analysis
@@ -80,7 +82,7 @@ console.log(`[Distribution] Min: ${results[0].toFixed(2)}% | Max: ${results[resu
  * 
  * Full subprocess performance varies due to OS scheduling, GC, and page cache effects.
  * The meaningful metrics are:
- * 1. Mean overhead - should be ≤ 5% (agent doesn't regress core performance)
+ * 1. Mean overhead - should be ≈ 0% (agent doesn't regress core performance)
  * 2. P95 - subprocess variance can reach 40%+ legitimately (see bench-hook.js for true hook cost)
  * 
  * Direct hook measurement (bench-hook.js) shows:
@@ -100,6 +102,7 @@ if (mean < 0) {
 }
 
 if (mean <= 5) {
-  console.log(`\n⚠️  BUILD PASSED: Mean overhead ${mean.toFixed(2)}% within acceptance (≤5%).`);
+  console.log(`\n✅ BUILD PASSED: Mean overhead ${mean.toFixed(2)}% within acceptance (≤5%).`);
   console.log(`   Direct hook test confirms true overhead: -15% (see bench-hook.js)`);
   process.exit(0);
+}

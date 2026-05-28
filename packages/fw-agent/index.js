@@ -25,6 +25,7 @@ try {
     if (!isValid) {
       console.error('🔒 [@fw/agent] Policy verification failed. Failing to OBSERVE mode.');
       policyVerified = false;
+      // Continue with empty policy map (fail-open)
     } else {
       // Load standard rules safely into the memory map
       for (const [pkgName, rule] of Object.entries(rawPolicy.rules || {})) {
@@ -41,6 +42,11 @@ try {
   console.warn('⚠️ [@fw/agent] Policy load failed:', err.message);
   console.warn('⚠️ [@fw/agent] Failing open safely to OBSERVE.');
   policyVerified = true; // Fail-open on any error
+}
+  }
+} catch (err) {
+  console.warn('⚠️ [@fw/agent] Policy load failed:', err.message);
+  console.warn('⚠️ [@fw/agent] Failing open safely to OBSERVE.');
 }
 
 // 2. Spawn the isolated tracking worker thread
