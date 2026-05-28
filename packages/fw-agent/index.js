@@ -43,11 +43,6 @@ try {
   console.warn('⚠️ [@fw/agent] Failing open safely to OBSERVE.');
   policyVerified = true; // Fail-open on any error
 }
-  }
-} catch (err) {
-  console.warn('⚠️ [@fw/agent] Policy load failed:', err.message);
-  console.warn('⚠️ [@fw/agent] Failing open safely to OBSERVE.');
-}
 
 // 2. Spawn the isolated tracking worker thread
 const workerPath = path.join(__dirname, 'sync-worker.js');
