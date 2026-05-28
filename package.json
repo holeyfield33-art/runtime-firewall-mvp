@@ -1,0 +1,12 @@
+﻿{
+  "name": "runtime-firewall-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test:bench": "node packages/fw-control/test/bench.js",
+    "init:agent": "node packages/fw-control/bin/fw-init.js"
+  }
+}
