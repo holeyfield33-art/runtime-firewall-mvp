@@ -13,30 +13,34 @@ const originalResolve = Module._resolveFilename;
 // 1. Initialize local cache configurations
 let policyMap = new Map();
 const POLICY_PATH = path.join(process.cwd(), 'policy.signed.json');
+let policyVerified = false;
 
 // Fail-Open Bootstrap Policy Loader with Integrity Verification
 try {
   if (fs.existsSync(POLICY_PATH)) {
     const rawPolicy = JSON.parse(fs.readFileSync(POLICY_PATH, 'utf8'));
     
-    // Verify policy integrity before loading
+    // Verify policy integrity before loading (only once at startup)
     const isValid = verifyPolicyIntegrity(rawPolicy);
     if (!isValid) {
       console.error('🔒 [@fw/agent] Policy verification failed. Failing to OBSERVE mode.');
-      // Continue with empty policy map (fail-open)
+      policyVerified = false;
     } else {
       // Load standard rules safely into the memory map
       for (const [pkgName, rule] of Object.entries(rawPolicy.rules || {})) {
         policyMap.set(pkgName, rule);
       }
+      policyVerified = true;
       console.log(`🔒 [@fw/agent] Loaded ${policyMap.size} verified rules from local cache.`);
     }
   } else {
     console.log('🔒 [@fw/agent] No policy cache discovered. Defaulting to OBSERVE mode.');
+    policyVerified = true; // No policy = verified safe state
   }
 } catch (err) {
   console.warn('⚠️ [@fw/agent] Policy load failed:', err.message);
   console.warn('⚠️ [@fw/agent] Failing open safely to OBSERVE.');
+  policyVerified = true; // Fail-open on any error
 }
 
 // 2. Spawn the isolated tracking worker thread

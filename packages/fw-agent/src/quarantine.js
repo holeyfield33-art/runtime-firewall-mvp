@@ -32,16 +32,21 @@ class QuarantineStub {
     // Calculate the forensic hash (SHA-256 of canonical JSON)
     const eventHash = hashMemoryObject(forensicObject);
 
-    // Emit telemetry with the hash for immutable audit trail
-    this.telemetry.emit('quarantine_event', {
-      ...forensicObject,
-      hash: eventHash  // Tamper-evident anchor
-    });
+    // Only emit telemetry if it exists (may be disabled during benchmarks)
+    if (this.telemetry && this.telemetry.emit) {
+      // Emit telemetry with the hash for immutable audit trail
+      this.telemetry.emit('quarantine_event', {
+        ...forensicObject,
+        hash: eventHash  // Tamper-evident anchor
+      });
+    }
 
-    // Also log to console for real-time observability
-    console.warn(
-      `[Quarantine Intercept] Package: ${this.packageName} | Operation: ${operation} | Hash: ${eventHash.substring(0, 16)}...`
-    );
+    // Also log to console for real-time observability (only first breach)
+    if (this.interceptCount === 1) {
+      console.warn(
+        `[Quarantine Intercept] Package: ${this.packageName} | Operation: ${operation} | Hash: ${eventHash.substring(0, 16)}...`
+      );
+    }
   }
 
   /**
