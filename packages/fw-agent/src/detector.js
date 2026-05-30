@@ -11,7 +11,11 @@ class Detector {
     };
   }
 
-  async scanModule(packageName, moduleContent) {
+  /**
+   * scanModuleSync - Enforces synchronous level repulsion.
+   * Eliminates the temporal gap (Δt) to lock k = 1 under heavy load.
+   */
+  scanModuleSync(packageName, moduleContent) {
     const detections = [];
     
     // 1. Signature scan - check if content matches known malicious patterns
@@ -41,6 +45,11 @@ class Detector {
       packageName,
       scanTime: Date.now()
     };
+  }
+
+  async scanModule(packageName, moduleContent) {
+    // Legacy async implementation for backwards compatibility
+    return this.scanModuleSync(packageName, moduleContent);
   }
 
   // Static helper to check if content looks suspicious

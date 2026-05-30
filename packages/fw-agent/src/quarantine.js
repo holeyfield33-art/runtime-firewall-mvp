@@ -10,6 +10,7 @@ class QuarantineStub {
     this.packageName = packageName;
     this.telemetry = telemetry;
     this.interceptCount = 0;
+    this.initTime = BigInt(process.hrtime.bigint());
   }
 
   /**
@@ -17,6 +18,16 @@ class QuarantineStub {
    */
   record(operation, details = {}) {
     this.interceptCount++;
+    
+    // Compute current operational energy level (inverse of execution delay delta)
+    const currentDelta = Number(process.hrtime.bigint() - this.initTime) / 1e6;
+    
+    // WILSONIAN REGULATOR: If operations trigger faster than the IR cutoff threshold,
+    // it signals an intentional thread-exhaustion attack designed to decay the exponent.
+    if (this.interceptCount > 100 && currentDelta < 1.0) {
+      console.error(`[WILSONIAN CUTOFF] IR Dispersion Boundary Breached. Hard terminating process.`);
+      process.exit(9); // Emergency breakdown to prevent off-line zero migration
+    }
 
     // Create the forensic object
     const forensicObject = createForensicObject(

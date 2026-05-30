@@ -13,7 +13,7 @@ fs.mkdirSync(BENCH_DIR, { recursive: true });
 // Generate a cleanly chained, nested module architecture
 function generateChain(suffix) {
   let firstFile = '';
-  const totalModules = 300; // Increase module count to dampen subprocess startup variance
+  const totalModules = 500; // Increased module count for extended stress validation
   
   for (let i = 0; i < totalModules; i++) {
     const currentPath = path.join(BENCH_DIR, `mod_${suffix}_${i}.js`);
@@ -28,9 +28,9 @@ function generateChain(suffix) {
   return firstFile;
 }
 
-console.log('⏱️  Running Statistical Dual-Process Performance Gate (100 iterations)...\n');
+console.log('⏱️  Running Statistical Dual-Process Performance Gate (500 iterations)...\n');
 
-const iterations = 100;
+const iterations = 500;
 const results = [];
 
 for (let i = 0; i < iterations; i++) {
