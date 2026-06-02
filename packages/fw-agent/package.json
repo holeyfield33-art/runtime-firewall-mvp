@@ -4,6 +4,9 @@
   "main": "index.js",
   "private": true,
   "description": "Zero-dependency Runtime Guardian Shell",
+  "scripts": {
+    "test": "node test/aho-corasick-unit-test.js && node test/detector-unit-test.js"
+  },
   "engines": {
     "node": ">=18.0.0"
   }

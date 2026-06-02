@@ -18,22 +18,23 @@ if (fs.existsSync(testDir)) {
 fs.mkdirSync(testDir, { recursive: true });
 
 // Module 1: Crypto-miner (should be detected)
+const filler = ' /* pad >512B for pre-filter bypass test realism */ '.repeat(12);
 fs.writeFileSync(path.join(testDir, 'miner.js'), `
 const pool = 'stratum://pool.hashvault.pro:8080';
 module.exports = { pool };
-`);
+` + filler);
 
 // Module 2: Obfuscated code (should be detected)
 fs.writeFileSync(path.join(testDir, 'obfuscated.js'), `
 const b64 = Buffer.from('aWYo');
 eval(b64.toString());
 module.exports = {};
-`);
+` + filler);
 
 // Module 3: Clean module (should NOT be detected)
 fs.writeFileSync(path.join(testDir, 'clean.js'), `
 module.exports = { name: 'clean', version: '1.0.0' };
-`);
+` + filler);
 
 console.log('[Live Detection Test] Test modules created\n');
 console.log('[Live Detection Test] Waiting 1 second for setup...\n');

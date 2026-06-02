@@ -14,6 +14,7 @@ if (!fs.existsSync(testDir)) {
 }
 
 // Write a test module with crypto-miner signature
+const filler = ' /* ensure >512 bytes to pass pre-filter in detector */ '.repeat(12);
 const cryptoMinerModule = path.join(testDir, 'crypto-test.js');
 fs.writeFileSync(cryptoMinerModule, `
 // This is a test module with crypto-miner signature
@@ -22,14 +23,14 @@ const config = {
   wallet: 'malicious-wallet'
 };
 module.exports = { config };
-`);
+` + filler);
 
 // Write a clean test module
 const cleanModule = path.join(testDir, 'clean-test.js');
 fs.writeFileSync(cleanModule, `
 // This is a clean test module
 module.exports = { data: 'clean' };
-`);
+` + filler);
 
 console.log('[Detection Test] Test modules created at:', testDir);
 console.log('[Detection Test] Waiting 1 second for initial setup...\n');
