@@ -5,7 +5,10 @@
   "private": true,
   "description": "Zero-dependency Runtime Guardian Shell",
   "scripts": {
-    "test": "node test/aho-corasick-unit-test.js && node test/detector-unit-test.js"
+    "test": "node test/aho-corasick-unit-test.js && node test/detector-unit-test.js",
+    "test:adversarial": "node ../fw-control/test/adversarial/adversarial.test.js",
+    "test:integration": "FW_ENABLE_DETECTION=1 node ../fw-control/test/detection-test.js",
+    "test:live": "FW_ENABLE_DETECTION=1 node ../fw-control/test/detection-live-test.js"
   },
   "engines": {
     "node": ">=18.0.0"
