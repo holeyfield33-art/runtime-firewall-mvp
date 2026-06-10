@@ -1,0 +1,64 @@
+version: '3.9'
+
+# Helios Runtime Firewall – complete stack
+# Services: control plane + instrumented example app + shared audit log volume
+#
+# Usage:
+#   docker compose up
+#   docker compose run --rm app node -e "require('fs')"   # safe
+#   HELIOS_DASHBOARD_TOKEN=secret curl http://localhost:3000/logs
+
+volumes:
+  helios-logs:
+    driver: local
+
+networks:
+  helios-net:
+    driver: bridge
+
+services:
+
+  # ── Control Plane (telemetry ingestion + dashboard) ─────────────────────────
+  control:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - helios-logs:/var/log/helios
+    command: node packages/fw-control/src/server.js
+    environment:
+      FW_CONTROL_PORT: '3000'
+      HELIOS_LOG_DIR: /var/log/helios
+      HELIOS_DASHBOARD_TOKEN: '${HELIOS_DASHBOARD_TOKEN:-changeme}'
+    ports:
+      - '3000:3000'
+    networks:
+      - helios-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/v1/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── Instrumented Example Application ────────────────────────────────────────
+  app:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - .:/app
+      - helios-logs:/var/log/helios
+    # The --require flag injects the Helios firewall before any application code runs
+    command: node --require /app/packages/fw-agent/index.js /app/packages/fw-agent/src/example-app.js
+    environment:
+      FW_ENABLE_DETECTION: '1'
+      FW_TELEMETRY: '1'
+      FW_CONTROL_PORT: '3000'
+      HELIOS_LOG_DIR: /var/log/helios
+      NODE_OPTIONS: '--require /app/packages/fw-agent/index.js'
+    depends_on:
+      control:
+        condition: service_healthy
+    networks:
+      - helios-net
+    restart: 'no'

@@ -6,7 +6,13 @@
     "packages/*"
   ],
   "scripts": {
+    "test": "npm run test:unit && npm run test:adversarial && npm run test:integration",
+    "test:unit": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js",
+    "test:adversarial": "node packages/fw-control/test/adversarial/adversarial.test.js",
+    "test:integration": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-test.js",
+    "test:live": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-live-test.js",
     "test:bench": "node packages/fw-control/test/bench.js",
+    "start:control": "node packages/fw-control/src/server.js",
     "init:agent": "node packages/fw-control/bin/fw-init.js"
   }
 }

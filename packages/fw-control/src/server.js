@@ -1,15 +1,50 @@
 // packages/fw-control/src/server.js
 const fastify = require('fastify')({ logger: false });
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const PORT = process.env.FW_CONTROL_PORT || 3000;
-const BODY_LIMIT = 1024 * 1024; // 1MB max payload
+const DASHBOARD_TOKEN = process.env.HELIOS_DASHBOARD_TOKEN || null;
 
-// Internal telemetry queue for async processing
+// Persistent audit log (mirrors agent-side writes for control-plane events)
+const LOG_DIR = process.env.HELIOS_LOG_DIR ||
+  (process.platform !== 'win32' ? '/var/log/helios' : path.join(os.tmpdir(), 'helios'));
+const LOG_PATH = path.join(LOG_DIR, 'audit.log');
+
+let logFd = null;
+(function openLog() {
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+    logFd = fs.openSync(LOG_PATH, 'a');
+  } catch (e) {
+    const fallback = path.join(os.tmpdir(), 'helios');
+    try {
+      fs.mkdirSync(fallback, { recursive: true });
+      logFd = fs.openSync(path.join(fallback, 'audit.log'), 'a');
+    } catch (e2) {
+      logFd = null;
+    }
+  }
+})();
+
+function persistEvent(event) {
+  if (!logFd) return;
+  try {
+    const line = JSON.stringify({ ...event, _control_logged_at: new Date().toISOString() }) + '\n';
+    fs.writeSync(logFd, Buffer.from(line, 'utf8'));
+  } catch (e) {}
+}
+
+// In-memory queue for async processing
 const telemetryQueue = [];
 const MAX_QUEUE_SIZE = 5000;
 const serverStartTime = Date.now();
 
-// Rigid structural schema validation definition
+// Keep a rolling window of the last 1000 events for the dashboard
+const recentEvents = [];
+const MAX_RECENT = 1000;
+
 const telemetrySchema = {
   body: {
     type: 'object',
@@ -23,56 +58,109 @@ const telemetrySchema = {
           type: 'object',
           required: ['eventType', 'packageName', 'timestamp'],
           properties: {
-            eventType: { type: 'string', enum: ['OBSERVE', 'WARN', 'QUARANTINE_ACTIVE', 'QUARANTINE_BREACH', 'BLOCK'] },
+            eventType: {
+              type: 'string',
+              enum: [
+                'OBSERVE', 'WARN', 'QUARANTINE_ACTIVE', 'QUARANTINE_BREACH', 'BLOCK',
+                'DETECTION_TRIGGERED', 'QUARANTINE_BLOCK_REQUIRE', 'POLICY_TAMPER_LOCKDOWN',
+                'SUSPICIOUS_SCRIPT', 'AGENT_START', 'AGENT_SHUTDOWN',
+              ],
+            },
             packageName: { type: 'string' },
             parentPackage: { type: ['string', 'null'] },
-            timestamp: { type: 'number' }
-          }
-        }
-      }
-    }
-  }
+            timestamp: { type: 'number' },
+          },
+        },
+      },
+    },
+  },
 };
 
-// High-Throughput Telemetry Ingress Endpoint (enqueue only, no processing)
 fastify.post('/v1/telemetry', { schema: telemetrySchema }, async (request, reply) => {
-  // Hard limit to prevent memory exhaustion
   if (telemetryQueue.length >= MAX_QUEUE_SIZE) {
     return reply.code(503).send({ status: 'QUEUE_FULL' });
   }
 
   telemetryQueue.push(request.body);
-  
-  // Instantly return 202 Accepted to clear the client agent's connection pool
+
+  // Persist each event to audit log immediately
+  for (const event of request.body.events) {
+    const enriched = { ...event, agentId: request.body.agentId };
+    persistEvent(enriched);
+    recentEvents.push(enriched);
+    if (recentEvents.length > MAX_RECENT) recentEvents.shift();
+  }
+
   return reply.code(202).send({ status: 'ACCEPTED' });
 });
 
-// Structural Health Probe with operational metrics
 fastify.get('/v1/health', async () => ({
   status: 'ONLINE',
   uptime: Math.round((Date.now() - serverStartTime) / 1000),
   queueDepth: telemetryQueue.length,
-  maxQueueSize: MAX_QUEUE_SIZE
+  maxQueueSize: MAX_QUEUE_SIZE,
+  logPath: logFd ? LOG_PATH : null,
 }));
 
-// Background worker drains the queue asynchronously
+// Read-only dashboard: returns recent forensic events as JSON
+fastify.get('/logs', async (request, reply) => {
+  if (DASHBOARD_TOKEN) {
+    const authHeader = request.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+    if (token !== DASHBOARD_TOKEN) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  }
+
+  const limit = Math.min(parseInt(request.query.limit || '100', 10), MAX_RECENT);
+  const events = recentEvents.slice(-limit);
+
+  const accept = request.headers.accept || '';
+  if (accept.includes('text/html')) {
+    const rows = events.map(e =>
+      `<tr><td>${new Date(e.timestamp).toISOString()}</td><td>${e.eventType}</td><td>${e.packageName}</td><td>${e.agentId || ''}</td></tr>`
+    ).join('\n');
+    return reply
+      .code(200)
+      .header('Content-Type', 'text/html; charset=utf-8')
+      .send(`<!DOCTYPE html><html><head><title>Helios Audit Log</title></head><body>
+<h1>Helios Firewall — Recent Events</h1>
+<table border="1"><thead><tr><th>Time</th><th>Event</th><th>Package</th><th>Agent</th></tr></thead>
+<tbody>${rows}</tbody></table></body></html>`);
+  }
+
+  return reply.code(200).send({ events, total: recentEvents.length });
+});
+
+// Background drain: process the queue in batches
 setInterval(() => {
   if (telemetryQueue.length === 0) return;
-  
   const batch = telemetryQueue.splice(0, 100);
-  console.log(`[Background Worker] Processing ${batch.length} telemetry events (queue depth: ${telemetryQueue.length})`);
+  console.log(`[Background Worker] Drained ${batch.length} events (queue depth: ${telemetryQueue.length})`);
 }, 1000);
 
-// Initialize the control server instance
 const startServer = async () => {
   try {
     await fastify.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`📡 [@fw/control] Ingestion Engine online at http://localhost:${PORT}`);
+    console.log(`[@fw/control] Ingestion engine online at http://localhost:${PORT}`);
+    if (logFd) console.log(`[@fw/control] Audit log: ${LOG_PATH}`);
   } catch (err) {
-    console.error('❌ Critical control plane startup failure:', err.message);
+    console.error('Critical control plane startup failure:', err.message);
     process.exit(1);
   }
 };
+
+process.on('SIGTERM', async () => {
+  if (logFd) { try { fs.closeSync(logFd); } catch (e) {} }
+  await fastify.close();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  if (logFd) { try { fs.closeSync(logFd); } catch (e) {} }
+  await fastify.close();
+  process.exit(0);
+});
 
 if (require.main === module) {
   startServer();
