@@ -16,3 +16,4 @@ policy.cache.json
 # IDE/Editor noise
 .vscode/
 .idea/
+packages/fw-agent/*.tgz
