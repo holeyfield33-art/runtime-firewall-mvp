@@ -1,4 +1,4 @@
-# Helios Runtime Firewall
+# Aletheia Firewall
 
 A production-ready runtime security firewall for Node.js that blocks supply-chain worms (Shai-Hulud and similar) through behavioral detection, runtime-agnostic interception, and tamper-evident policy enforcement.
 

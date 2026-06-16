@@ -1,9 +1,30 @@
 {
-  "name": "@fw/agent",
-  "version": "1.0.0",
+  "name": "aletheia-firewall",
+  "version": "0.1.0",
+  "description": "Zero-dependency runtime firewall that blocks malicious npm modules at require-time.",
   "main": "index.js",
-  "private": true,
-  "description": "Zero-dependency Runtime Guardian Shell",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/holeyfield33-art/runtime-firewall-mvp.git"
+  },
+  "keywords": [
+    "security",
+    "supply-chain",
+    "npm",
+    "firewall",
+    "runtime",
+    "malware",
+    "shai-hulud"
+  ],
+  "files": [
+    "index.js",
+    "src/",
+    "sync-worker.js",
+    ".helios-baseline",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "test": "node test/aho-corasick-unit-test.js && node test/detector-unit-test.js",
     "test:adversarial": "node ../fw-control/test/adversarial/adversarial.test.js",
