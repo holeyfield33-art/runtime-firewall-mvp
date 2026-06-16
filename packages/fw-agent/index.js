@@ -20,14 +20,14 @@ const { getAuditLog } = require('./src/audit-log');
 (function detectRuntime() {
   if (typeof process.versions.bun !== 'undefined') {
     const preload = process.env.BUN_PRELOAD || '';
-    if (!preload.includes('fw-agent') && !preload.includes('helios')) {
-      console.error('[CRITICAL] Helios is not preloaded in Bun runtime. Set BUN_PRELOAD=fw-agent. Exiting.');
+    if (!preload.includes('aletheia-firewall') && !preload.includes('fw-agent') && !preload.includes('helios')) {
+      console.error('[CRITICAL] Helios is not preloaded in Bun runtime. Set BUN_PRELOAD=aletheia-firewall. Exiting.');
       process.exit(1);
     }
   }
   if (typeof process.versions.deno !== 'undefined') {
     const preload = process.env.DENO_PRELOAD || '';
-    if (!preload.includes('fw-agent') && !preload.includes('helios')) {
+    if (!preload.includes('aletheia-firewall') && !preload.includes('fw-agent') && !preload.includes('helios')) {
       console.error('[CRITICAL] Helios is not preloaded in Deno runtime. Exiting.');
       process.exit(1);
     }
@@ -39,10 +39,10 @@ const { getAuditLog } = require('./src/audit-log');
 // Default mode warns so programmatic loading (and tests) still work.
 (function verifyPreloadManifold() {
   const execArgsJoin = (process.execArgv || []).join(' ').replace(/\\/g, '/');
-  const isPreloaded = execArgsJoin.includes('fw-agent') || execArgsJoin.includes('helios');
+  const isPreloaded = execArgsJoin.includes('aletheia-firewall') || execArgsJoin.includes('fw-agent') || execArgsJoin.includes('helios');
   if (!isPreloaded) {
     if (process.env.FW_STRICT_PRELOAD === '1') {
-      console.error('[CRITICAL] Helios was not injected via --require. Set --require=fw-agent to ensure all modules are intercepted from startup. Exiting.');
+      console.error('[CRITICAL] Helios was not injected via --require. Set --require=aletheia-firewall to ensure all modules are intercepted from startup. Exiting.');
       process.exit(1);
     } else {
       console.warn('[Helios] Warning: agent loaded via require() rather than --require. Modules loaded before this point are not protected.');

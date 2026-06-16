@@ -8,7 +8,7 @@ A production-ready runtime security firewall for Node.js that blocks supply-chai
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  Host Application  (node --require=fw-agent app.js)         │
+│  Host Application  (node --require=aletheia-firewall app.js)│
 │  ┌─────────────────────────────────────────────────────────┐ │
 │  │  fw-agent/index.js  ← Module._compile hook             │ │
 │  │  ├── BehaviorTracker  (state machine, cross-module)     │ │
@@ -84,7 +84,7 @@ On every startup the firewall computes a SHA-256 hash across all its own source 
 
 ### 6. Runtime Detection (Bun / Deno)
 
-If the process is running under Bun without `BUN_PRELOAD=fw-agent`, the agent exits with code 1. Same for Deno without `DENO_PRELOAD`.
+If the process is running under Bun without `BUN_PRELOAD=aletheia-firewall`, the agent exits with code 1. Same for Deno without `DENO_PRELOAD`.
 
 ### 7. npm Lifecycle Script Scanning
 
@@ -96,7 +96,7 @@ Every security event is written as a JSON line to `/var/log/helios/audit.log` (f
 
 Override the log directory:
 ```
-HELIOS_LOG_DIR=/data/logs node --require=fw-agent app.js
+HELIOS_LOG_DIR=/data/logs node --require=aletheia-firewall app.js
 ```
 
 ### 9. Graceful Shutdown
@@ -134,7 +134,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
-| `BUN_PRELOAD` | *(none)* | Must include `fw-agent` when running under Bun |
+| `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun |
 
 ---
 
