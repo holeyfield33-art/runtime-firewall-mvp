@@ -1,6 +1,6 @@
 # Aletheia Firewall
 
-Zero-dependency runtime firewall that blocks malicious npm modules at require-time through behavioral detection, Aho-Corasick signature scanning, and tamper-evident policy enforcement.
+Zero-dependency runtime firewall that blocks malicious npm modules at require-time through behavioral detection, Aho-Corasick signature scanning, and policy enforcement.
 
 ## Install
 
@@ -25,12 +25,13 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
-| `FW_TELEMETRY` | `0` | Set to `1` to forward events to the control plane |
-| `FW_CONTROL_PORT` | `3000` | Control plane port |
+| `FW_TELEMETRY` | `0` | Reserved. No control plane ships in v0.1.0; forwards nothing. |
+| `FW_CONTROL_PORT` | `3000` | Reserved. Port for a future hosted control plane; unused in v0.1.0. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
-| `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
+
+> Telemetry is **off by default** and inert in v0.1.0 -- `FW_TELEMETRY`/`FW_CONTROL_PORT` are reserved for a future hosted control plane and forward nothing until one is configured.
 
 ## Policy File
 
@@ -65,7 +66,7 @@ This firewall provides defense-in-depth but cannot catch all threats. Documented
 | Crypto-miner stratum URL | **BLOCKED** |
 | `process.env` + network call | **BLOCKED** |
 | `eval` + `child_process.exec` | **BLOCKED** |
-| `curl \| bash` postinstall | **BLOCKED** |
+| `curl \| bash` in host project's npm scripts | **BLOCKED** (root scripts only; not dependency install hooks) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** — needs AST analysis |
 | String concat: `global["ev"+"al"]` | **BYPASSES** — needs taint tracking |
 | Array join: `["ch","ild"].join("")` | **BYPASSES** — needs dynamic analysis |
