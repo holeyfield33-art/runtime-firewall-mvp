@@ -12,6 +12,7 @@
     "test:integration": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-test.js",
     "test:live": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-live-test.js",
     "test:bench": "node packages/fw-agent/test/bench-honest.js",
-    "start:control": "node packages/fw-control/src/server.js"
+    "start:control": "node packages/fw-control/src/server.js",
+    "gate": "node run-gate-test.js"
   }
 }
