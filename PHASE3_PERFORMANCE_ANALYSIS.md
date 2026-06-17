@@ -1,3 +1,9 @@
+> **SUPERSEDED** — The "sub-millisecond / below noise floor" claim in this document was produced by a benchmark that pre-warmed the require cache for the modules it then timed (illusion A) and used whole-app spawn time as the signal (illusion B). Both artifacts caused the firewall overhead to appear at or below the noise floor, and in some runs to appear negative.
+>
+> The honest methodology is in `packages/fw-agent/test/bench-honest.js`: cold-cache child processes, fresh modules the agent never preloaded, 7 interleaved trials, median reported. Measured result on this machine: **+0.0842 ms/module (+37%)** one-time startup cost. See `packages/fw-agent/README.md` → Performance for the current measured table.
+>
+> This file is preserved as an audit trail of the prior analysis.
+
 # Phase 3 Performance Analysis
 
 ## Summary

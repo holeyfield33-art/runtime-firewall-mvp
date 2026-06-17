@@ -53,7 +53,17 @@ Create `policy.signed.json` in your working directory:
 
 ## Performance
 
-Hook cost is sub-millisecond per module load and below measurement noise floor. At scale, GC and process-scheduler variance dominate over hook overhead. Empirical production metrics will show the true end-to-end impact.
+The firewall's cost is a **one-time per-module startup scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits it. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately).
+
+Measured on Node v22 / Linux x64 (Intel Xeon 2.80 GHz), 200 fresh modules × 7 interleaved trials (methodology: `test/bench-honest.js` spawns cold-cache child processes to defeat require-cache warming):
+
+| | median ms/module |
+|---|---|
+| baseline (no firewall) | 0.2255 ms |
+| firewall-on | 0.3097 ms |
+| **overhead** | **+0.0842 ms (+37%)** |
+
+Numbers vary by hardware and Node version. The shape — positive, sub-millisecond, one-time per-module startup cost — should hold across environments. Run `node test/bench-honest.js` to reproduce.
 
 ## Known Bypasses
 

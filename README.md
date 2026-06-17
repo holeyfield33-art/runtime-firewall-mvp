@@ -144,18 +144,18 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (12 tests)
+# Adversarial bypass test suite (12 cases, 12 passed)
 npm run test:adversarial
 
 # Integration / detection tests
-npm run test:integration
-npm run test:live
+npm run test:integration   # expects: Blocked: 1
+npm run test:live          # expects: Blocked: 2
 
-# Run everything
+# Run all tests
 npm test
 
-# Performance gate
-npm run test:bench
+# Honest overhead benchmark (spawns cold-cache child processes)
+node packages/fw-agent/test/bench-honest.js
 ```
 
 ---
