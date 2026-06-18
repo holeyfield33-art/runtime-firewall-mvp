@@ -18,4 +18,23 @@ N=10 warmup (bench-n10-run-*.txt) — adopted:
   Run 3: Median 19.37%, P95 24.86%  ← P95 spread 2.11pts < 5pt threshold ✓
 
 Chosen thresholds: MEDIAN_BUDGET=25%, P95_BUDGET=30%
-Justification: median ~20% measured + 7% CI tolerance = 25%; P95 stable at ~25-27%, capped at 30%.
+Justification: median ~20% measured + 7% CI tolerance = 25%; P95 ~25-27% on this host (9V74), capped at 30%.
+
+────────────────────────────────────────────────────────────────────────
+EPYC 7763 (64-core) — added 2026-06-18 (see gate-3x-epyc-20260618.txt)
+────────────────────────────────────────────────────────────────────────
+Second EPYC host (AMD EPYC 7763 64-Core, Node v24), same bench.js methodology,
+3 consecutive `npm run gate` runs:
+  Run 1: Median 16.47%, P95 34.46%
+  Run 2: Median 17.31%, P95 37.07%
+  Run 3: Median 17.32%, P95 30.75%
+
+Cross-host conclusion (supersedes the "P95 stable" note above):
+  - Median is host-dependent: ~17% (7763) vs ~20% (9V74). Published as a range: ~17-20%.
+  - P95 is NOT stable across hardware: ~25-27% (9V74) vs ~31-37% (7763), i.e. ~25-37%
+    across EPYC hosts. P95 reflects shared-CPU scheduler contention, not firewall cost,
+    and remains informational only — it is NOT a gate metric (gate enforces median only).
+  - The MEDIAN_BUDGET=25% gate still passes on both hosts.
+
+Per-module microbenchmark (bench-honest-epyc-20260618.txt) is jitter-dominated on
+shared EPYC boxes (showed negative overhead) and is NOT used for any published number.

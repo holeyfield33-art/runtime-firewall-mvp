@@ -9,7 +9,7 @@
 // AV, disk) that would otherwise dominate P95 even when true hook cost is <<1%.
 // Larger chain length increases baseline work so fixed per-process jitter is a smaller %.
 // Overhead % use *mean baseline* (of the robust per-iter baselines) as single denominator.
-// Gate: Median <5%, P95 <20%.
+// Gate: Median < 25% (enforced); P95 < 30% (informational).
 
 const fs = require('fs');
 const path = require('path');

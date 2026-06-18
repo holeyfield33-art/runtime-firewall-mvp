@@ -1,0 +1,11 @@
+# 900-module gate (packages/fw-control/test/bench.js) | node v24.14.0 | AMD EPYC 7763 64-Core | 2026-06-18
+# 3 consecutive `npm run gate` runs; median is gated (budget 25%), P95 informational.
+[Statistics] Mean: 17.25% | Median: 16.47% | P95: 34.46%
+✅ CRITERIA MET: Compilation hook overhead within budget.
+--- run 1 ---
+[Statistics] Mean: 17.60% | Median: 17.31% | P95: 37.07%
+✅ CRITERIA MET: Compilation hook overhead within budget.
+--- run 2 ---
+[Statistics] Mean: 17.58% | Median: 17.32% | P95: 30.75%
+✅ CRITERIA MET: Compilation hook overhead within budget.
+--- run 3 ---
