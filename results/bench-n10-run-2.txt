@@ -1,0 +1,21 @@
+⏱️  Running Cold-Process Realistic Compilation Hook Gate (60 iterations, median-of-5 per iter for robustness)...
+
+[Setup] Temp dir: /tmp/fw-bench-fHemzE
+[Setup] Agent: /home/user/runtime-firewall-mvp/packages/fw-agent/index.js
+[Setup] 900-module corpus generated (flat). Baseline: -r agent (no FW=1 → disabled hook); Agent: -r + FW_ENABLE_DETECTION=1 (hook+scans). Fair preload A/B. Per-iter uses median of 5 cold runs for noise resistance. Larger corpus amortizes fixed jitter.
+
+[Iter   1] Baseline: 189.67ms | Agent: 234.93ms | Delta: 45.26ms | Overhead: 23.86% (median-of-5)
+[Iter  10] Baseline: 181.61ms | Agent: 215.97ms | Delta: 34.36ms | Overhead: 18.92% (median-of-5)
+[Iter  20] Baseline: 191.04ms | Agent: 237.10ms | Delta: 46.06ms | Overhead: 24.11% (median-of-5)
+[Iter  30] Baseline: 185.13ms | Agent: 218.77ms | Delta: 33.64ms | Overhead: 18.17% (median-of-5)
+[Iter  40] Baseline: 196.38ms | Agent: 232.96ms | Delta: 36.57ms | Overhead: 18.62% (median-of-5)
+[Iter  50] Baseline: 175.47ms | Agent: 211.84ms | Delta: 36.37ms | Overhead: 20.73% (median-of-5)
+[Iter  60] Baseline: 183.46ms | Agent: 221.52ms | Delta: 38.05ms | Overhead: 20.74% (median-of-5)
+
+[Absolute Metrics] Mean Baseline: 184.32ms | Mean Agent: 223.16ms | Mean Delta: 38.84ms
+[Statistics] Mean: 21.07% | Median: 20.65% | P95: 26.97%
+[Distribution] Min: 16.09% | Max: 28.83%
+
+[Final Verification] Compilation hook performance gate evaluating...
+
+❌ BUILD FAILED: Compilation latency thresholds breached. Median: 20.65% (Max: 5%), P95: 26.97% (Max: 20%)
