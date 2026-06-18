@@ -189,6 +189,12 @@ const quarantinedModules = new Set();
 const originalCompile = Module.prototype._compile;
 
 Module.prototype._compile = function (content, filename) {
+  // Reset cross-module behavioral state at each new dependency-tree root so that
+  // benign modules in one tree cannot poison detection in an unrelated tree.
+  if (this.parent === null) {
+    detector.behaviorTracker.reset();
+  }
+
   // Emergency lockdown: block everything
   if (emergencyLockdown) {
     throw new Error('[Firewall] Emergency lockdown active. All module loads blocked.');

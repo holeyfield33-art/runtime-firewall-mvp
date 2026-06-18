@@ -1,0 +1,23 @@
+⏱️  Running Cold-Process Realistic Compilation Hook Gate (60 iterations, median-of-5 per iter for robustness)...
+
+[Setup] Temp dir: /tmp/fw-bench-Mao5KL
+[Setup] Agent: /home/user/runtime-firewall-mvp/packages/fw-agent/index.js
+[Setup] 900-module corpus generated (flat). Baseline: -r agent (no FW=1 → disabled hook); Agent: -r + FW_ENABLE_DETECTION=1 (hook+scans). Fair preload A/B. Per-iter uses median of 5 cold runs for noise resistance. Larger corpus amortizes fixed jitter.
+
+[Iter   1] Baseline: 177.34ms | Agent: 216.87ms | Delta: 39.53ms | Overhead: 22.29% (median-of-5)
+[Iter  10] Baseline: 188.77ms | Agent: 233.81ms | Delta: 45.04ms | Overhead: 23.86% (median-of-5)
+[Iter  20] Baseline: 197.16ms | Agent: 237.03ms | Delta: 39.87ms | Overhead: 20.22% (median-of-5)
+[Iter  30] Baseline: 195.88ms | Agent: 236.05ms | Delta: 40.18ms | Overhead: 20.51% (median-of-5)
+[Iter  40] Baseline: 184.63ms | Agent: 222.21ms | Delta: 37.57ms | Overhead: 20.35% (median-of-5)
+[Iter  50] Baseline: 193.09ms | Agent: 229.16ms | Delta: 36.07ms | Overhead: 18.68% (median-of-5)
+[Iter  60] Baseline: 201.34ms | Agent: 234.39ms | Delta: 33.05ms | Overhead: 16.41% (median-of-5)
+
+[Absolute Metrics] Mean Baseline: 194.24ms | Mean Agent: 232.25ms | Mean Delta: 38.00ms
+[Statistics] Mean: 19.56% | Median: 19.46% | P95: 26.46%
+[Distribution] Min: 12.66% | Max: 30.30%
+
+[Final Verification] Compilation hook performance gate evaluating...
+
+✅ CRITERIA MET: Pure Compilation Hook Rigidity Stable.
+   Median 19.46% < 25% | P95 26.46% < 30%
+   Unified Invariant Securely Closed under k=1 Integrity Bounds.

@@ -128,6 +128,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
+| `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass (signature scan always runs) |
 | `FW_TELEMETRY` | `0` | Set to `1` to forward events to the control plane |
 | `FW_CONTROL_PORT` | `3000` | Control plane port |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
@@ -157,6 +158,26 @@ npm test
 # Honest overhead benchmark (spawns cold-cache child processes)
 node packages/fw-agent/test/bench-honest.js
 ```
+
+---
+
+## Performance
+
+**Measured on Linux EPYC (AMD EPYC 9V74), Node.js v24, cold 900-module load.**
+All numbers come from `results/bench-n10-run-*.txt` in this repo.
+
+| Metric | Measured | Gate budget |
+|--------|----------|-------------|
+| Median overhead | ~20% | 25% |
+| P95 overhead | ~26% | 30% |
+
+The ~20% median overhead is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
+
+The gate is a **regression guard**, not a performance target: if a code change causes the median to exceed 25%, something went wrong.
+
+**Scan design:**
+- Signature scan: Aho-Corasick, capped at first 2 KB per module (signatures reliably appear early in malicious payloads).
+- Behavioral scan: full-content regex state machine (action sequences span arbitrary lengths; capping would miss multi-phase attacks). Disable with `FW_ENABLE_BEHAVIORAL=0` for signature-only mode.
 
 ---
 

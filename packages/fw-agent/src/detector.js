@@ -91,8 +91,11 @@ class Detector {
       });
     }
 
-    // Behavioral sequence analysis on full content
-    const behaviorViolations = this.behaviorTracker.analyzeModule(filename || packageName, moduleContent);
+    // Behavioral sequence analysis on full content (skipped when FW_ENABLE_BEHAVIORAL=0)
+    const behaviorEnabled = process.env.FW_ENABLE_BEHAVIORAL !== '0';
+    const behaviorViolations = behaviorEnabled
+      ? this.behaviorTracker.analyzeModule(filename || packageName, moduleContent)
+      : [];
     if (behaviorViolations.length > 0) {
       this.stats.behaviorViolations++;
       for (const v of behaviorViolations) {
