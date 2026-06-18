@@ -26,7 +26,7 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
-| `FW_CONTROL_PORT` | `3000` | Reserved. Port for a future hosted control plane; unused in v0.1.0. |
+| `FW_CONTROL_PORT` | `3000` | Port the telemetry worker POSTs to when `FW_TELEMETRY=1` (default 3000); no control plane ships in v0.1.0. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
