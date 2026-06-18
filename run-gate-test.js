@@ -30,7 +30,7 @@ const honest = run(
 );
 
 const gate = run(
-  'Realistic-app compilation gate (median<5%, P95<20%)',
+  'Realistic-app compilation gate (median < 25%, P95 informational)',
   path.join('packages', 'fw-control', 'test', 'bench.js')
 );
 
