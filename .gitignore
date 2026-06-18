@@ -17,3 +17,6 @@ policy.cache.json
 .vscode/
 .idea/
 packages/fw-agent/*.tgz
+fw-agent-slowest.json
+*-slowest.json
+demo-attack.js
