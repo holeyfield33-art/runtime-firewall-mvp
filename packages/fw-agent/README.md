@@ -25,13 +25,13 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
-| `FW_TELEMETRY` | `0` | Reserved. No control plane ships in v0.1.0; forwards nothing. |
+| `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Reserved. Port for a future hosted control plane; unused in v0.1.0. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
 
-> Telemetry is **off by default** and inert in v0.1.0 -- `FW_TELEMETRY`/`FW_CONTROL_PORT` are reserved for a future hosted control plane and forward nothing until one is configured.
+> Telemetry is **off by default**. `FW_TELEMETRY=1` starts a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. No control plane ships in v0.1.0.
 
 ## Policy File
 
@@ -53,17 +53,20 @@ Create `policy.signed.json` in your working directory:
 
 ## Performance
 
-The firewall's cost is a **one-time per-module startup scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits it. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately).
+The firewall's cost is a **one-time per-module compile scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits it. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately and installs no hook).
 
-Measured on Node v22 / Linux x64 (Intel Xeon 2.80 GHz), 200 fresh modules × 7 interleaved trials (methodology: `test/bench-honest.js` spawns cold-cache child processes to defeat require-cache warming):
+Measured on a 900-module cold load (methodology: `packages/fw-control/test/bench.js`), AMD EPYC, Node v24, Linux x64:
 
-| | median ms/module |
-|---|---|
-| baseline (no firewall) | 0.2255 ms |
-| firewall-on | 0.3097 ms |
-| **overhead** | **+0.0842 ms (+37%)** |
+| Metric | Measured | Gate budget | Enforced? |
+|--------|----------|-------------|-----------|
+| Median module-compile overhead | ~17–20% (varies by host) | 25% | **Yes** |
+| P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational |
 
-Numbers vary by hardware and Node version. The shape — positive, sub-millisecond, one-time per-module startup cost — should hold across environments. Run `node test/bench-honest.js` to reproduce.
+Environment: measured on two AMD EPYC Codespaces — 9V74 (80-core) and 7763 (64-core), both Node v24. The median is host-dependent (7763 ~17%, 9V74 ~20%), so it is stated as a range.
+
+The gate **enforces median only** (budget 25%). P95 (~25–37%) is informational and **not stable across hardware** — it reflects shared-CPU scheduler contention on multi-tenant Codespaces, not firewall algorithmic cost — so it is reported but never gated.
+
+To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
 ## Known Bypasses
 

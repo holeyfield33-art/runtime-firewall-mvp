@@ -1,0 +1,5 @@
+# aletheia-firewall bench-honest | node v24.14.0 | linux x64 | AMD EPYC 7763 64-Core Processor | 200 modules x 7 trials | 2026-06-18T15:47:36.278Z
+baseline    median: 0.3878 ms/module
+firewall-on median: 0.3233 ms/module
+overhead          : +-0.0645 ms/module (+-16.6%)
+note: one-time per-module startup cost (scan runs once per file, then cached)

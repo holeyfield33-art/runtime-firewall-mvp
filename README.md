@@ -45,7 +45,7 @@ Tracks dangerous **action sequences** within and across modules — catching obf
 
 ### 2. Signature Scanner (Aho-Corasick)
 
-O(N) pattern matching with 22 signatures covering:
+O(N) pattern matching with 24 signatures covering:
 - Crypto-miners (`stratum`, `pool.hashvault`, `nicehash`, `cryptonight`, …)
 - Dynamic code execution (`eval(`, `new Function`, `buffer.from`, `atob(`, …)
 - Supply-chain worm patterns (`curl `, `wget `, `//pastebin`, …)
@@ -163,17 +163,17 @@ node packages/fw-agent/test/bench-honest.js
 
 ## Performance
 
-**Measured on Linux EPYC (AMD EPYC 9V74), Node.js v24, cold 900-module load.**
-All numbers come from `results/bench-n10-run-*.txt` in this repo.
+**Measured on AMD EPYC (9V74 80-core and 7763 64-core Codespaces), Node.js v24, cold 900-module load.**
+All numbers come from `results/bench-n10-run-*.txt` (9V74) and `results/gate-3x-epyc-20260618.txt` (7763) in this repo.
 
 | Metric | Measured | Gate budget | Enforced? |
 |--------|----------|-------------|-----------|
-| Median overhead | ~17% | 25% | **Yes** |
-| P95 overhead | 29–40% (run-to-run) | 30% (reference) | No — informational only |
+| Median module-compile overhead | ~17–20% (varies by host) | 25% | **Yes** |
+| P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational only |
 
-The ~17% median overhead is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
+The ~17–20% median overhead (host-dependent: 7763 ~17%, 9V74 ~20%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
 
-The gate **enforces median only**. P95 tail latency is reported for operational transparency but is not a fail condition. On shared multi-core EPYC hardware, P95 reflects OS scheduler preemption of the synchronous main-thread scan (observed 29–40% across identical-code runs), not firewall algorithmic cost. Gating on a metric that swings 10+ points run-to-run without any code change would be gating on noise.
+The gate **enforces median only**. P95 tail latency is reported for operational transparency but is not a fail condition. On shared multi-core EPYC hardware, P95 reflects OS scheduler preemption of the synchronous main-thread scan (~25–37% across EPYC hosts — 9V74 ~26%, 7763 ~34%), not firewall algorithmic cost. Because P95 is host-dependent and not stable across hardware, gating on it would be gating on noise.
 
 The gate is a **regression guard**, not a performance target: if a code change causes the median to exceed 25%, something went wrong.
 
