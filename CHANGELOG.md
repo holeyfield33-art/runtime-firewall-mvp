@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Self-integrity check at startup**: on every startup the firewall computes a SHA-256 hash over the concatenated bytes of all seven engine files in a fixed order (`index.js`, `src/detector.js`, `src/behavior-tracker.js`, `src/policy-watcher.js`, `src/quarantine.js`, `src/audit-log.js`, `src/policy.js`) and compares it to `.helios-baseline`. If the firewall code has been tampered with, startup is aborted with exit code 1. On first run with no baseline file, the baseline is written automatically.
 
-- **Signed policy enforcement with continuous integrity verification**: `policy.signed.json` rules are loaded on startup. The `PolicyWatcher` computes the file's SHA-256 hash at load time and re-verifies it every 60 seconds. If the file is modified or replaced at runtime, an emergency lockdown is activated that causes all subsequent module loads to throw immediately.
+- **Policy integrity verification (SHA-256 file-hash tamper detection via PolicyWatcher)**: `policy.signed.json` rules are loaded on startup. The `PolicyWatcher` computes the file's SHA-256 hash at load time and re-verifies it every 60 seconds. If the file is modified or replaced at runtime, an emergency lockdown is activated that causes all subsequent module loads to throw immediately. Note: the `.signed` convention in the filename means the file is integrity-monitored at runtime via SHA-256 file hashing — this is NOT asymmetric/cryptographic signing.
 
 - **npm lifecycle script scanning**: on startup, `package.json` scripts are scanned for supply-chain attack patterns (`curl | bash`, `wget | sh`, `bash -c '...'`, `eval $`, `base64 --decode`, etc.). Matches are blocked before any application code runs. Set `HELIOS_BLOCK_SCRIPTS=0` to downgrade from block to warn.
 
@@ -33,16 +33,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Graceful shutdown**: `SIGTERM` and `SIGINT` flush pending telemetry, terminate the worker thread, flush the audit log, and exit cleanly.
 
+### Fixed
+
+- **F-01 (HIGH) — sub-512B module scan-skip removed**: `src/detector.js` previously returned `OBSERVE` immediately for any module under 512 bytes, bypassing both signature and behavioral analysis entirely. A 487-byte `eval(require("child_process").exec("id"))` payload produced zero detections. The unconditional size pre-filter has been removed; all non-empty string content is now scanned. Gate overhead rose from ~17-20% to ~21% on EPYC hardware; the 25% budget is not breached.
+
+- **F-02 (MEDIUM) — `src/policy.js` added to the 7-file self-integrity hash**: `policy.js` ships in the tarball and is `require()`d at runtime by the hashed engine file `quarantine.js`. It was excluded from the 6-file SHA-256 hash, so post-install tampering of `policy.js` was undetected. Now hashed as the 7th engine file. `.helios-baseline` regenerated to `935dfdc24026b0be17b6a42188f449f59fecb86ccd568ceb0eac588bc921232f`.
+
+- **F-03 (MEDIUM) — adversarial test-harness state contamination fixed**: the shared `Detector` instance caused `BehaviorTracker.globalState` to accumulate across test cases; test 12 was firing `CROSS_MODULE_CODE_EXEC` via state leaked from test 7, not standalone detection. Added `detector.behaviorTracker.reset()` in the `test()` helper so each case starts clean. Two F-01 regression fixtures added as tests 13 and 14.
+
 ### Performance
 
-Measured on a 900-module cold load (methodology: `packages/fw-control/test/bench.js`, median-of-5 cold-process A/B, 10-iteration warmup excluded), Node.js v24, Linux x64:
+Measured on a 900-module cold load (methodology: `run-gate-test.js`, median-of-5 cold-process A/B, 10-iteration warmup excluded), Node v22 (CI: 18, 20, 22), Linux x64:
 
 | Host | Median overhead | Gate budget | P95 overhead | Enforced? |
 |------|----------------|-------------|-------------|-----------|
 | AMD EPYC 9V74 (80-core) | ~20% | 25% | ~25-27% | Median only |
 | AMD EPYC 7763 (64-core) | ~17% | 25% | ~31-37% | Median only |
 
-Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-20260618.txt` (EPYC 7763).
+Post-v0.1.0-prerelease-fix (sub-512B scan-skip removed): median rose to ~21% on EPYC hardware — still within the 25% budget. See `results/gate-post-f01.txt` for the committed benchmark run.
+
+Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-20260618.txt` (EPYC 7763), `results/gate-post-f01.txt` (post-F-01 fix).
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
