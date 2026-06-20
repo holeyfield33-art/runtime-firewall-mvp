@@ -25,11 +25,14 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
+| `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. With behavioral on: 12/12 adversarial tests blocked; with behavioral off: 10/12. |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port the telemetry worker POSTs to when `FW_TELEMETRY=1` (default 3000); no control plane ships in v0.1.0. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
+| `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun; the agent exits with code 1 if absent |
+| `DENO_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Deno; the agent exits with code 1 if absent |
 
 > Telemetry is **off by default**. `FW_TELEMETRY=1` starts a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. No control plane ships in v0.1.0.
 
