@@ -1,0 +1,52 @@
+# Post-F-01 gate run — sub-512B scan-skip removed
+# Date: 2026-06-20
+# Host: Intel(R) Xeon(R) Processor @ 2.80GHz (GitHub Actions runner / cloud VM)
+# Node: v22.22.2, linux x64
+# Corpus: 900 modules, 60 iterations (median-of-5 cold runs per iter)
+# F-01 fix: removed unconditional size pre-filter that skipped modules < 512 bytes
+# Gate: median < 25%
+
+> runtime-firewall-monorepo@1.0.0 gate
+> node run-gate-test.js
+
+Runtime Firewall performance audit - both scopes.
+
+=== Per-module honest benchmark (transparency, NOT gated) ===
+(packages/fw-agent/test/bench-honest.js)
+
+# aletheia-firewall bench-honest | node v22.22.2 | linux x64 | Intel(R) Xeon(R) Processor @ 2.80GHz | 200 modules x 7 trials | 2026-06-20T07:55:43.681Z
+baseline    median: 0.2288 ms/module
+firewall-on median: 0.4380 ms/module
+overhead          : +0.2091 ms/module (+91.4%)
+note: one-time per-module startup cost (scan runs once per file, then cached)
+
+=== Realistic-app compilation gate (median < 25%, P95 informational) ===
+(packages/fw-control/test/bench.js)
+
+[Iter   1] Baseline: 213.08ms | Agent: 292.23ms | Delta: 79.15ms | Overhead: 37.14% (median-of-5)
+[Iter  10] Baseline: 183.08ms | Agent: 223.58ms | Delta: 40.49ms | Overhead: 22.12% (median-of-5)
+[Iter  20] Baseline: 177.76ms | Agent: 216.85ms | Delta: 39.09ms | Overhead: 21.99% (median-of-5)
+[Iter  30] Baseline: 180.26ms | Agent: 224.30ms | Delta: 44.04ms | Overhead: 24.43% (median-of-5)
+[Iter  40] Baseline: 183.17ms | Agent: 240.35ms | Delta: 57.18ms | Overhead: 31.22% (median-of-5)
+[Iter  50] Baseline: 198.39ms | Agent: 238.61ms | Delta: 40.22ms | Overhead: 20.27% (median-of-5)
+[Iter  60] Baseline: 188.60ms | Agent: 236.96ms | Delta: 48.36ms | Overhead: 25.64% (median-of-5)
+
+[Absolute Metrics] Mean Baseline: 186.97ms | Mean Agent: 229.60ms | Mean Delta: 42.63ms
+[Statistics] Mean: 22.80% | Median: 22.80% | P95: 29.79%
+[Distribution] Min: 12.23% | Max: 30.85%
+
+[Final Verification] Compilation hook performance gate evaluating...
+
+CRITERIA MET: Compilation hook overhead within budget.
+   Median 22.80% < 25% (gate) | P95 29.79% (informational)
+
+========================================
+Per-module benchmark ran: clean
+Realistic-app gate:       PASS
+========================================
+
+Gate result: PASS - realistic-app overhead within budget.
+
+# Note: Xeon @ 2.80GHz shows ~23% median vs AMD EPYC ~21% (7763) / ~20% (9V74).
+# Pre-F-01 EPYC baseline was ~17-20%. Post-fix rise of ~1-3pp on EPYC is consistent
+# with the additional scan work on modules that were previously skip-filtered.

@@ -98,7 +98,7 @@ All commands run from `packages/fw-agent` unless noted otherwise.
 # Unit tests (Aho-Corasick automaton + detector logic)
 npm test
 
-# Adversarial bypass suite (12 test cases; all must pass)
+# Adversarial bypass suite (14 test cases; all must pass)
 npm run test:adversarial
 
 # Both (from repo root)

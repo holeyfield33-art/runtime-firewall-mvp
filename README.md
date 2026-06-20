@@ -1,30 +1,52 @@
 # Aletheia Firewall
 
-A production-ready runtime security firewall for Node.js that blocks supply-chain worms (Shai-Hulud and similar) through behavioral detection, runtime-agnostic interception, and tamper-evident policy enforcement.
+A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
+
+**What this intercepts:** `require()`-time module compilation (signature + behavioral scan), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept in v0.1.0:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), and AST-obfuscated eval techniques (documented below as known bypasses).
 
 ---
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│  Host Application  (node --require=aletheia-firewall app.js)│
-│  ┌─────────────────────────────────────────────────────────┐ │
-│  │  fw-agent/index.js  ← Module._compile hook             │ │
-│  │  ├── BehaviorTracker  (state machine, cross-module)     │ │
-│  │  ├── Detector         (Aho-Corasick + behavioral)       │ │
-│  │  ├── PolicyWatcher    (60s integrity re-verification)   │ │
-│  │  ├── AuditLog         (append-only JSON lines)          │ │
-│  │  └── Worker thread    (telemetry batching)              │ │
-│  └─────────────────────────────────────────────────────────┘ │
-└──────────────────────────────┬───────────────────────────────┘
-                               │ HTTP POST /v1/telemetry
-┌──────────────────────────────▼───────────────────────────────┐
-│  fw-control/src/server.js  (Fastify ingestion + dashboard)   │
-│  ├── POST /v1/telemetry    (schema-validated ingestion)      │
-│  ├── GET  /v1/health       (operational metrics)             │
-│  └── GET  /logs            (dashboard, Bearer-auth)          │
-└──────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    HOST["Host Application\nnode --require=aletheia-firewall app.js"]
+
+    HOST --> HOOK["Module._compile hook\nevery require() call"]
+    HOST --> SCRIPTS["Host-project script scan\npackage.json only\n(dependency postinstall NOT covered)"]
+    HOST --> PWATCH["PolicyWatcher\nSHA-256 file-hash, 60s re-verify"]
+
+    HOOK --> POLICY{Policy rule?}
+    POLICY -- "BLOCK" --> HARD["[BLOCK] throw\nmodule never runs"]
+    POLICY -- "QUARANTINE" --> QSTUB["QuarantineStub\nProxy replaces exports\nchild requires blocked"]
+    POLICY -- "OBSERVE (default)" --> DETECT["Detector"]
+
+    DETECT --> SIGSC["Aho-Corasick signature scan\n24 signatures, first 2 KB only"]
+    DETECT --> BEHAV["Behavioral state machine\nfull content\nFW_ENABLE_BEHAVIORAL=1"]
+
+    SIGSC -- "match" --> LOCK["[COMPILATION LOCKDOWN] throw"]
+    BEHAV -- "CRITICAL / HIGH" --> LOCK
+    BEHAV -- "MEDIUM" --> QSTUB
+    SIGSC -- "clean" --> PASS["OBSERVE (cached after first scan)"]
+    BEHAV -- "clean" --> PASS
+
+    SCRIPTS -- "suspicious pattern" --> SBLK["Block (HELIOS_BLOCK_SCRIPTS=1)"]
+    PWATCH -- "hash mismatch" --> ELCK["EMERGENCY LOCKDOWN\nall subsequent requires throw"]
+
+    LOCK --> ALOG["AuditLog\nappend-only JSON lines"]
+    QSTUB --> ALOG
+    SBLK --> ALOG
+    ELCK --> ALOG
+
+    ALOG -.-> TEL["Telemetry worker thread\nFW_TELEMETRY=1, fail-open\nno control plane ships in v0.1.0"]
+
+    style HARD fill:#fcc,stroke:#c00
+    style LOCK fill:#fcc,stroke:#c00
+    style ELCK fill:#fcc,stroke:#c00
+    style SBLK fill:#fcc,stroke:#c00
+    style QSTUB fill:#ffe,stroke:#aa0
+    style PASS fill:#cfc,stroke:#080
+    style TEL fill:#eef,stroke:#88a,stroke-dasharray: 5 5
 ```
 
 ---
@@ -70,6 +92,8 @@ Policy rules in `policy.signed.json` at the working directory:
 - **QUARANTINE**: Module code does not run; exports replaced with a `Proxy` stub that logs all access attempts. The quarantined module cannot load any child modules.
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on any detection.
 
+> **Naming note:** The `.signed` convention in `policy.signed.json` means the file is integrity-monitored at runtime via SHA-256 file hashing (see §4 below) — this is **not** asymmetric/cryptographic signing. No keys or certificates are involved.
+
 ### 4. Continuous Policy Integrity Verification
 
 Every 60 seconds the policy file is re-read and its SHA-256 hash compared to the startup baseline. If the file has been tampered with → **emergency lockdown**: all subsequent module loads throw an error.
@@ -88,7 +112,9 @@ If the process is running under Bun without `BUN_PRELOAD=aletheia-firewall`, the
 
 ### 7. npm Lifecycle Script Scanning
 
-On startup, `package.json` scripts are scanned for suspicious patterns (`curl | bash`, `wget | sh`, `eval $`, `base64 --decode`, etc.). Suspicious scripts are blocked before any code runs. Disable with `HELIOS_BLOCK_SCRIPTS=0`.
+On startup, the **host project's own** `package.json` scripts are scanned for suspicious patterns (`curl | bash`, `wget | sh`, `eval $`, `base64 --decode`, etc.) and blocked before any code runs. Disable with `HELIOS_BLOCK_SCRIPTS=0`.
+
+> **Scope note:** Only the root `package.json` (at `process.cwd()`) is scanned. The npm installer runs dependency `postinstall` hooks before the firewall loads, so they are not covered by this scan.
 
 ### 8. Persistent Audit Log
 
@@ -133,7 +159,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 | `FW_CONTROL_PORT` | `3000` | Control plane port |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
-| `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint |
+| `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint (fw-control only) |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
 | `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun |
 | `DENO_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Deno |
@@ -164,15 +190,17 @@ node packages/fw-agent/test/bench-honest.js
 
 ## Performance
 
-**Measured on AMD EPYC (9V74 80-core and 7763 64-core Codespaces), Node.js v24, cold 900-module load.**
+**Measured on AMD EPYC (9V74 80-core and 7763 64-core Codespaces), Node v22 (CI: 18, 20, 22), cold 900-module load.**
 All numbers come from `results/bench-n10-run-*.txt` (9V74) and `results/gate-3x-epyc-20260618.txt` (7763) in this repo.
 
 | Metric | Measured | Gate budget | Enforced? |
 |--------|----------|-------------|-----------|
-| Median module-compile overhead | ~17–20% (varies by host) | 25% | **Yes** |
+| Median module-compile overhead | ~17–21% (varies by host) | 25% | **Yes** |
 | P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational only |
 
-The ~17–20% median overhead (host-dependent: 7763 ~17%, 9V74 ~20%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
+The ~17–21% median overhead (host-dependent: 7763 ~17%, 9V74 ~20–21%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
+
+> **F-01 note:** v0.1.0 removed a sub-512B scan-skip that let small modules bypass scanning entirely. After the fix the measured median rose ~1–3pp over the pre-fix range of ~17–20%. The post-fix gate run is in `results/gate-post-f01.txt`.
 
 The gate **enforces median only**. P95 tail latency is reported for operational transparency but is not a fail condition. On shared multi-core EPYC hardware, P95 reflects OS scheduler preemption of the synchronous main-thread scan (~25–37% across EPYC hosts — 9V74 ~26%, 7763 ~34%), not firewall algorithmic cost. Because P95 is host-dependent and not stable across hardware, gating on it would be gating on noise.
 
@@ -193,7 +221,7 @@ The gate is a **regression guard**, not a performance target: if a code change c
 | Crypto-miner stratum URL | **BLOCKED** | Signature (`stratum`, `pool.hashvault`) |
 | `process.env` + network call | **BLOCKED** | Behavioral: `CREDENTIAL_EXFILTRATION` |
 | `eval` + `child_process.exec` | **BLOCKED** | Behavioral: `DYNAMIC_CODE_EXEC_CHAIN` |
-| `curl \| bash` postinstall | **BLOCKED** | npm script scanner + signature |
+| `curl \| bash` in host project's npm scripts | **BLOCKED** | npm script scanner (root `package.json` only; dependency `postinstall` hooks run before the firewall loads) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** | Needs AST / V8 Inspector |
 | String concat: `global["ev"+"al"]` | **BYPASSES** | Needs taint tracking |
 | Array join: `["ch","ild"].join("")` | **BYPASSES** | Needs dynamic analysis |
@@ -222,7 +250,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Criterion | Status |
 |-----------|--------|
 | Obfuscated eval is blocked | ✅ `buffer.from` → blocked; bracket/concat eval → documented bypass |
-| Postinstall script fetching remote payload is blocked | ✅ npm script scanner + `curl` signature |
+| Host project postinstall script fetching remote payload is blocked | ✅ npm script scanner + `curl` signature (root `package.json` only — dependency `postinstall` hooks are out of scope) |
 | Policy file replaced at runtime → emergency lockdown | ✅ `PolicyWatcher` (60s interval) |
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |

@@ -18,7 +18,7 @@ const { Detector } = require('../../../fw-agent/src/detector');
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 function pad(src) {
-  // All adversarial modules must exceed 512 bytes to pass the pre-filter
+  // pad() makes tests 1-12 realistic-length; sub-512B cases are covered by tests 13/14
   return src + '\n// ' + 'x'.repeat(600);
 }
 

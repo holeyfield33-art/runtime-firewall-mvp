@@ -4,6 +4,11 @@
   "description": "Zero-dependency runtime firewall that blocks malicious npm modules at require-time.",
   "main": "index.js",
   "license": "MIT",
+  "author": "Aletheia contributors",
+  "homepage": "https://github.com/holeyfield33-art/runtime-firewall-mvp#readme",
+  "bugs": {
+    "url": "https://github.com/holeyfield33-art/runtime-firewall-mvp/issues"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/holeyfield33-art/runtime-firewall-mvp.git"
@@ -25,13 +30,6 @@
     "README.md",
     "LICENSE"
   ],
-  "scripts": {
-    "test": "node test/aho-corasick-unit-test.js && node test/detector-unit-test.js",
-    "test:adversarial": "node ../fw-control/test/adversarial/adversarial.test.js",
-    "test:integration": "FW_ENABLE_DETECTION=1 node ../fw-control/test/detection-test.js",
-    "test:live": "FW_ENABLE_DETECTION=1 node ../fw-control/test/detection-live-test.js",
-    "test:bench": "node test/bench-honest.js"
-  },
   "engines": {
     "node": ">=18.0.0"
   }
