@@ -146,7 +146,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (12 cases, 12 passed)
+# Adversarial bypass test suite (14 cases, 14 passed)
 npm run test:adversarial
 
 # Integration / detection tests
@@ -227,7 +227,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |
 | SIGTERM shuts down workers cleanly | ✅ Worker `TERMINATE` message + `Promise.all` await |
-| Adversarial test suite passes or documents remaining bypasses | ✅ 12 tests, bypasses documented |
+| Adversarial test suite passes or documents remaining bypasses | ✅ 14 tests, bypasses documented |
 
 ---
 
