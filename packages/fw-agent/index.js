@@ -73,6 +73,7 @@ const { getAuditLog } = require('./src/audit-log');
     path.join(__dirname, 'src', 'policy-watcher.js'),
     path.join(__dirname, 'src', 'quarantine.js'),
     path.join(__dirname, 'src', 'audit-log.js'),
+    path.join(__dirname, 'src', 'policy.js'),
   ];
 
   function computeSelfHash() {

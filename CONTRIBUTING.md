@@ -6,7 +6,7 @@ Thank you for contributing. This document encodes the non-negotiable rules for t
 
 ### 1. Engine-file edits require a baseline regeneration in the same PR
 
-The six self-hashed engine files are:
+The seven self-hashed engine files are:
 
 - `packages/fw-agent/index.js`
 - `packages/fw-agent/src/detector.js`
@@ -14,6 +14,7 @@ The six self-hashed engine files are:
 - `packages/fw-agent/src/policy-watcher.js`
 - `packages/fw-agent/src/quarantine.js`
 - `packages/fw-agent/src/audit-log.js`
+- `packages/fw-agent/src/policy.js`
 
 Any edit to any of these files MUST be accompanied by a regenerated `.helios-baseline` committed in the same PR. If they diverge, the firewall will refuse to start.
 
@@ -30,6 +31,7 @@ const files = [
   'src/policy-watcher.js',
   'src/quarantine.js',
   'src/audit-log.js',
+  'src/policy.js',
 ];
 const hash = crypto.createHash('sha256');
 for (const f of files) hash.update(fs.readFileSync(f));
@@ -108,7 +110,7 @@ Before opening a PR, confirm that:
 1. `npm test` passes from `packages/fw-agent`.
 2. `npm run test:adversarial` passes from `packages/fw-agent`.
 3. `npm pack --dry-run` from `packages/fw-agent` shows exactly 13 files.
-4. If you touched any of the six engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
+4. If you touched any of the seven engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
 
 ## PR Description
 

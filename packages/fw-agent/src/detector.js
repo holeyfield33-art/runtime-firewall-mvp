@@ -56,17 +56,11 @@ class Detector {
 
   /**
    * Synchronous O(N) compilation screening combining signature matching and behavioral analysis.
-   * Pre-filter: skip files under 512 bytes (unlikely to contain malicious patterns).
    */
   scanModuleSync(packageName, moduleContent, filename) {
     this.stats.calls++;
 
     if (!moduleContent || typeof moduleContent !== 'string') {
-      return { action: 'OBSERVE', detections: [], packageName, scanTime: Date.now() };
-    }
-
-    if (moduleContent.length < 512) {
-      this.stats.chunkBypasses++;
       return { action: 'OBSERVE', detections: [], packageName, scanTime: Date.now() };
     }
 

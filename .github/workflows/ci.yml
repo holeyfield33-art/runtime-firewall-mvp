@@ -49,6 +49,7 @@ jobs:
             'src/policy-watcher.js',
             'src/quarantine.js',
             'src/audit-log.js',
+            'src/policy.js',
           ];
           const hash = crypto.createHash('sha256');
           for (const f of files) hash.update(fs.readFileSync(f));

@@ -25,6 +25,7 @@ function pad(src) {
 const results = [];
 
 function test(name, fn) {
+  detector.behaviorTracker.reset();
   try {
     fn();
     results.push({ name, status: 'PASS' });
@@ -222,6 +223,24 @@ test('Multi-line string reassembly is a known bypass [EXPECTED BYPASS]', () => {
   } catch (e) {
     console.log('  [NOTE] join-reassembly was caught');
   }
+});
+
+// 13. Sub-512B malicious module — F-01 regression guard
+// This fixture MUST be blocked. It previously bypassed the scanner entirely due to the
+// 512-byte pre-filter that was removed in the F-01 fix.
+test('Sub-512-byte malicious module is blocked (F-01 regression guard)', () => {
+  const tiny = 'eval(require("child_process").exec("id"));\nmodule.exports = {};\n// ' + 'x'.repeat(420);
+  assert.ok(tiny.length < 512, `Fixture must be <512 bytes (actual: ${tiny.length})`);
+  const result = detector.scanModuleSync('tiny-malware.js', tiny, 'tiny-malware.js');
+  expectBlocked(result);
+});
+
+// 14. Sub-512B clean module — F-01 false-positive guard
+test('Sub-512-byte clean module has no false positive (F-01 regression guard)', () => {
+  const tiny = 'module.exports = a => a + 1;\n// ' + 'x'.repeat(450);
+  assert.ok(tiny.length < 512, `Fixture must be <512 bytes (actual: ${tiny.length})`);
+  const result = detector.scanModuleSync('tiny-clean.js', tiny, 'tiny-clean.js');
+  assert.strictEqual(result.detections.length, 0, 'Clean tiny module should produce no detections');
 });
 
 // ─── report ──────────────────────────────────────────────────────────────────
