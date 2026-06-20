@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Unit tests
+        working-directory: packages/fw-agent
+        run: npm test
+
+      - name: Adversarial test suite
+        working-directory: packages/fw-agent
+        run: npm run test:adversarial
+
+      - name: Self-integrity baseline check
+        working-directory: packages/fw-agent
+        run: |
+          node -e "
+          const crypto = require('crypto');
+          const fs = require('fs');
+          const files = [
+            'index.js',
+            'src/detector.js',
+            'src/behavior-tracker.js',
+            'src/policy-watcher.js',
+            'src/quarantine.js',
+            'src/audit-log.js',
+          ];
+          const hash = crypto.createHash('sha256');
+          for (const f of files) hash.update(fs.readFileSync(f));
+          const computed = hash.digest('hex');
+          const stored = fs.readFileSync('.helios-baseline', 'utf8').trim();
+          if (computed !== stored) {
+            console.error('Self-integrity FAILED');
+            console.error('Computed: ' + computed);
+            console.error('Stored:   ' + stored);
+            process.exit(1);
+          }
+          console.log('Self-integrity OK: ' + computed);
+          "
+
+      - name: Pack dry run (verify 13-file manifest)
+        working-directory: packages/fw-agent
+        run: npm pack --dry-run

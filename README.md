@@ -136,6 +136,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 | `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
 | `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun |
+| `DENO_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Deno |
 
 ---
 
