@@ -224,7 +224,7 @@ The gate is a **regression guard**, not a performance target: if a code change c
 | `curl \| bash` in host project's npm scripts | **BLOCKED** | npm script scanner (root `package.json` only; dependency `postinstall` hooks run before the firewall loads) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** | Needs AST / V8 Inspector |
 | String concat: `global["ev"+"al"]` | **BYPASSES** | Needs taint tracking |
-| Array join: `["ch","ild"].join("")` | **BLOCKED** | Behavioral: `PROCESS_EXEC` patterns match fragments |
+| Array join: `["ch","ild"].join("")` | **BYPASSES** | Needs dynamic analysis |
 | Prototype chain: `eval.constructor` | **BYPASSES** | Needs runtime instrumentation |
 
 All bypasses require dynamic (runtime) analysis. Static analysis is fundamentally limited against these techniques. Behavioral detection provides defense-in-depth by flagging dangerous action sequences even when individual primitives are obfuscated.

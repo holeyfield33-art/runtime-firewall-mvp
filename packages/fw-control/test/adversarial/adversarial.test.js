@@ -271,7 +271,7 @@ console.log('  1. Bracket-notation eval:   this["ev"+"al"]  → needs AST or V8 
 console.log('  2. String concatenation:    global["ev"+"al"] → needs taint tracking');
 console.log('  3. Variable-alias eval:     const fn = eval; fn("code") → needs runtime Proxy');
 console.log('  4. Prototype chain access:  Object.getPrototypeOf(eval).constructor → needs runtime instrumentation');
-console.log('\nNote: Array join reassembly (["ch","ild"].join("")) is CAUGHT by behavioral analysis.');
+console.log('\nNote: Array join reassembly (["ch","ild"].join("")) bypasses per-module isolation; may be caught by cross-module state in practice.');
 console.log('\nAll bypasses require runtime (dynamic) analysis. Static analysis has fundamental limits.');
 console.log('Behavioral detection mitigates bypasses by flagging dangerous ACTION SEQUENCES');
 console.log('rather than specific strings, providing defense-in-depth.\n');

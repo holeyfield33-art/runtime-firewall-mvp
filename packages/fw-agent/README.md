@@ -87,7 +87,7 @@ This firewall provides defense-in-depth but cannot catch all threats. Documented
 | `curl \| bash` in host project's npm scripts | **BLOCKED** (root scripts only; not dependency install hooks) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** — needs AST analysis |
 | String concat: `global["ev"+"al"]` | **BYPASSES** — needs taint tracking |
-| Array join: `["ch","ild"].join("")` | **BLOCKED** — behavioral catches fragments |
+| Array join: `["ch","ild"].join("")` | **BYPASSES** — needs dynamic analysis |
 | Prototype chain: `eval.constructor` | **BYPASSES** — needs runtime instrumentation |
 
 ## Behavioral Detection Limitations
