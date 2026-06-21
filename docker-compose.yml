@@ -48,8 +48,9 @@ services:
     volumes:
       - .:/app
       - helios-logs:/var/log/helios
-    # The --require flag injects the Helios firewall before any application code runs
-    command: node --require /app/packages/fw-agent/index.js /app/packages/fw-agent/src/example-app.js
+    # The --require flag injects the Helios firewall before any application code runs.
+    # Replace /app/your-app.js with the path to your application entrypoint.
+    command: node --require /app/packages/fw-agent/index.js /app/your-app.js
     environment:
       FW_ENABLE_DETECTION: '1'
       FW_TELEMETRY: '1'

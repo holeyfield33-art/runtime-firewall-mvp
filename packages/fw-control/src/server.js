@@ -3,6 +3,7 @@ const fastify = require('fastify')({ logger: false });
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const PORT = process.env.FW_CONTROL_PORT || 3000;
 const DASHBOARD_TOKEN = process.env.HELIOS_DASHBOARD_TOKEN || null;
@@ -107,18 +108,21 @@ fastify.get('/logs', async (request, reply) => {
   if (DASHBOARD_TOKEN) {
     const authHeader = request.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
-    if (token !== DASHBOARD_TOKEN) {
+    const a = Buffer.from(token);
+    const b = Buffer.from(DASHBOARD_TOKEN);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
       return reply.code(401).send({ error: 'Unauthorized' });
     }
   }
 
-  const limit = Math.min(parseInt(request.query.limit || '100', 10), MAX_RECENT);
+  const limit = Math.max(1, Math.min(parseInt(request.query.limit || '100', 10) || 100, MAX_RECENT));
   const events = recentEvents.slice(-limit);
 
   const accept = request.headers.accept || '';
   if (accept.includes('text/html')) {
+    const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     const rows = events.map(e =>
-      `<tr><td>${new Date(e.timestamp).toISOString()}</td><td>${e.eventType}</td><td>${e.packageName}</td><td>${e.agentId || ''}</td></tr>`
+      `<tr><td>${esc(new Date(e.timestamp).toISOString())}</td><td>${esc(e.eventType)}</td><td>${esc(e.packageName)}</td><td>${esc(e.agentId || '')}</td></tr>`
     ).join('\n');
     return reply
       .code(200)

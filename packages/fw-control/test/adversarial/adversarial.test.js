@@ -193,18 +193,22 @@ test('Clean module passes without false positive', () => {
   assert.strictEqual(result.action, 'OBSERVE', 'Clean module action should be OBSERVE');
 });
 
-// 11. Unicode obfuscation – eval written in unicode escapes
-test('Unicode escape obfuscation of eval is a known bypass [EXPECTED BYPASS]', () => {
+// 11. Variable-alias eval – eval assigned to a variable, then called
+//     Signature scanner looks for 'eval(' but `fn('1+1')` doesn't match.
+test('Variable-alias eval is a known bypass [EXPECTED BYPASS]', () => {
   const src = pad(`
-    // eval is "eval" in unicode
     const fn = eval;
     fn('1+1');
     module.exports = {};
   `);
-  // JavaScript resolves unicode escapes before scanning, so 'eval' appears in source
-  const result = detector.scanModuleSync('unicode-eval.js', src, 'unicode-eval.js');
-  // Unicode escapes ARE resolved in JS string literals, so this is actually caught
-  console.log(`  [unicode-eval] detections: ${result.detections.length} (resolved by JS engine)`);
+  const result = detector.scanModuleSync('alias-eval.js', src, 'alias-eval.js');
+  try {
+    expectBypassed(result);
+    console.log('  [KNOWN BYPASS] variable-alias eval evades signature scanner (no "eval(" in source)');
+    console.log('  Future work: runtime Proxy on globalThis.eval or V8 Inspector hooks');
+  } catch (e) {
+    console.log('  [NOTE] variable-alias eval was caught (cross-module state effect)');
+  }
 });
 
 // 12. Newline-split string reassembly
@@ -265,8 +269,9 @@ console.log(`──────────────────────�
 console.log('Known bypasses (documented for future work):');
 console.log('  1. Bracket-notation eval:   this["ev"+"al"]  → needs AST or V8 Inspector');
 console.log('  2. String concatenation:    global["ev"+"al"] → needs taint tracking');
-console.log('  3. Array join reassembly:   ["ch","ild"].join("") → needs dynamic analysis');
+console.log('  3. Variable-alias eval:     const fn = eval; fn("code") → needs runtime Proxy');
 console.log('  4. Prototype chain access:  Object.getPrototypeOf(eval).constructor → needs runtime instrumentation');
+console.log('\nNote: Array join reassembly (["ch","ild"].join("")) is CAUGHT by behavioral analysis.');
 console.log('\nAll bypasses require runtime (dynamic) analysis. Static analysis has fundamental limits.');
 console.log('Behavioral detection mitigates bypasses by flagging dangerous ACTION SEQUENCES');
 console.log('rather than specific strings, providing defense-in-depth.\n');
