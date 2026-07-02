@@ -6,7 +6,17 @@ const os = require('os');
 const crypto = require('crypto');
 
 const PORT = process.env.FW_CONTROL_PORT || 3000;
-const DASHBOARD_TOKEN = process.env.HELIOS_DASHBOARD_TOKEN || null;
+// Always enforce authentication on /logs.
+// If no token is provided via HELIOS_DASHBOARD_TOKEN, generate a cryptographically
+// strong random token for this process lifetime and print it once so operators can
+// copy it. This makes the endpoint secure by default without requiring configuration.
+const DASHBOARD_TOKEN = process.env.HELIOS_DASHBOARD_TOKEN || (() => {
+  const generated = crypto.randomBytes(32).toString('hex');
+  console.log(`[@fw/control] No HELIOS_DASHBOARD_TOKEN set — using auto-generated token for this session:`);
+  console.log(`[@fw/control] Dashboard token: ${generated}`);
+  console.log(`[@fw/control] Set HELIOS_DASHBOARD_TOKEN=${generated} to make it permanent.`);
+  return generated;
+})();
 
 // Persistent audit log (mirrors agent-side writes for control-plane events)
 const LOG_DIR = process.env.HELIOS_LOG_DIR ||
@@ -148,9 +158,6 @@ const startServer = async () => {
   try {
     await fastify.listen({ port: PORT, host: '127.0.0.1' });
     console.log(`[@fw/control] Ingestion engine online at http://127.0.0.1:${PORT}`);
-    if (!DASHBOARD_TOKEN) {
-      console.warn(`[@fw/control] WARNING: HELIOS_DASHBOARD_TOKEN is not set. The /logs endpoint is unauthenticated.`);
-    }
     if (logFd) console.log(`[@fw/control] Audit log: ${LOG_PATH}`);
   } catch (err) {
     console.error('Critical control plane startup failure:', err.message);

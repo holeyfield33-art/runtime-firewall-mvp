@@ -50,8 +50,12 @@ const { getAuditLog } = require('./src/audit-log');
   }
 })();
 
-// ── Primitive prototype lockdown ──────────────────────────────────────────────────────────────
+// ── Primitive prototype lockdown (opt-in via FW_FREEZE_PROTOTYPES=1) ───────────────────────────
+// Disabled by default: freezing built-in prototypes breaks legitimate libraries
+// (older polyfills, some ORMs, test frameworks) with confusing downstream errors.
+// Set FW_FREEZE_PROTOTYPES=1 to enable. See F-11 in the security audit.
 (function primitiveLockdown() {
+  if (process.env.FW_FREEZE_PROTOTYPES !== '1') return;
   const intrinsicPrototypes = [Object.prototype, Array.prototype, Function.prototype, Promise.prototype, RegExp.prototype];
   for (const proto of intrinsicPrototypes) {
     try {
@@ -92,10 +96,11 @@ const { getAuditLog } = require('./src/audit-log');
       process.exit(1);
     }
   } else {
-    // First run: establish baseline
-    try {
-      fs.writeFileSync(baselineFile, computeSelfHash() + '\n', 'utf8');
-    } catch (e) {}
+    // Baseline is committed to the repo and shipped in the npm manifest.
+    // A missing baseline means the file was deleted or the package was tampered with.
+    // Never silently re-baseline — fail closed so the operator knows something is wrong.
+    console.error('[CRITICAL] Firewall self-integrity baseline (.helios-baseline) is missing. Cannot verify agent integrity. Refusing to run.');
+    process.exit(1);
   }
 })();
 
@@ -183,7 +188,9 @@ function emitTelemetry(eventType, packageName, parentPackage, metadata = {}) {
 
 // ── Compilation metrics ───────────────────────────────────────────────────────────────────────
 const compileMetrics = { filesCompiled: 0, lockdownsEnforced: 0, quarantined: 0 };
-const verifiedCompilationsCache = new Set();
+// Cache keyed by filename → SHA-256 of content (not filename alone).
+// Re-scans the file if its content changed between require() calls in a long-lived process.
+const verifiedCompilationsCache = new Map();
 const quarantinedModules = new Set();
 
 // ── Core module interception hook ─────────────────────────────────────────────────────────────
@@ -233,7 +240,8 @@ Module.prototype._compile = function (content, filename) {
   }
 
   if (configuredRule === 'OBSERVE') {
-    if (verifiedCompilationsCache.has(filename)) {
+    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+    if (verifiedCompilationsCache.get(filename) === contentHash) {
       return originalCompile.apply(this, arguments);
     }
 
@@ -274,7 +282,7 @@ Module.prototype._compile = function (content, filename) {
       throw new Error(msg);
     }
 
-    verifiedCompilationsCache.add(filename);
+    verifiedCompilationsCache.set(filename, contentHash);
   }
 
   return originalCompile.apply(this, arguments);

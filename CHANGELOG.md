@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-02
+
+### Fixed
+
+- **F-09 (MEDIUM) — Dashboard always authenticated**: `fw-control` previously left `/logs` open when `HELIOS_DASHBOARD_TOKEN` was not set (warning only). Now, if no token is provided, a cryptographically strong 32-byte random token is auto-generated at startup and printed once to stdout. The endpoint is therefore always protected — operators who want a stable token set `HELIOS_DASHBOARD_TOKEN` in their environment; those who do not still get auth, just ephemeral.
+
+- **F-10 (LOW) — Self-integrity baseline is no longer trust-on-first-use**: `verifySelfIntegrity()` previously created `.helios-baseline` from the current disk state on first run if the file was absent. An attacker who tampered with the agent code and deleted the baseline file would get a freshly trusted hash. The `else` branch is replaced with a hard `process.exit(1)`: a missing baseline is treated the same as a failed hash comparison. The baseline is committed to the repository and shipped in the npm package, so it will always be present for legitimate installs.
+
+- **F-11 (LOW) — Prototype freeze is now opt-in**: `primitiveLockdown()` previously froze `Object/Array/Function/Promise/RegExp` prototypes unconditionally on agent load. This breaks legitimate libraries (polyfills, some ORMs, test frameworks) silently. The lock is now gated on `FW_FREEZE_PROTOTYPES=1`. Default is off; operators who want the hardening set the flag explicitly.
+
+- **F-12 (LOW) — Compile cache keyed on content hash**: `verifiedCompilationsCache` was a `Set` of filenames. A file rewritten on disk and re-required in a long-lived process (e.g. after `delete require.cache[f]`) would not be re-scanned. Changed to a `Map<filename, sha256>`: the cache only bypasses the scan when both the filename and the SHA-256 of the current content match the previously scanned version.
+
 ## [0.2.0] - 2026-07-02
 
 ### Fixed

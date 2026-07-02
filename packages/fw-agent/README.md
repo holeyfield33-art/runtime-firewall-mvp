@@ -29,6 +29,7 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
+| `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze built-in prototypes (prototype-pollution hardening; opt-in because it breaks some polyfills and test frameworks) |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
 | `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun; the agent exits with code 1 if absent |

@@ -119,6 +119,7 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 | `FW_TELEMETRY` | `0` | Set to `1` to forward events to the control plane |
 | `FW_CONTROL_PORT` | `3000` | Control plane port |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
+| `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze `Object/Array/Function/Promise/RegExp` prototypes on load (hardens against prototype pollution; may break libraries that extend built-ins) |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint (fw-control only) |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
