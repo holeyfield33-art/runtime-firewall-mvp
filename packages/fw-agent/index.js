@@ -146,26 +146,26 @@ const auditLog = getAuditLog();
 let policyMap = new Map();
 const POLICY_PATH = path.join(process.cwd(), 'policy.signed.json');
 
-function loadPolicy() {
-  if (!fs.existsSync(POLICY_PATH)) return;
-  try {
-    const raw = fs.readFileSync(POLICY_PATH, 'utf8');
-    const policy = JSON.parse(raw);
-    policyMap = new Map(Object.entries(policy.rules || {}));
-  } catch (e) {
-    console.warn('[PolicyLoader] Failed to parse policy file:', e.message);
-  }
+// Build a policyMap from a rules object (called on startup and on hot-reload).
+function buildPolicyMap(rules) {
+  return new Map(Object.entries(rules || {}));
 }
-
-loadPolicy();
 
 // Emergency lockdown: block ALL module loads
 let emergencyLockdown = false;
 
-const policyWatcher = new PolicyWatcher(POLICY_PATH, () => {
-  emergencyLockdown = true;
-  auditLog.write({ eventType: 'POLICY_TAMPER_LOCKDOWN', timestamp: Date.now() });
-  emitTelemetry('POLICY_TAMPER_LOCKDOWN', 'policy.signed.json', null);
+// PolicyWatcher verifies the Ed25519 signature on every interval tick.
+// onTamperDetected  → invalid/missing signature  → lockdown
+// onValidChange     → valid signature + new rules → hot-reload policyMap
+const policyWatcher = new PolicyWatcher(POLICY_PATH, {
+  onTamperDetected: () => {
+    emergencyLockdown = true;
+    auditLog.write({ eventType: 'POLICY_TAMPER_LOCKDOWN', timestamp: Date.now() });
+    emitTelemetry('POLICY_TAMPER_LOCKDOWN', 'policy.signed.json', null);
+  },
+  onValidChange: (rules) => {
+    policyMap = buildPolicyMap(rules);
+  },
 });
 policyWatcher.start();
 
@@ -240,19 +240,28 @@ Module.prototype._compile = function (content, filename) {
     compileMetrics.filesCompiled++;
     const scanResult = detector.scanModuleSync(requestName, content, filename);
 
-    if (scanResult.detections.length > 0) {
+    // Separate blocking detections (HIGH/CRITICAL/MEDIUM) from WARN-only observations.
+    // WARN-tier matches (e.g. https.request, buffer.from) never escalate to QUARANTINE.
+    const blockDetections = scanResult.detections.filter(d => !d.warnOnly);
+    const warnDetections  = scanResult.detections.filter(d => d.warnOnly);
+
+    if (warnDetections.length > 0) {
+      emitTelemetry('OBSERVE', requestName, null, { warnMatches: warnDetections.map(d => d.matched) });
+    }
+
+    if (blockDetections.length > 0) {
       compileMetrics.lockdownsEnforced++;
       const event = {
         eventType: 'DETECTION_TRIGGERED',
         packageName: requestName,
-        detections: scanResult.detections,
+        detections: blockDetections,
         timestamp: Date.now(),
       };
       auditLog.write(event);
-      emitTelemetry('DETECTION_TRIGGERED', requestName, null, { detections: scanResult.detections });
+      emitTelemetry('DETECTION_TRIGGERED', requestName, null, { detections: blockDetections });
 
       // MEDIUM detections (DYNAMIC_MODULE_LOAD) → quarantine silently; HIGH/CRITICAL → hard block
-      const hasMediumOnly = scanResult.detections.every(d => d.severity === 'MEDIUM');
+      const hasMediumOnly = blockDetections.every(d => d.severity === 'MEDIUM');
       if (hasMediumOnly) {
         quarantinedModules.add(filename);
         const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, requestName, null, d) });
@@ -260,7 +269,7 @@ Module.prototype._compile = function (content, filename) {
         return;
       }
 
-      const msg = `[Firewall] Detection in "${requestName}": ${scanResult.detections.map(d => d.rule || d.type).join(', ')}`;
+      const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map(d => d.rule || d.type).join(', ')}`;
       console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
       throw new Error(msg);
     }

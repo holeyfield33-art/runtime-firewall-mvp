@@ -1,3 +1,4 @@
+<!-- markdownlint-disable-file MD024 -->
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -6,6 +7,58 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.2.0] - 2026-07-02
+
+### Fixed
+
+- **F-03 (HIGH) — Full-content scanning**: The signature scanner previously truncated all modules to the first 2 KB before running Aho-Corasick, allowing malicious code to hide after an innocent-looking header. The truncation is removed; all module content is now scanned. Aho-Corasick is O(N) so this costs nothing asymptotically. Added adversarial regression test case 15 (3 KB benign padding + `stratum` URL at end → BLOCKED).
+
+- **F-02 (HIGH) — Asymmetric policy signing replaces TOFU hash baseline**: `PolicyWatcher` no longer stores a SHA-256 hash in a sidecar `.baseline` file. Instead, `policy.signed.json` must carry a valid Ed25519 signature over its canonical payload `{ version, rules (sorted), signedAt }`. An invalid or missing signature triggers immediate lockdown — fail-closed with no backward-compatibility grace period. The public key is compiled into `src/policy-watcher.js` and is therefore part of the self-integrity hash. Operators can override it via `FW_POLICY_PUBKEY` (PEM). Utility scripts: `scripts/generate-policy-key.js`, `scripts/sign-policy.js`.
+
+- **F-06 (MEDIUM) — Policy hot-reload without restart**: `PolicyWatcher` now delivers rules to `index.js` via an `onValidChange(rules)` callback on startup and on every verified policy update. When the periodic check detects a valid new signature with different rules, `policyMap` is rebuilt in place without restarting the process. Invalid signatures still trigger lockdown.
+
+- **F-07 (MEDIUM) — Behavioral analysis no longer skips small modules**: `BehaviorTracker.analyzeModule()` had a `content.length < 100` guard that silently dropped all analysis for tiny modules. Removed. Added adversarial regression test case 16 (48-byte credential-exfiltration module → BLOCKED via behavioral detection).
+
+- **F-08 (MEDIUM) — NETWORK_EGRESS regex extended**: Inline `require("https").get(...)` and `require("http").request(...)` patterns were not matched by the behavioral `NETWORK_EGRESS` regexes (which looked for `https.get(` as a bare identifier). Added: `/require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request)\s*\(/`.
+
+- **F-09 (MEDIUM) — Control plane binds to 127.0.0.1 by default**: `fw-control` previously listened on `0.0.0.0`, exposing the telemetry and dashboard endpoints on all network interfaces. Default host is now `127.0.0.1`. Production deployments that need external access should place a TLS-terminating reverse proxy in front.
+
+- **F-13 (LOW) — Control plane warns when dashboard is unauthenticated**: If `HELIOS_DASHBOARD_TOKEN` is not set, `fw-control` now logs a startup warning rather than silently accepting all requests to `/logs`.
+
+### Added
+
+- `scripts/generate-policy-key.js`: generates a new Ed25519 key pair and prints instructions for embedding the public key and signing policies.
+- `scripts/sign-policy.js`: signs a rules JSON file with a private key and writes a `policy.signed.json` ready for deployment. Also exports `{ signPolicy }` for programmatic use in tests.
+- `scripts/dev-private-key.pem`: **development/CI private key — DO NOT use in production.** The corresponding public key is compiled into `src/policy-watcher.js`. Generate your own key pair before deploying.
+- `packages/fw-agent/policy.signed.json`: example policy file signed with the dev key (empty rules — add your own BLOCK/QUARANTINE/OBSERVE entries and re-sign).
+
+### Changed
+
+- `PolicyWatcher` constructor API: second argument is now `{ onTamperDetected, onValidChange }` (callbacks object) instead of a bare function. `options.intervalMs` is unchanged.
+- `detector.stats`: `chunkBypasses` counter removed (truncation is gone); `warnOnlyDetections` counter added for WARN-tier signature matches.
+- `index.js` module-load hook: WARN-only detections (`warnOnly: true`) now emit `OBSERVE` telemetry and never escalate to `QUARANTINE`. Only `HIGH`/`CRITICAL`/`MEDIUM` block-tier detections affect module execution.
+
+## [0.1.1] - 2026-07-02
+
+### Fixed
+
+- **F-01 (CRITICAL) — CI pipeline**: Unit and adversarial test steps were executing `npm test` inside `packages/fw-agent/`, which has no `scripts.test`. All test scripts now run from the monorepo root using `npm run test:unit` and `npm run test:adversarial` against the correct root `package.json`.
+
+- **F-05 (MEDIUM) — Quarantine no longer kills the host process**: `QuarantineStub.record()` contained a `process.exit(9)` that fired when more than 100 intercepts occurred within 1 ms ("Wilsonian Regulator"). Killing the host application on a potential exhaustion probe defeats the point of a graceful quarantine. Replaced with a rate-limited `console.warn` (logs once per 10 occurrences) and an early `return` so the proxy remains inert without crashing the service.
+
+- **F-04 (HIGH) — Reduced false positives via signature tiering**: The single `SIGNATURES` array (26 patterns, one AhoCorasick instance) is replaced with two tiers:
+  - **`BLOCK_SIGNATURES`** (19 patterns, unchanged blocking behaviour): crypto-miner pool identifiers, `eval(`, `new function`, `child_process.*`, `execsync`, `spawnsync`, `curl` (with trailing space), `wget` (with trailing space), pastebin URLs.
+  - **`WARN_SIGNATURES`** (7 patterns, `OBSERVE`-only, never block): `buffer.from`, `atob(`, `btoa(`, `https.request`, `http.request`, `net.createconnection`, `socket.connect`.
+  WARN-tier matches produce a `{ severity: 'WARN', warnOnly: true }` detection entry and are counted in `stats.warnOnlyDetections` but never escalate to `QUARANTINE`.
+
+### Added
+
+- **F-14 — Basic test coverage** for previously untested components:
+  - `packages/fw-agent/test/quarantine-unit-test.js`: proxy inertness, rate-limit behaviour, no `process.exit`.
+  - `packages/fw-agent/test/policy-watcher-unit-test.js`: `verify()` pass/fail, lockdown callback, timer interval configurable via constructor `options.intervalMs`.
+  - `packages/fw-agent/test/audit-log-unit-test.js`: file write, multi-line output, stderr fallback.
+  - `packages/fw-control/test/control-plane-auth-test.js`: `/logs` 401 without token, 200 with correct token, 401 with wrong token, `/v1/health` unauthenticated.
 
 ## [0.1.0] - 2026-06-20
 
@@ -46,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Measured on a 900-module cold load (methodology: `run-gate-test.js`, median-of-5 cold-process A/B, 10-iteration warmup excluded), Node v22 (CI: 18, 20, 22), Linux x64:
 
 | Host | Median overhead | Gate budget | P95 overhead | Enforced? |
-|------|----------------|-------------|-------------|-----------|
+| ---- | --------------- | ----------- | ------------ | --------- |
 | AMD EPYC 9V74 (80-core) | ~20% | 25% | ~25-27% | Median only |
 | AMD EPYC 7763 (64-core) | ~17% | 25% | ~31-37% | Median only |
 
@@ -56,5 +109,7 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/releases/tag/v0.1.0

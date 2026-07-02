@@ -6,10 +6,11 @@
     "packages/*"
   ],
   "scripts": {
-    "test": "npm run test:unit && npm run test:adversarial && npm run test:integration",
-    "test:unit": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js",
+    "test": "npm run test:unit && npm run test:adversarial && npm run test:integration && npm run test:auth",
+    "test:unit": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js && node packages/fw-agent/test/quarantine-unit-test.js && node packages/fw-agent/test/policy-watcher-unit-test.js && node packages/fw-agent/test/audit-log-unit-test.js",
     "test:adversarial": "node packages/fw-control/test/adversarial/adversarial.test.js",
     "test:integration": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-test.js",
+    "test:auth": "node packages/fw-control/test/control-plane-auth-test.js",
     "test:live": "FW_ENABLE_DETECTION=1 node packages/fw-control/test/detection-live-test.js",
     "test:bench": "node packages/fw-agent/test/bench-honest.js",
     "start:control": "node packages/fw-control/src/server.js",

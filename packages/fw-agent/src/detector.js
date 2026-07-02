@@ -4,7 +4,8 @@ const { BehaviorTracker } = require('./behavior-tracker');
 
 // Extended signature set covers crypto-miners, dynamic code execution, network abuse,
 // and supply-chain worm patterns (postinstall fetchers, credential harvesters).
-const SIGNATURES = [
+// High-confidence malicious signatures — trigger QUARANTINE/BLOCK on match.
+const BLOCK_SIGNATURES = [
   // Crypto-miner pool identifiers
   'stratum',
   'pool.hashvault',
@@ -13,8 +14,7 @@ const SIGNATURES = [
   'nicehash',
   'coinhive',
   'cryptonight',
-  // Dynamic code execution
-  'buffer.from',
+  // Dynamic code execution (unambiguous in production code)
   'eval(',
   'new function',
   // Process/shell execution
@@ -22,31 +22,36 @@ const SIGNATURES = [
   'child_process.spawn',
   'execsync',
   'spawnsync',
-  // Outbound network
-  'net.createconnection',
-  'socket.connect',
-  'https.request',
-  'http.request',
   // Supply-chain worm indicators
   'curl ',
   'wget ',
   '//pastebin',
   '//paste.ee',
+];
+
+// Indicative patterns common in legitimate code — emit WARN/OBSERVE only, never block.
+const WARN_SIGNATURES = [
+  'buffer.from',
   'atob(',
   'btoa(',
+  'https.request',
+  'http.request',
+  'net.createconnection',
+  'socket.connect',
 ];
 
 class Detector {
   constructor(policyEngine) {
     this.policyEngine = policyEngine;
-    this.matcher = new AhoCorasick(SIGNATURES);
+    this.blockMatcher = new AhoCorasick(BLOCK_SIGNATURES);
+    this.warnMatcher = new AhoCorasick(WARN_SIGNATURES);
     this.behaviorTracker = new BehaviorTracker();
 
     this.stats = {
       calls: 0,
-      chunkBypasses: 0,
       automatonScans: 0,
       behaviorViolations: 0,
+      warnOnlyDetections: 0,
     };
   }
 
@@ -64,24 +69,34 @@ class Detector {
       return { action: 'OBSERVE', detections: [], packageName, scanTime: Date.now() };
     }
 
-    // Signature scan on first 2KB (signatures reliably appear early in malicious payloads)
-    let searchContent = moduleContent;
-    if (moduleContent.length > 2048) {
-      this.stats.chunkBypasses++;
-      searchContent = moduleContent.slice(0, 2048);
-    }
+    // Full-content scan: Aho-Corasick is O(N) so scanning the entire module is safe.
+    const searchContent = moduleContent;
 
     this.stats.automatonScans++;
     const detections = [];
 
-    const match = this.matcher.searchInsensitive(searchContent);
-    if (match) {
-      const isCrypto = match.includes('stratum') || match.includes('pool') || match.includes('nicehash') || match.includes('cryptonight');
+    // BLOCK-tier: high-confidence malicious patterns — always quarantine on match
+    const blockMatch = this.blockMatcher.searchInsensitive(searchContent);
+    if (blockMatch) {
+      const isCrypto = blockMatch.includes('stratum') || blockMatch.includes('pool') || blockMatch.includes('nicehash') || blockMatch.includes('cryptonight');
       detections.push({
         type: isCrypto ? 'crypto-miner' : 'dynamic-code-exec',
         severity: isCrypto ? 'CRITICAL' : 'HIGH',
-        matched: match,
+        matched: blockMatch,
         timestamp: Date.now(),
+      });
+    }
+
+    // WARN-tier: common in benign code — log for visibility but never block on these alone
+    const warnMatch = this.warnMatcher.searchInsensitive(searchContent);
+    if (warnMatch) {
+      this.stats.warnOnlyDetections++;
+      detections.push({
+        type: 'indicative-pattern',
+        severity: 'WARN',
+        matched: warnMatch,
+        timestamp: Date.now(),
+        warnOnly: true,
       });
     }
 
@@ -106,7 +121,9 @@ class Detector {
       }
     }
 
-    const action = detections.length > 0 ? 'QUARANTINE' : 'OBSERVE';
+    // Only escalate to QUARANTINE if at least one non-WARN detection exists
+    const hasBlockDetection = detections.some(d => !d.warnOnly);
+    const action = hasBlockDetection ? 'QUARANTINE' : 'OBSERVE';
     return { action, detections, packageName, scanTime: Date.now(), behaviorViolations };
   }
 

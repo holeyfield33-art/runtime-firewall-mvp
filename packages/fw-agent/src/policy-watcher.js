@@ -1,100 +1,169 @@
 // packages/fw-agent/src/policy-watcher.js
-// Continuous policy integrity verification.
-// Re-reads the policy file every 60 seconds and verifies its SHA-256 hash against a
-// stored baseline. Mismatch triggers an emergency lockdown that blocks all module loads.
+// Continuous policy integrity verification using Ed25519 asymmetric signatures.
+//
+// policy.signed.json format:
+//   { "version": 1, "rules": {...}, "signedAt": "ISO-8601", "signature": "base64url" }
+//
+// The signature covers the canonical JSON of { version, rules (keys sorted), signedAt }.
+// An invalid or missing signature immediately triggers emergency lockdown.
+// A valid signature with changed rules triggers hot-reload via onValidChange().
+//
+// To sign a policy file:
+//   node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+//
+// To generate a production key pair:
+//   node scripts/generate-policy-key.js
 
 const fs = require('fs');
 const crypto = require('crypto');
 
 const WATCH_INTERVAL_MS = 60_000;
 
+// ── Dev/CI public key ─────────────────────────────────────────────────────────
+// Generated with: node scripts/generate-policy-key.js
+// PRODUCTION: replace with your own key and regenerate .helios-baseline.
+// The private key is in scripts/dev-private-key.pem — DO NOT deploy that file.
+const DEV_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEANejKx1KxfXVk5B0UzI2Cp3XO9hmy6nIXTAhsW0bhlFo=
+-----END PUBLIC KEY-----`;
+
+// Allow the public key to be overridden via environment variable for production deployments.
+// FW_POLICY_PUBKEY must be a PEM-encoded Ed25519 SPKI public key.
+const PUBLIC_KEY_PEM = process.env.FW_POLICY_PUBKEY || DEV_PUBLIC_KEY_PEM;
+
+/**
+ * Build the canonical signed payload buffer from a policy object.
+ * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
+ */
+function canonicalPayload(version, rules, signedAt) {
+  const sorted = {};
+  for (const k of Object.keys(rules).sort()) sorted[k] = rules[k];
+  return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
+}
+
 class PolicyWatcher {
-  constructor(policyPath, onTamperDetected) {
+  /**
+   * @param {string} policyPath   - Absolute path to policy.signed.json
+   * @param {object} callbacks    - { onTamperDetected(), onValidChange(rules) }
+   * @param {object} [options]    - { intervalMs }
+   */
+  constructor(policyPath, callbacks, options = {}) {
     this.policyPath = policyPath;
-    this.onTamperDetected = onTamperDetected;
-    this.baselineHash = null;
-    this.baselinePath = policyPath + '.baseline';
-    this.timer = null;
+    this.onTamperDetected = (callbacks && callbacks.onTamperDetected) || (() => {});
+    this.onValidChange = (callbacks && callbacks.onValidChange) || (() => {});
     this.locked = false;
+    this.timer = null;
+    this._intervalMs = (options && options.intervalMs) || WATCH_INTERVAL_MS;
+    this._lastRulesHash = null;
   }
 
-  _hashFile(filePath) {
+  /**
+   * Attempt to read, parse, and cryptographically verify the policy file.
+   * Returns { version, rules, signedAt } on success, or null on any failure.
+   * Fail-closed: unsigned, malformed, or tampered policies return null.
+   */
+  _loadAndVerify() {
+    let content;
     try {
-      const content = fs.readFileSync(filePath, 'utf8');
-      return crypto.createHash('sha256').update(content).digest('hex');
+      content = fs.readFileSync(this.policyPath, 'utf8');
     } catch (e) {
+      console.error('[PolicyWatcher] Cannot read policy file:', e.message);
       return null;
     }
-  }
 
-  /**
-   * Compute and persist the baseline hash from the current policy file.
-   * Should be called once after startup integrity is confirmed.
-   */
-  initBaseline() {
-    this.baselineHash = this._hashFile(this.policyPath);
-    if (this.baselineHash) {
-      try {
-        fs.writeFileSync(this.baselinePath, this.baselineHash + '\n', 'utf8');
-      } catch (e) {
-        // Non-fatal: baseline stored in memory only if file write fails
-      }
-    }
-    return this.baselineHash;
-  }
-
-  /**
-   * Load a previously stored baseline hash.
-   * Returns true if a valid baseline was loaded, false otherwise.
-   */
-  loadBaseline() {
+    let policy;
     try {
-      const stored = fs.readFileSync(this.baselinePath, 'utf8').trim();
-      if (/^[0-9a-f]{64}$/.test(stored)) {
-        this.baselineHash = stored;
-        return true;
-      }
+      policy = JSON.parse(content);
     } catch (e) {
-      // Baseline file not yet written
+      console.error('[PolicyWatcher] Policy file is not valid JSON:', e.message);
+      return null;
     }
-    return false;
+
+    const { version, rules, signedAt, signature } = policy;
+
+    if (version !== 1 || !rules || typeof rules !== 'object' || !signedAt || !signature) {
+      console.error('[PolicyWatcher] Policy file is missing required fields (version, rules, signedAt, signature).');
+      return null;
+    }
+
+    const payload = canonicalPayload(version, rules, signedAt);
+    let sigBuffer;
+    try {
+      sigBuffer = Buffer.from(signature, 'base64url');
+    } catch (e) {
+      console.error('[PolicyWatcher] Policy signature is not valid base64url.');
+      return null;
+    }
+
+    let valid = false;
+    try {
+      valid = crypto.verify(null, payload, { key: PUBLIC_KEY_PEM, format: 'pem', type: 'spki' }, sigBuffer);
+    } catch (e) {
+      console.error('[PolicyWatcher] Signature verification error:', e.message);
+      return null;
+    }
+
+    if (!valid) {
+      console.error('[PolicyWatcher] Policy signature is INVALID.');
+      return null;
+    }
+
+    return { version, rules, signedAt };
   }
 
+  /**
+   * Verify the policy file cryptographically.
+   * Returns true if valid, false otherwise. Safe to call directly in tests.
+   */
   verify() {
-    if (!this.baselineHash) return true;
-    const current = this._hashFile(this.policyPath);
-    if (current === null) {
-      console.error('[PolicyWatcher] Policy file missing during periodic check');
-      return false;
-    }
-    return current === this.baselineHash;
+    return this._loadAndVerify() !== null;
+  }
+
+  /**
+   * Hash the rules for change detection (not security-critical — just diffing).
+   */
+  _hashRules(rules) {
+    return crypto.createHash('sha256').update(JSON.stringify(rules)).digest('hex');
   }
 
   /**
    * Start the periodic integrity check.
-   * Loads or initializes the baseline on first call.
+   * Verifies the policy on startup; calls onTamperDetected() if verification fails.
+   * Calls onValidChange(rules) with the initial rules on startup, then on every verified change.
    */
   start() {
     if (!fs.existsSync(this.policyPath)) return;
 
-    if (!this.baselineHash) {
-      if (!this.loadBaseline()) {
-        this.initBaseline();
-      }
+    const initial = this._loadAndVerify();
+    if (!initial) {
+      this.locked = true;
+      console.error('\n[CRITICAL] Policy file failed signature verification on startup. EMERGENCY LOCKDOWN ACTIVE.');
+      this.onTamperDetected();
+      return;
     }
+
+    this._lastRulesHash = this._hashRules(initial.rules);
+    this.onValidChange(initial.rules);
 
     this.timer = setInterval(() => {
       if (this.locked) return;
-      if (!this.verify()) {
+
+      const result = this._loadAndVerify();
+      if (!result) {
         this.locked = true;
         console.error('\n[CRITICAL] Policy integrity violation detected. EMERGENCY LOCKDOWN ACTIVE.');
-        if (typeof this.onTamperDetected === 'function') {
-          this.onTamperDetected();
-        }
+        this.onTamperDetected();
+        return;
       }
-    }, WATCH_INTERVAL_MS);
 
-    // Do not block process exit
+      const newHash = this._hashRules(result.rules);
+      if (newHash !== this._lastRulesHash) {
+        this._lastRulesHash = newHash;
+        console.log('[PolicyWatcher] Valid policy update detected \u2014 hot-reloading rules.');
+        this.onValidChange(result.rules);
+      }
+    }, this._intervalMs);
+
     if (this.timer.unref) this.timer.unref();
   }
 
@@ -110,4 +179,5 @@ class PolicyWatcher {
   }
 }
 
-module.exports = { PolicyWatcher };
+module.exports = { PolicyWatcher, canonicalPayload };
+

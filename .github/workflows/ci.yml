@@ -29,12 +29,13 @@ jobs:
         run: npm install
 
       - name: Unit tests
-        working-directory: packages/fw-agent
-        run: npm test
+        run: npm run test:unit
 
       - name: Adversarial test suite
-        working-directory: packages/fw-agent
         run: npm run test:adversarial
+
+      - name: Control-plane auth tests
+        run: npm run test:auth
 
       - name: Self-integrity baseline check
         working-directory: packages/fw-agent

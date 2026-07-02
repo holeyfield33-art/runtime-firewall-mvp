@@ -37,6 +37,8 @@ const SIGNAL_PATTERNS = {
     /XMLHttpRequest/,
     /tls\s*\.\s*connect\s*\(/,
     /dgram\s*\.\s*createSocket/,
+    // Inline require("https").get/request — not caught by the patterns above
+    /require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request)\s*\(/,
   ],
   // Generates or evaluates code at runtime
   DYNAMIC_CODE: [
@@ -93,7 +95,7 @@ class BehaviorTracker {
    * Checks both intra-module sequences and cross-module state machine transitions.
    */
   analyzeModule(filename, content) {
-    if (!content || content.length < 100) return [];
+    if (!content) return [];
 
     const signals = {
       sensitiveRead: matchesAny(content, SIGNAL_PATTERNS.SENSITIVE_READ),

