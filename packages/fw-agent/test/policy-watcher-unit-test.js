@@ -1,4 +1,4 @@
-﻿// packages/fw-agent/test/policy-watcher-unit-test.js
+// packages/fw-agent/test/policy-watcher-unit-test.js
 // Unit tests for PolicyWatcher: Ed25519 signature verification, hot-reload, tamper detection.
 'use strict';
 
