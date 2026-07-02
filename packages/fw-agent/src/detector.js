@@ -27,6 +27,10 @@ const BLOCK_SIGNATURES = [
   'wget ',
   '//pastebin',
   '//paste.ee',
+  // Native binding / VM escape (sandbox bypass vectors)
+  'process.binding',
+  'vm.runinnewcontext',
+  'vm.runinthiscontext',
 ];
 
 // Indicative patterns common in legitimate code — emit WARN/OBSERVE only, never block.

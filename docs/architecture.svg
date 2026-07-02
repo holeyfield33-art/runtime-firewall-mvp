@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Aletheia Firewall architecture</title>
+  <desc id="desc">A high level flow of the host application, module hook, policy enforcement, detection pipeline, audit log, and telemetry worker.</desc>
+  <defs>
+    <style>
+      .bg { fill: #f7f4ef; }
+      .panel { fill: #ffffff; stroke: #c9c2b8; stroke-width: 2; rx: 18; }
+      .node { fill: #fffdf8; stroke: #6d6256; stroke-width: 2; rx: 14; }
+      .decision { fill: #fef3c7; stroke: #a16207; stroke-width: 2; }
+      .block { fill: #fee2e2; stroke: #b91c1c; stroke-width: 2; rx: 14; }
+      .quarantine { fill: #fef9c3; stroke: #a16207; stroke-width: 2; rx: 14; }
+      .pass { fill: #dcfce7; stroke: #15803d; stroke-width: 2; rx: 14; }
+      .telemetry { fill: #e0f2fe; stroke: #0369a1; stroke-width: 2; rx: 14; stroke-dasharray: 8 6; }
+      .label { fill: #1f2937; font-family: Arial, Helvetica, sans-serif; font-size: 20px; font-weight: 700; text-anchor: middle; }
+      .small { fill: #374151; font-family: Arial, Helvetica, sans-serif; font-size: 15px; text-anchor: middle; }
+      .arrow { stroke: #44403c; stroke-width: 3; fill: none; marker-end: url(#arrowhead); }
+      .arrow-dashed { stroke: #64748b; stroke-width: 3; fill: none; stroke-dasharray: 8 6; marker-end: url(#arrowhead); }
+      .section { fill: #5b5247; font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-weight: 700; }
+    </style>
+    <marker id="arrowhead" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <path d="M0,0 L10,4 L0,8 z" fill="#44403c" />
+    </marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1200" height="720" />
+  <rect class="panel" x="24" y="24" width="1152" height="672" />
+
+  <text class="section" x="600" y="62">Runtime Firewall Flow</text>
+
+  <rect class="node" x="430" y="90" width="340" height="72" />
+  <text class="label" x="600" y="120">Host Application</text>
+  <text class="small" x="600" y="144">node --require=aletheia-firewall app.js</text>
+
+  <path class="arrow" d="M600 162 L600 198" />
+
+  <rect class="node" x="410" y="198" width="380" height="86" />
+  <text class="label" x="600" y="232">Module._compile Hook</text>
+  <text class="small" x="600" y="258">Every require() call passes through the scanner</text>
+
+  <path class="arrow" d="M600 284 L600 322" />
+
+  <rect class="decision" x="500" y="322" width="200" height="72" rx="18" />
+  <text class="label" x="600" y="355">Policy Rule?</text>
+
+  <path class="arrow" d="M500 358 L340 358" />
+  <path class="arrow" d="M700 358 L860 358" />
+  <path class="arrow" d="M600 394 L600 430" />
+
+  <rect class="block" x="190" y="318" width="150" height="80" />
+  <text class="label" x="265" y="350">BLOCK</text>
+  <text class="small" x="265" y="374">throw immediately</text>
+
+  <rect class="quarantine" x="780" y="318" width="240" height="80" />
+  <text class="label" x="900" y="350">QUARANTINE</text>
+  <text class="small" x="900" y="374">Proxy exports, child requires blocked</text>
+
+  <rect class="node" x="490" y="430" width="220" height="72" />
+  <text class="label" x="600" y="462">Detector</text>
+  <text class="small" x="600" y="486">Signature + behavioral scan</text>
+
+  <path class="arrow" d="M600 502 L600 540" />
+
+  <rect class="node" x="280" y="540" width="250" height="72" />
+  <text class="label" x="405" y="572">Aho-Corasick</text>
+  <text class="small" x="405" y="596">First 2 KB, 27 signatures</text>
+
+  <rect class="node" x="590" y="540" width="250" height="72" />
+  <text class="label" x="715" y="572">Behavioral State Machine</text>
+  <text class="small" x="715" y="596">Full content, FW_ENABLE_BEHAVIORAL=1</text>
+
+  <path class="arrow" d="M600 574 L530 574" />
+  <path class="arrow" d="M600 574 L590 574" />
+
+  <rect class="pass" x="500" y="632" width="200" height="54" />
+  <text class="label" x="600" y="664">PASS / OBSERVE</text>
+
+  <path class="arrow" d="M405 612 L405 642 L500 642" />
+  <path class="arrow" d="M715 612 L715 642 L700 642" />
+
+  <rect class="block" x="68" y="444" width="178" height="66" />
+  <text class="label" x="157" y="474">COMPILATION LOCKDOWN</text>
+  <text class="small" x="157" y="496">Signature or high severity behavior</text>
+
+  <rect class="telemetry" x="848" y="448" width="260" height="66" />
+  <text class="label" x="978" y="478">Telemetry Worker</text>
+  <text class="small" x="978" y="500">FW_TELEMETRY=1, fail-open</text>
+
+  <path class="arrow-dashed" d="M700 665 L848 478" />
+  <path class="arrow" d="M157 444 L225 398" />
+  <path class="arrow" d="M900 398 L900 448" />
+
+  <text class="small" x="600" y="706">PolicyWatcher and audit logging run alongside the scan path</text>
+</svg>

@@ -8,46 +8,7 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 ## Architecture
 
-```mermaid
-flowchart TD
-    HOST["Host Application\nnode --require=aletheia-firewall app.js"]
-
-    HOST --> HOOK["Module._compile hook\nevery require() call"]
-    HOST --> SCRIPTS["Host-project script scan\npackage.json only\n(dependency postinstall NOT covered)"]
-    HOST --> PWATCH["PolicyWatcher\nSHA-256 file-hash, 60s re-verify"]
-
-    HOOK --> POLICY{Policy rule?}
-    POLICY -- "BLOCK" --> HARD["[BLOCK] throw\nmodule never runs"]
-    POLICY -- "QUARANTINE" --> QSTUB["QuarantineStub\nProxy replaces exports\nchild requires blocked"]
-    POLICY -- "OBSERVE (default)" --> DETECT["Detector"]
-
-    DETECT --> SIGSC["Aho-Corasick signature scan\n24 signatures, first 2 KB only"]
-    DETECT --> BEHAV["Behavioral state machine\nfull content\nFW_ENABLE_BEHAVIORAL=1"]
-
-    SIGSC -- "match" --> LOCK["[COMPILATION LOCKDOWN] throw"]
-    BEHAV -- "CRITICAL / HIGH" --> LOCK
-    BEHAV -- "MEDIUM" --> QSTUB
-    SIGSC -- "clean" --> PASS["OBSERVE (cached after first scan)"]
-    BEHAV -- "clean" --> PASS
-
-    SCRIPTS -- "suspicious pattern" --> SBLK["Block (HELIOS_BLOCK_SCRIPTS=1)"]
-    PWATCH -- "hash mismatch" --> ELCK["EMERGENCY LOCKDOWN\nall subsequent requires throw"]
-
-    LOCK --> ALOG["AuditLog\nappend-only JSON lines"]
-    QSTUB --> ALOG
-    SBLK --> ALOG
-    ELCK --> ALOG
-
-    ALOG -.-> TEL["Telemetry worker thread\nFW_TELEMETRY=1, fail-open\nno control plane ships in v0.1.0"]
-
-    style HARD fill:#fcc,stroke:#c00
-    style LOCK fill:#fcc,stroke:#c00
-    style ELCK fill:#fcc,stroke:#c00
-    style SBLK fill:#fcc,stroke:#c00
-    style QSTUB fill:#ffe,stroke:#aa0
-    style PASS fill:#cfc,stroke:#080
-    style TEL fill:#eef,stroke:#88a,stroke-dasharray: 5 5
-```
+<img src="docs/architecture.svg" alt="Architecture diagram" />
 
 ---
 
@@ -67,7 +28,7 @@ Tracks dangerous **action sequences** within and across modules — catching obf
 
 ### 2. Signature Scanner (Aho-Corasick)
 
-O(N) pattern matching with 24 signatures covering:
+O(N) pattern matching with 27 signatures covering:
 - Crypto-miners (`stratum`, `pool.hashvault`, `nicehash`, `cryptonight`, …)
 - Dynamic code execution (`eval(`, `new Function`, `buffer.from`, `atob(`, …)
 - Supply-chain worm patterns (`curl `, `wget `, `//pastebin`, …)

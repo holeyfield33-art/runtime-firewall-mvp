@@ -12,6 +12,7 @@ coverage/
 keys/
 *.key
 policy.cache.json
+policy.signed.json.baseline
 
 # IDE/Editor noise
 .vscode/

@@ -78,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Zero runtime dependencies**: `aletheia-firewall` has no `dependencies` or `optionalDependencies`. All capabilities use Node.js built-in modules only (`fs`, `crypto`, `module`, `worker_threads`, `http`, `path`, `os`).
 
-- **Aho-Corasick signature scanner**: O(N) multi-pattern matching over the first 2 KB of each module source, with 24 signatures covering crypto-miners, dynamic code execution, process/shell execution, outbound network egress, and supply-chain worm indicators.
+- **Aho-Corasick signature scanner**: O(N) multi-pattern matching over the first 2 KB of each module source, with 27 signatures covering crypto-miners, dynamic code execution, process/shell execution, outbound network egress, supply-chain worm indicators, and native binding/VM escape vectors.
 
 - **Quarantine mode**: modules matching a `QUARANTINE` policy rule or triggering a `MEDIUM`-severity behavioral detection have their exports replaced with a logging `Proxy` that intercepts all property access and method calls without executing the module's code. Child `require()` calls from a quarantined module are also blocked.
 
