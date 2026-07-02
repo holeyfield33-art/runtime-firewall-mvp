@@ -24,5 +24,5 @@ console.log('PRIVATE KEY (store securely — never commit to production repos):'
 console.log(privateKey);
 console.log('\nNext steps:');
 console.log('  1. Replace DEV_PUBLIC_KEY_PEM in policy-watcher.js with the public key above.');
-console.log('  2. Regenerate .helios-baseline: node scripts/regen-baseline.js');
+console.log('  2. Regenerate .helios-baseline: see CONTRIBUTING.md (baseline regeneration instructions)');
 console.log('  3. Sign your policy: node scripts/sign-policy.js <private-key.pem> <rules.json>');
