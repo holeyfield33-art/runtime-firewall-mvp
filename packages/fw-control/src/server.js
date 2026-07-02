@@ -137,16 +137,20 @@ fastify.get('/logs', async (request, reply) => {
 });
 
 // Background drain: process the queue in batches
-setInterval(() => {
+const _drainTimer = setInterval(() => {
   if (telemetryQueue.length === 0) return;
   const batch = telemetryQueue.splice(0, 100);
   console.log(`[Background Worker] Drained ${batch.length} events (queue depth: ${telemetryQueue.length})`);
 }, 1000);
+if (_drainTimer.unref) _drainTimer.unref();
 
 const startServer = async () => {
   try {
-    await fastify.listen({ port: PORT, host: '0.0.0.0' });
-    console.log(`[@fw/control] Ingestion engine online at http://localhost:${PORT}`);
+    await fastify.listen({ port: PORT, host: '127.0.0.1' });
+    console.log(`[@fw/control] Ingestion engine online at http://127.0.0.1:${PORT}`);
+    if (!DASHBOARD_TOKEN) {
+      console.warn(`[@fw/control] WARNING: HELIOS_DASHBOARD_TOKEN is not set. The /logs endpoint is unauthenticated.`);
+    }
     if (logFd) console.log(`[@fw/control] Audit log: ${LOG_PATH}`);
   } catch (err) {
     console.error('Critical control plane startup failure:', err.message);
