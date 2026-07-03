@@ -1,5 +1,8 @@
 // packages/fw-agent/test/policy-watcher-unit-test.js
 // Unit tests for PolicyWatcher: Ed25519 signature verification, hot-reload, tamper detection.
+// Tests legitimately sign with the bundled dev key — opt in explicitly so the F-02a guard
+// (which rejects dev-key policy in production) does not block the test run.
+process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
 'use strict';
 
 const assert = require('assert');

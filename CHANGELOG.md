@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-03
+
+### Fixed
+
+- **F-02a (HIGH) — Dev-key policy verification refused in production**: `PolicyWatcher` fell back to the bundled Ed25519 dev key when `FW_POLICY_PUBKEY` was not set. The dev private key (`scripts/dev-private-key.pem`) is committed to the public repository, so any attacker could forge a valid policy signature and a forgetful production deploy would trust it — defeating the F-02 fix entirely. `start()` now refuses to load a policy file using the dev key unless `FW_ALLOW_DEV_POLICY_KEY=1` is explicitly set. Operators must either supply `FW_POLICY_PUBKEY` (their own production key) or set `FW_ALLOW_DEV_POLICY_KEY=1` to acknowledge the dev-key risk in local/dev/CI environments. Agents with no `policy.signed.json` on disk are unaffected — the guard only fires when a policy file is actually present.
+
 ## [0.2.1] - 2026-07-02
 
 ### Fixed
