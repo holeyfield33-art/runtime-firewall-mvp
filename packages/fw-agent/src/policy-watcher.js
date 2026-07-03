@@ -145,10 +145,10 @@ class PolicyWatcher {
     // a valid signature. Only allow the dev key when FW_ALLOW_DEV_POLICY_KEY=1.
     if (USING_DEV_POLICY_KEY && process.env.FW_ALLOW_DEV_POLICY_KEY !== '1') {
       console.error(
-        '[CRITICAL] Policy file found but FW_POLICY_PUBKEY is not set, so the bundled ' +
-        'development key would verify it. The matching private key is public, making this ' +
-        'unsafe. Set FW_POLICY_PUBKEY to your production public key, or set ' +
-        'FW_ALLOW_DEV_POLICY_KEY=1 for local/dev/CI use. Refusing to run.'
+        '[CRITICAL] Policy file found but FW_POLICY_PUBKEY is missing or set to the bundled ' +
+        'development key. The matching private key is public, making this unsafe. Set ' +
+        'FW_POLICY_PUBKEY to your production public key, or set FW_ALLOW_DEV_POLICY_KEY=1 ' +
+        'for local/dev/CI use. Refusing to run.'
       );
       process.exit(1);
     }
