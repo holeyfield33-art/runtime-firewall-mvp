@@ -31,11 +31,11 @@ MCowBQYDK2VwAyEANejKx1KxfXVk5B0UzI2Cp3XO9hmy6nIXTAhsW0bhlFo=
 // FW_POLICY_PUBKEY must be a PEM-encoded Ed25519 SPKI public key.
 const PUBLIC_KEY_PEM = process.env.FW_POLICY_PUBKEY || DEV_PUBLIC_KEY_PEM;
 
-// F-02a: true when no production key was supplied and we fell back to the bundled dev key.
+// F-02a: true when we're verifying with the bundled dev key (fallback, or explicitly set).
 // The matching private key (scripts/dev-private-key.pem) is committed to the public repo,
-// so any policy file signed with it is trivially forgeable. Fail loud in start() if a
-// policy file is present and we are still using the dev key without an explicit opt-in.
-const USING_DEV_POLICY_KEY = !process.env.FW_POLICY_PUBKEY;
+// so any policy file signed with it is trivially forgeable.
+// Fail loud in start() unless explicitly opted in via FW_ALLOW_DEV_POLICY_KEY=1.
+const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim();
 
 /**
  * Build the canonical signed payload buffer from a policy object.
