@@ -8,7 +8,7 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 ## Architecture
 
-<img src="docs/architecture.svg" alt="Architecture diagram" />
+![Architecture diagram](docs/architecture.svg)
 
 ---
 
@@ -29,9 +29,10 @@ Tracks dangerous **action sequences** within and across modules — catching obf
 ### 2. Signature Scanner (Aho-Corasick)
 
 O(N) pattern matching with 27 signatures covering:
+
 - Crypto-miners (`stratum`, `pool.hashvault`, `nicehash`, `cryptonight`, …)
 - Dynamic code execution (`eval(`, `new Function`, `buffer.from`, `atob(`, …)
-- Supply-chain worm patterns (`curl `, `wget `, `//pastebin`, …)
+- Supply-chain worm patterns (`curl`, `wget`, `//pastebin`, …)
 - Process execution (`child_process.exec`, `execSync`, `spawnSync`, …)
 - Network egress (`https.request`, `http.request`, `net.createconnection`, …)
 
@@ -59,7 +60,7 @@ Policy rules in `policy.signed.json` at the working directory:
 
 Every 60 seconds the policy file is re-read and its SHA-256 hash compared to the startup baseline. If the file has been tampered with → **emergency lockdown**: all subsequent module loads throw an error.
 
-```
+```text
 [CRITICAL] Policy integrity violation detected. EMERGENCY LOCKDOWN ACTIVE.
 ```
 
@@ -82,7 +83,8 @@ On startup, the **host project's own** `package.json` scripts are scanned for su
 Every security event is written as a JSON line to `/var/log/helios/audit.log` (falls back to `$TMPDIR/helios/audit.log`). Log files rotate at 10 MB, keeping 5 generations.
 
 Override the log directory:
-```
+
+```bash
 HELIOS_LOG_DIR=/data/logs node --require=aletheia-firewall app.js
 ```
 
@@ -169,6 +171,7 @@ The gate **enforces median only**. P95 tail latency is reported for operational 
 The gate is a **regression guard**, not a performance target: if a code change causes the median to exceed 25%, something went wrong.
 
 **Scan design:**
+
 - Signature scan: Aho-Corasick, capped at first 2 KB per module (signatures reliably appear early in malicious payloads).
 - Behavioral scan: full-content regex state machine (action sequences span arbitrary lengths; capping would miss multi-phase attacks). Disable with `FW_ENABLE_BEHAVIORAL=0` for signature-only mode.
 
