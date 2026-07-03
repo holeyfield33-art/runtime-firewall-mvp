@@ -2,8 +2,8 @@
 // Unit tests for PolicyWatcher: Ed25519 signature verification, hot-reload, tamper detection.
 // Tests legitimately sign with the bundled dev key — opt in explicitly so the F-02a guard
 // (which rejects dev-key policy in production) does not block the test run.
-process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
 'use strict';
+process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
 
 const assert = require('assert');
 const fs = require('fs');
