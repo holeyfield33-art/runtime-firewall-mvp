@@ -32,7 +32,7 @@ O(N) pattern matching with 27 signatures covering:
 
 - Crypto-miners (`stratum`, `pool.hashvault`, `nicehash`, `cryptonight`, …)
 - Dynamic code execution (`eval(`, `new Function`, `buffer.from`, `atob(`, …)
-- Supply-chain worm patterns (`curl`, `wget`, `//pastebin`, …)
+- Supply-chain worm patterns (`curl␠`, `wget␠`, `//pastebin`, …)
 - Process execution (`child_process.exec`, `execSync`, `spawnSync`, …)
 - Network egress (`https.request`, `http.request`, `net.createconnection`, …)
 
