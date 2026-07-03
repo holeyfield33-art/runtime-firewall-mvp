@@ -1,23 +1,26 @@
+# Phase 3 Performance Analysis
+
 > **SUPERSEDED** — The "sub-millisecond / below noise floor" claim in this document was produced by a benchmark that pre-warmed the require cache for the modules it then timed (illusion A) and used whole-app spawn time as the signal (illusion B). Both artifacts caused the firewall overhead to appear at or below the noise floor, and in some runs to appear negative.
 >
 > The honest methodology is in `packages/fw-control/test/bench.js`: cold-process fair A/B, 900-module flat corpus, median-of-5 per iteration, 10-iteration warmup excluded from stats. **Measured on Linux EPYC (AMD EPYC 9V74), Node.js v24: ~20% median overhead on a 900-module cold load.** See `results/bench-n10-run-*.txt` for raw data and `README.md` → Performance for the current measured table.
 >
 > This file is preserved as an audit trail of the prior analysis.
 
-# Phase 3 Performance Analysis
-
 ## Summary
+
 Phase 3 cryptographic policy integrity and forensic logging features are **fully implemented and operationally sound**. Direct hook benchmarking confirms sub-millisecond per-hook cost, within measurement noise floor.
 
 ## Evidence
 
 ### Direct Hook Microbenchmark (bench-hook.js)
+
 - **Per-hook cost: sub-millisecond, below measurement noise floor** (GC/scheduler variance dominates at scale)
 - Measures only the Module._load hook cost, eliminating subprocess noise
 - 500 modules × 3 iterations per test variant
 - Results: Baseline 1088µs/module → Agent 923µs/module
 
 ### Subprocess Integration Test (bench.js)
+
 - Mean overhead: varies by run (typically -14% to +40% depending on GC timing)
 - P95: subprocess scheduling noise dominates signal
 - Distribution: high variance indicates OS-level effects, not agent regression
@@ -31,6 +34,7 @@ The subprocess benchmark variance is **NOT from Phase 3 code** because:
 3. **Direct hook measurement shows sub-millisecond per-hook cost** (within measurement noise floor)
 
 The variance comes from:
+
 - **Process scheduler jitter**: CPU context switching between baseline and agent subprocesses
 - **Garbage collection pauses**: Node.js GC timing is non-deterministic
 - **Page cache effects**: Filesystem buffer state varies between iterations
@@ -41,12 +45,14 @@ With large module chains, the GC/scheduler jitter becomes the dominant signal, o
 ## Validation
 
 ### Phase 3 Features (All Working)
+
 ✅ **Policy Integrity**: `verifyPolicyIntegrity()` validates Helios-hashed policy objects
 ✅ **Forensic Logging**: `QuarantineStub` records tamper-evident breach events with SHA-256 anchors
 ✅ **Cryptographic Hashing**: SHA-256 of canonical JSON objects (Helios-compatible)
 ✅ **Caching Optimization**: `policyVerified` flag prevents repeated verification
 
 ### Test Results
+
 - **Hook microbench**: ✅ Sub-millisecond per-hook cost (within measurement noise floor)
 - **Detection unit tests**: ✅ All 4 patterns detected
 - **Detection live tests**: ✅ Crypto-miner and obfuscation detected
@@ -62,6 +68,7 @@ Phase 3 is **production-ready**. The subprocess benchmark variance is inherent t
 4. **Acceptance criteria**: subprocess tests should use mean overhead ≤ 5% (not absolute P95)
 
 ## Files Modified
+
 - `packages/fw-agent/index.js` - Added policyVerified caching
 - `packages/fw-agent/src/quarantine.js` - Added telemetry guard
 - `packages/fw-control/test/bench.js` - Updated acceptance criteria, increased iterations
