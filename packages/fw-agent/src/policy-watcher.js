@@ -31,6 +31,12 @@ MCowBQYDK2VwAyEANejKx1KxfXVk5B0UzI2Cp3XO9hmy6nIXTAhsW0bhlFo=
 // FW_POLICY_PUBKEY must be a PEM-encoded Ed25519 SPKI public key.
 const PUBLIC_KEY_PEM = process.env.FW_POLICY_PUBKEY || DEV_PUBLIC_KEY_PEM;
 
+// F-02a: true when we're verifying with the bundled dev key (fallback, or explicitly set).
+// The matching private key (scripts/dev-private-key.pem) is committed to the public repo,
+// so any policy file signed with it is trivially forgeable.
+// Fail loud in start() unless explicitly opted in via FW_ALLOW_DEV_POLICY_KEY=1.
+const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim();
+
 /**
  * Build the canonical signed payload buffer from a policy object.
  * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
@@ -133,6 +139,19 @@ class PolicyWatcher {
    */
   start() {
     if (!fs.existsSync(this.policyPath)) return;
+
+    // F-02a: refuse to verify a policy file against the bundled dev key in production.
+    // The dev private key is public (committed to the repo), so any attacker can forge
+    // a valid signature. Only allow the dev key when FW_ALLOW_DEV_POLICY_KEY=1.
+    if (USING_DEV_POLICY_KEY && process.env.FW_ALLOW_DEV_POLICY_KEY !== '1') {
+      console.error(
+        '[CRITICAL] Policy file found but FW_POLICY_PUBKEY is missing or set to the bundled ' +
+        'development key. The matching private key is public, making this unsafe. Set ' +
+        'FW_POLICY_PUBKEY to your production public key, or set FW_ALLOW_DEV_POLICY_KEY=1 ' +
+        'for local/dev/CI use. Refusing to run.'
+      );
+      process.exit(1);
+    }
 
     const initial = this._loadAndVerify();
     if (!initial) {
