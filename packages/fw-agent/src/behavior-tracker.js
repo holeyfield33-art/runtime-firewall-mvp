@@ -4,16 +4,23 @@
 
 // Signal detection patterns for each behavioral category
 const SIGNAL_PATTERNS = {
-  // Reads sensitive credential files or environment variables
+  // Reads sensitive credential files (fs-based). process.env is tracked separately
+  // via ENV_READ to avoid false-positive CREDENTIAL_EXFILTRATION on normal HTTP libraries.
   SENSITIVE_READ: [
     /fs\s*\.\s*readFile/,
     /fs\s*\.\s*readFileSync/,
     /fs\s*\.\s*open(?:Sync)?\s*\(/,
+  ],
+  // Bare environment variable access — common in normal apps; escalates to WARN only
+  // unless a SENSITIVE_PATH is also present (genuine credential file access).
+  ENV_READ: [
     /process\s*\.\s*env\b/,
   ],
   SENSITIVE_PATH: [
     /\.npmrc/i,
-    /\.env\b/i,
+    // Match .env only as a file-path reference (preceded by quote, slash, or backtick),
+    // not as a property access like `process.env.FOO` (F-16 false-positive fix).
+    /['"\/`]\.env\b/i,
     /credentials/i,
     /\.ssh\b/,
     /id_rsa/,
@@ -100,6 +107,7 @@ class BehaviorTracker {
     const signals = {
       sensitiveRead: matchesAny(content, SIGNAL_PATTERNS.SENSITIVE_READ),
       sensitivePath: matchesAny(content, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      envRead: matchesAny(content, SIGNAL_PATTERNS.ENV_READ),
       networkEgress: matchesAny(content, SIGNAL_PATTERNS.NETWORK_EGRESS),
       dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE),
       processExec: matchesAny(content, SIGNAL_PATTERNS.PROCESS_EXEC),
@@ -110,12 +118,24 @@ class BehaviorTracker {
 
     const found = [];
 
-    // Intra-module rule: credential read + network egress in same module → exfiltration
+    // Intra-module rule: credential file read OR sensitive path + network egress → CRITICAL exfiltration.
+    // Bare process.env reads are intentionally excluded here (F-16: false-positive on axios, dotenv, etc.)
+    // and handled by the ENV_NETWORK_EGRESS WARN rule below.
     if ((signals.sensitiveRead || signals.sensitivePath) && signals.networkEgress) {
       found.push({
         rule: 'CREDENTIAL_EXFILTRATION',
         severity: 'CRITICAL',
         description: 'Module reads sensitive credentials and makes network calls',
+      });
+    }
+
+    // Intra-module rule: bare env read + network egress → WARN only (common in normal apps).
+    // Escalates to CRITICAL only if a sensitive credential path is also detected (handled above).
+    if (signals.envRead && signals.networkEgress && !signals.sensitiveRead && !signals.sensitivePath) {
+      found.push({
+        rule: 'ENV_NETWORK_EGRESS',
+        severity: 'WARN',
+        description: 'Module reads process.env and makes network calls (common pattern; monitor for credential paths)',
       });
     }
 
@@ -155,7 +175,9 @@ class BehaviorTracker {
       });
     }
 
-    // Update global state for subsequent modules
+    // Update global state for subsequent modules.
+    // Only genuine file-based reads (not bare env reads) set sensitiveRead to avoid
+    // CROSS_MODULE_EXFILTRATION false-positives on process.env + later HTTP module (F-16).
     if (signals.sensitiveRead || signals.sensitivePath) this.globalState.sensitiveRead = true;
     if (signals.networkEgress) this.globalState.networkEgress = true;
     if (signals.dynamicCode) this.globalState.dynamicCode = true;

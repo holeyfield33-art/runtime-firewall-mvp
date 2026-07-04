@@ -112,7 +112,7 @@ class Detector {
     if (behaviorViolations.length > 0) {
       this.stats.behaviorViolations++;
       for (const v of behaviorViolations) {
-        // Only escalate CRITICAL/HIGH behavioral violations to detections
+        // CRITICAL/HIGH behavioral violations are block-tier — escalate to quarantine
         if (v.severity === 'CRITICAL' || v.severity === 'HIGH') {
           detections.push({
             type: 'behavioral',
@@ -120,6 +120,16 @@ class Detector {
             rule: v.rule,
             description: v.description,
             timestamp: Date.now(),
+          });
+        } else {
+          // WARN/MEDIUM violations are surfaced for logging and telemetry but never trigger QUARANTINE
+          detections.push({
+            type: 'behavioral',
+            severity: v.severity,
+            rule: v.rule,
+            description: v.description,
+            timestamp: Date.now(),
+            warnOnly: true,
           });
         }
       }
