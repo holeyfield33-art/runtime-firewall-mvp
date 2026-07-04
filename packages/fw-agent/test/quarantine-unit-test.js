@@ -77,3 +77,27 @@ const { QuarantineStub } = require('../src/quarantine');
 }
 
 console.log('All quarantine unit tests passed.');
+
+// ── Test 4: proxy is not an accidental thenable (F-17) ───────────────────────
+// If `then` resolves to a function, Promise.resolve(proxy) / await proxy hangs forever.
+// The fix returns undefined for `then`, Symbol.toPrimitive, and Symbol.iterator.
+(async () => {
+  const stub = new QuarantineStub('test-pkg', null);
+  const proxy = stub.createProxy();
+
+  // `then` must be undefined so JS does not treat the proxy as a thenable
+  assert.strictEqual(proxy.then, undefined, '`then` must be undefined (not a thenable)');
+  assert.strictEqual(proxy[Symbol.toPrimitive], undefined, 'Symbol.toPrimitive must be undefined');
+  assert.strictEqual(proxy[Symbol.iterator], undefined, 'Symbol.iterator must be undefined');
+
+  // Promise.resolve must settle (no infinite hang) — race against a 500ms timeout
+  let settled = false;
+  await Promise.race([
+    Promise.resolve(proxy).then(() => { settled = true; }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Timed out — proxy is an accidental thenable')), 500)),
+  ]);
+  assert.ok(settled, 'Promise.resolve(quarantinedProxy) must settle (F-17)');
+
+  console.log('  ✓ Quarantine proxy is not an accidental thenable (F-17)');
+  console.log('All quarantine unit tests passed (with F-17 thenable guard).');
+})().catch(err => { console.error(err.message); process.exit(1); });

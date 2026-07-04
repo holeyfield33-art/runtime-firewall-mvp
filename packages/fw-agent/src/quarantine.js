@@ -72,6 +72,13 @@ class QuarantineStub {
   createProxy() {
     return new Proxy({}, {
       get: (target, prop) => {
+        // F-17: Prevent the proxy from being treated as a thenable/iterable.
+        // If `then`, Symbol.toPrimitive, or Symbol.iterator resolve to a function,
+        // Promise.resolve() / await / for..of will hang or throw unexpectedly.
+        if (prop === 'then' || prop === Symbol.toPrimitive || prop === Symbol.iterator) {
+          return undefined;
+        }
+
         // Record the interception
         this.record(`property_access`, { property: String(prop) });
 
