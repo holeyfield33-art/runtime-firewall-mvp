@@ -164,7 +164,7 @@ All numbers come from `results/bench-n10-run-*.txt` (9V74) and `results/gate-3x-
 | Median module-compile overhead | ~17–21% (varies by host) | 25% | **Yes** |
 | P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational only |
 
-The ~17–21% median overhead (host-dependent: 7763 ~17%, 9V74 ~20–21%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick, signature scan capped at 2 KB, cache short-circuits repeat compiles).
+The ~17–21% median overhead (host-dependent: 7763 ~17%, 9V74 ~20–21%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick over full module content, cache short-circuits repeat compiles).
 
 > **F-01 note:** v0.1.0 removed a sub-512B scan-skip that let small modules bypass scanning entirely. After the fix the measured median rose ~1–3pp over the pre-fix range of ~17–20%. The post-fix gate run is in `results/gate-post-f01.txt`.
 
@@ -174,7 +174,7 @@ The gate is a **regression guard**, not a performance target: if a code change c
 
 **Scan design:**
 
-- Signature scan: Aho-Corasick, capped at first 2 KB per module (signatures reliably appear early in malicious payloads).
+- Signature scan: Aho-Corasick over full module content (O(N) single-pass; capping was removed in F-03 to avoid missing late-injected payloads).
 - Behavioral scan: full-content regex state machine (action sequences span arbitrary lengths; capping would miss multi-phase attacks). Disable with `FW_ENABLE_BEHAVIORAL=0` for signature-only mode.
 
 ---

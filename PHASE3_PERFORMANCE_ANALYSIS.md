@@ -8,6 +8,8 @@
 
 ## Summary
 
+> **SUPERSEDED — see the correction at the top of this file.** The "sub-millisecond / noise-floor" claim below is a benchmarking artifact. The honest figure is ~20% median overhead on a 900-module cold load.
+
 Phase 3 cryptographic policy integrity and forensic logging features are **fully implemented and operationally sound**. Direct hook benchmarking confirms sub-millisecond per-hook cost, within measurement noise floor.
 
 ## Evidence
@@ -59,6 +61,8 @@ With large module chains, the GC/scheduler jitter becomes the dominant signal, o
 - **Integration tests**: ✅ Agent + worker + telemetry all connected
 
 ## Recommendation
+
+> **SUPERSEDED — see the correction at the top of this file.** The "sub-millisecond / noise-floor" claim below is a benchmarking artifact. The honest figure is ~20% median overhead on a 900-module cold load.
 
 Phase 3 is **production-ready**. The subprocess benchmark variance is inherent to synthetic cross-process measurement and does NOT reflect actual runtime behavior. Recommend:
 
