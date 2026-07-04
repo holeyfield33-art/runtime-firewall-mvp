@@ -18,6 +18,11 @@ const DASHBOARD_TOKEN = process.env.HELIOS_DASHBOARD_TOKEN || (() => {
   return generated;
 })();
 
+// Optional bearer-token auth for /v1/telemetry (F-19).
+// When FW_TELEMETRY_TOKEN is set agents must send Authorization: Bearer <token>.
+// When unset the endpoint is unauthenticated (backward-compatible default).
+const TELEMETRY_TOKEN = process.env.FW_TELEMETRY_TOKEN || null;
+
 // Persistent audit log (mirrors agent-side writes for control-plane events)
 const LOG_DIR = process.env.HELIOS_LOG_DIR ||
   (process.platform !== 'win32' ? '/var/log/helios' : path.join(os.tmpdir(), 'helios'));
@@ -88,6 +93,17 @@ const telemetrySchema = {
 };
 
 fastify.post('/v1/telemetry', { schema: telemetrySchema }, async (request, reply) => {
+  // F-19: Optional bearer-token auth. Active only when FW_TELEMETRY_TOKEN is set.
+  if (TELEMETRY_TOKEN) {
+    const authHeader = request.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : authHeader;
+    const a = Buffer.from(token);
+    const b = Buffer.from(TELEMETRY_TOKEN);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return reply.code(401).send({ error: 'Unauthorized' });
+    }
+  }
+
   if (telemetryQueue.length >= MAX_QUEUE_SIZE) {
     return reply.code(503).send({ status: 'QUEUE_FULL' });
   }

@@ -324,4 +324,7 @@ process.on('exit', (code) => {
 // Log startup
 auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: auditLog.filePath });
 
-module.exports = { policyMap, compileMetrics, quarantinedModules };
+// Export via getter so consumers always see the live map after hot-reload (F-21).
+const _exports = { compileMetrics, quarantinedModules };
+Object.defineProperty(_exports, 'policyMap', { get: () => policyMap, enumerable: true });
+module.exports = _exports;
