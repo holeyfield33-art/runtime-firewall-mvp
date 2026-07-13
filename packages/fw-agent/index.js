@@ -83,7 +83,10 @@ const { getAuditLog } = require('./src/audit-log');
   function computeSelfHash() {
     const hash = crypto.createHash('sha256');
     for (const f of selfFiles) {
-      try { hash.update(fs.readFileSync(f)); } catch (e) {}
+      try {
+        const content = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
+        hash.update(content, 'utf8');
+      } catch (e) {}
     }
     return hash.digest('hex');
   }
