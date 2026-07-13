@@ -176,12 +176,19 @@ class BehaviorTracker {
     }
 
     // Update global state for subsequent modules.
-    // Only genuine file-based reads (not bare env reads) set sensitiveRead to avoid
-    // CROSS_MODULE_EXFILTRATION false-positives on process.env + later HTTP module (F-16).
-    if (signals.sensitiveRead || signals.sensitivePath) this.globalState.sensitiveRead = true;
-    if (signals.networkEgress) this.globalState.networkEgress = true;
-    if (signals.dynamicCode) this.globalState.dynamicCode = true;
-    if (signals.processExec) this.globalState.processExec = true;
+    // F-24: if this module is itself blocked (its own violations include a
+    // CRITICAL/HIGH rule), it never actually executes — so its signals must not
+    // leak into the cross-module state machine and raise suspicion on later,
+    // unrelated modules. Skip the globalState updates for blocked modules.
+    const isBlocked = found.some(v => v.severity === 'CRITICAL' || v.severity === 'HIGH');
+    if (!isBlocked) {
+      // Only genuine file-based reads (not bare env reads) set sensitiveRead to avoid
+      // CROSS_MODULE_EXFILTRATION false-positives on process.env + later HTTP module (F-16).
+      if (signals.sensitiveRead || signals.sensitivePath) this.globalState.sensitiveRead = true;
+      if (signals.networkEgress) this.globalState.networkEgress = true;
+      if (signals.dynamicCode) this.globalState.dynamicCode = true;
+      if (signals.processExec) this.globalState.processExec = true;
+    }
 
     if (found.length > 0) {
       this.violations.push({ filename, violations: found, timestamp: Date.now() });

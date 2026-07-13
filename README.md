@@ -2,7 +2,9 @@
 
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
-**What this intercepts:** `require()`-time module compilation (signature + behavioral scan), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept in v0.1.0:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), and AST-obfuscated eval techniques (documented below as known bypasses).
+**What this intercepts:** `require()`-time module compilation (signature + behavioral scan), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), and AST-obfuscated eval techniques (documented below as known bypasses).
+
+> **See it in 30 seconds:** clone the repo, run `npm install`, then `bash demo/demo.sh`. It loads a crypto-miner and a credential stealer with the firewall off (they run) and on (both blocked), plus a normal analytics module that is correctly allowed. See [Demo](#demo) below.
 
 ---
 
@@ -54,11 +56,11 @@ Policy rules in `policy.signed.json` at the working directory:
 - **QUARANTINE**: Module code does not run; exports replaced with a `Proxy` stub that logs all access attempts. The quarantined module cannot load any child modules.
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on any detection.
 
-> **Naming note:** The `.signed` convention in `policy.signed.json` means the file is integrity-monitored at runtime via SHA-256 file hashing (see §4 below) — this is **not** asymmetric/cryptographic signing. No keys or certificates are involved.
+> **Naming note:** `policy.signed.json` carries a real **Ed25519 signature** over its canonical payload (`{ version, rules (keys sorted), signedAt }`). The public key is compiled into `src/policy-watcher.js` (override with `FW_POLICY_PUBKEY`); sign policy files with `scripts/sign-policy.js`. Since v0.2.0 this replaces the earlier SHA-256 trust-on-first-use baseline.
 
 ### 4. Continuous Policy Integrity Verification
 
-Every 60 seconds the policy file is re-read and its SHA-256 hash compared to the startup baseline. If the file has been tampered with → **emergency lockdown**: all subsequent module loads throw an error.
+Every 60 seconds the policy file is re-read and its Ed25519 signature is re-verified against the configured public key. If the signature is invalid or missing → **emergency lockdown**: all subsequent module loads throw an error. A valid signature with changed rules triggers an in-place hot-reload (no restart).
 
 ```text
 [CRITICAL] Policy integrity violation detected. EMERGENCY LOCKDOWN ACTIVE.
@@ -66,7 +68,7 @@ Every 60 seconds the policy file is re-read and its SHA-256 hash compared to the
 
 ### 5. Self-Integrity Check
 
-On every startup the firewall computes a SHA-256 hash across all its own source files (`index.js`, `detector.js`, `behavior-tracker.js`, etc.) and compares it to `.helios-baseline`. If the firewall code has been tampered with, startup is aborted.
+On every startup the firewall computes a SHA-256 hash across all its own source files (`index.js`, `detector.js`, `behavior-tracker.js`, etc.) and compares it to `.helios-baseline`. If the firewall code has been tampered with, startup is aborted. The hash is computed over line-ending-normalized (`\r\n` → `\n`) UTF-8 content, so the check is stable across Linux, macOS, Windows, and CI checkouts (a `.gitattributes` at the repo root also enforces LF for text files).
 
 ### 6. Runtime Detection (Bun / Deno)
 
@@ -103,12 +105,50 @@ git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
 cd runtime-firewall-mvp
 npm install
 
-# Start the control plane
+# Run your app with the firewall preloaded
+FW_ENABLE_DETECTION=1 node --require=./packages/fw-agent app.js
+```
+
+To also forward events to the control plane dashboard, start it in a second
+terminal and add `FW_TELEMETRY=1`:
+
+```bash
+# Terminal 1 — control plane (telemetry + dashboard on :3000)
 node packages/fw-control/src/server.js
 
-# Run your app with the firewall preloaded
+# Terminal 2 — your app, reporting to the control plane
 FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 ```
+
+> **Preload note:** `--require=./packages/fw-agent` loads the agent *before* your
+> app's code, so every `require()` your app makes is screened from the very first
+> module. Loading the agent with a plain `require('./packages/fw-agent')` inside
+> your app also works but leaves modules loaded earlier unprotected (the agent
+> prints a warning). The agent is a no-op unless `FW_ENABLE_DETECTION=1` is set.
+
+---
+
+## Demo
+
+The fastest way to see the firewall work end-to-end — no app of your own needed:
+
+```bash
+npm install        # first time only
+bash demo/demo.sh
+```
+
+The script runs the same two "apps" three times and prints a labelled trace:
+
+1. **Firewall OFF** — a malicious app loads a crypto-miner and a credential
+   stealer; both run freely (you see their payload messages print).
+2. **Firewall ON** — the same malicious app is blocked at `require()`; neither
+   payload runs (`[BLOCKED] ... crypto-miner` / `... CREDENTIAL_EXFILTRATION`).
+3. **Firewall ON** — a normal app with an ordinary analytics dependency (reads
+   `process.env`, makes an HTTPS call) loads fine — **no false alarm**.
+
+That last point is the whole design goal: block real malware without flagging
+the everyday env-read + network pattern that legitimate SDKs use. See
+[`demo/README.md`](demo/README.md) for a file-by-file breakdown.
 
 ---
 
@@ -138,8 +178,11 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (14 cases, 14 passed)
+# Adversarial bypass test suite (16 cases, 16 passed)
 npm run test:adversarial
+
+# Control-plane authentication tests (dashboard + telemetry auth)
+npm run test:auth
 
 # Integration / detection tests
 npm run test:integration   # expects: Blocked: 1
@@ -222,7 +265,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |
 | SIGTERM shuts down workers cleanly | ✅ Worker `TERMINATE` message + `Promise.all` await |
-| Adversarial test suite passes or documents remaining bypasses | ✅ 14 tests, bypasses documented |
+| Adversarial test suite passes or documents remaining bypasses | ✅ 16 tests, bypasses documented |
 
 ---
 

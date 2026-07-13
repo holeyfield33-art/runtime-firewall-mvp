@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-13
+
+### Fixed
+
+- **F-23 (CRITICAL) — Self-integrity check is now cross-platform**: `computeSelfHash()` hashed raw file bytes, so a checkout with CRLF line endings (Windows, or a CI runner with `core.autocrlf=true`) produced a different hash than the committed `.helios-baseline` and the agent refused to start — a release blocker on Linux/CI/Mac mixed environments. The hash now reads each self-file as UTF-8 and normalizes `\r\n` → `\n` before updating the digest, so line-ending differences no longer break integrity verification. A repo-root `.gitattributes` enforces LF for text files (and `-text` for `.pem`) to keep working trees consistent, and `.helios-baseline` was regenerated against the normalized content.
+
+- **F-24 (LOW) — Blocked modules no longer poison cross-module state**: `BehaviorTracker.analyzeModule()` updated the cross-module `globalState` (sensitiveRead/networkEgress/etc.) even for modules that were themselves blocked by a CRITICAL/HIGH violation. A blocked module never executes, so its signals must not raise suspicion on later, unrelated modules (e.g. a blocked credential stealer wrongly triggering `CROSS_MODULE_EXFILTRATION` on the next module's ordinary network call). The `globalState` updates are now skipped when the module's own violations include a CRITICAL/HIGH block.
+
+### Added
+
+- **`demo/` walkthrough**: A self-contained demonstration (`bash demo/demo.sh`) that loads a crypto-miner and a credential stealer (both BLOCKED) alongside a benign analytics module (ALLOWED), doubling as an end-to-end smoke test.
+
+- **Dependabot**: Weekly npm dependency updates configured for `/`, `/packages/fw-agent`, and `/packages/fw-control` via `.github/dependabot.yml`.
+
 ## [0.2.2] - 2026-07-03
 
 ### Fixed
