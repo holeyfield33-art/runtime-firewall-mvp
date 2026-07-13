@@ -38,6 +38,11 @@ function flushEvents(callback) {
     },
   };
 
+  // F-19: Send bearer token when FW_TELEMETRY_TOKEN is set (opt-in, backward-compatible).
+  if (process.env.FW_TELEMETRY_TOKEN) {
+    options.headers['Authorization'] = `Bearer ${process.env.FW_TELEMETRY_TOKEN}`;
+  }
+
   const req = http.request(options, (res) => {
     res.resume();
     if (callback) callback();

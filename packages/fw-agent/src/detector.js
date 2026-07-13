@@ -15,12 +15,9 @@ const BLOCK_SIGNATURES = [
   'coinhive',
   'cryptonight',
   // Dynamic code execution (unambiguous in production code)
-  'eval(',
   'new function',
-  // Process/shell execution
-  'child_process.exec',
+  // Process/shell execution (unambiguous forms kept; broad forms moved to WARN, F-20)
   'child_process.spawn',
-  'execsync',
   'spawnsync',
   // Supply-chain worm indicators
   'curl ',
@@ -34,6 +31,8 @@ const BLOCK_SIGNATURES = [
 ];
 
 // Indicative patterns common in legitimate code — emit WARN/OBSERVE only, never block.
+// Also includes patterns (exec, eval) that are caught by the behavioral DYNAMIC_CODE_EXEC_CHAIN
+// rule when used dangerously — so static-only matches on these produce WARN, not hard block.
 const WARN_SIGNATURES = [
   'buffer.from',
   'atob(',
@@ -42,10 +41,16 @@ const WARN_SIGNATURES = [
   'http.request',
   'net.createconnection',
   'socket.connect',
+  // Broad exec/eval literals — moved from BLOCK (F-20): appear in legitimate build tools
+  // and test frameworks. Behavioral DYNAMIC_CODE_EXEC_CHAIN still hard-blocks the
+  // dangerous eval+exec combination.
+  'eval(',
+  'child_process.exec',
+  'execsync',
 ];
 
 class Detector {
-  constructor(policyEngine) {
+  constructor(/** @reserved - future policy integration */ policyEngine) {
     this.policyEngine = policyEngine;
     this.blockMatcher = new AhoCorasick(BLOCK_SIGNATURES);
     this.warnMatcher = new AhoCorasick(WARN_SIGNATURES);
@@ -112,7 +117,7 @@ class Detector {
     if (behaviorViolations.length > 0) {
       this.stats.behaviorViolations++;
       for (const v of behaviorViolations) {
-        // Only escalate CRITICAL/HIGH behavioral violations to detections
+        // CRITICAL/HIGH behavioral violations are block-tier — escalate to quarantine
         if (v.severity === 'CRITICAL' || v.severity === 'HIGH') {
           detections.push({
             type: 'behavioral',
@@ -120,6 +125,16 @@ class Detector {
             rule: v.rule,
             description: v.description,
             timestamp: Date.now(),
+          });
+        } else {
+          // WARN/MEDIUM violations are surfaced for logging and telemetry but never trigger QUARANTINE
+          detections.push({
+            type: 'behavioral',
+            severity: v.severity,
+            rule: v.rule,
+            description: v.description,
+            timestamp: Date.now(),
+            warnOnly: true,
           });
         }
       }

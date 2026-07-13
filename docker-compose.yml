@@ -29,7 +29,12 @@ services:
     environment:
       FW_CONTROL_PORT: '3000'
       HELIOS_LOG_DIR: /var/log/helios
-      HELIOS_DASHBOARD_TOKEN: '${HELIOS_DASHBOARD_TOKEN:-changeme}'
+      # Leave HELIOS_DASHBOARD_TOKEN unset to get a secure auto-generated token (recommended).
+      # Set it explicitly to make the token persistent across restarts.
+      HELIOS_DASHBOARD_TOKEN: '${HELIOS_DASHBOARD_TOKEN}'
+      # Optional: set FW_TELEMETRY_TOKEN to require agent authentication on /v1/telemetry.
+      # When set, agents must send Authorization: Bearer <token>. Unset = unauthenticated (F-19).
+      FW_TELEMETRY_TOKEN: '${FW_TELEMETRY_TOKEN}'
     ports:
       - '3000:3000'
     networks:
@@ -56,6 +61,8 @@ services:
       FW_TELEMETRY: '1'
       FW_CONTROL_PORT: '3000'
       HELIOS_LOG_DIR: /var/log/helios
+      # Must match FW_TELEMETRY_TOKEN in the control service when telemetry auth is enabled.
+      FW_TELEMETRY_TOKEN: '${FW_TELEMETRY_TOKEN}'
       NODE_OPTIONS: '--require /app/packages/fw-agent/index.js'
     depends_on:
       control:
