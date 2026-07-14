@@ -152,6 +152,24 @@ the everyday env-read + network pattern that legitimate SDKs use. See
 
 ---
 
+## Research Monitor
+
+`monitor.js` (repo root) is a standalone, **logging-only** tool that reuses
+the detection engine to continuously scan a project's `node_modules` and
+report CRITICAL/HIGH threats — without blocking anything. It's for
+dogfooding the detector against real dependency trees, not for production
+enforcement (use the firewall agent above for that).
+
+```bash
+node monitor.js [path-to-target-project]   # defaults to the current directory
+```
+
+Findings are appended as JSON lines to `research.log` at the repo root. See
+[`docs/MONITOR.md`](docs/MONITOR.md) for the full run manual, log format,
+and troubleshooting.
+
+---
+
 ## Environment Variables
 
 | Variable | Default | Description |

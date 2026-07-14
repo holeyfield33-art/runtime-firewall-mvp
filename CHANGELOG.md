@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **F-27 (research tooling) — `monitor.js` called a nonexistent detector method**: The standalone research monitor's `scanFile()` called `detector.scan(filePath, content)` and read `result.blocked`/`result.reason`, neither of which exist on `Detector` — only `scanModuleSync(packageName, moduleContent, filename)` returning `{ action, detections }` does. Because the call was wrapped in a `try/catch` spanning the whole function, the resulting `TypeError` was silently swallowed on every file, so the monitor ran but logged nothing. `scanFile()` now calls `detector.scanModuleSync(filePath, content, filePath)`, filters `detections` down to `CRITICAL`/`HIGH` severity, and dedupes repeat `fs.watch` events per file+threat-type so a single edit doesn't produce duplicate log lines.
+
+### Added
+
+- **`docs/MONITOR.md`**: Full run manual for the research monitor — usage, log format, deduplication behavior, and troubleshooting. Linked from the root README's new "Research Monitor" section.
+
 ## [0.3.0] - 2026-07-13
 
 ### Fixed
