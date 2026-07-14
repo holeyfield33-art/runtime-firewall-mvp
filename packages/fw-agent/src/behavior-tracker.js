@@ -22,10 +22,10 @@ const SIGNAL_PATTERNS = {
     // not as a property access like `process.env.FOO` (F-16 false-positive fix).
     /['"\/`]\.env\b/i,
     /[\/\\][\w.\-]{0,40}credentials/i,
-    /\.ssh\b/,
+    /[\/\\]\.ssh\b/,
     /id_rsa/,
-    /\.netrc/,
-    /\.aws\b/,
+    /[\/\\]\.netrc/,
+    /[\/\\]\.aws\b/,
     /[\/\\][\w.\-]{0,40}secret/i,
     /[\/\\][\w.\-]{0,40}passwd/i,
     /[\/\\][\w.\-]{0,40}shadow/i,
@@ -111,7 +111,7 @@ class BehaviorTracker {
     // Intra-module rule: credential file read OR sensitive path + network egress → CRITICAL exfiltration.
     // Bare process.env reads are intentionally excluded here (F-16: false-positive on axios, dotenv, etc.)
     // and handled by the ENV_NETWORK_EGRESS WARN rule below.
-    if ((signals.sensitiveRead || signals.sensitivePath) && signals.networkEgress) {
+    if (signals.sensitivePath && signals.networkEgress) {
       found.push({
         rule: 'CREDENTIAL_EXFILTRATION',
         severity: 'CRITICAL',

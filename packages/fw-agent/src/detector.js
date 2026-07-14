@@ -17,17 +17,10 @@ const BLOCK_SIGNATURES = [
   'nicehash',
   'coinhive',
   'cryptonight',
-  // Process/shell execution (unambiguous forms kept; broad forms moved to WARN, F-20)
-  'child_process.spawn',
-  'spawnsync',
   // Supply-chain worm indicators
-  'curl ',
-  'wget ',
   '//pastebin',
   '//paste.ee',
-  // Native binding / VM escape (sandbox bypass vectors)
-  'vm.runinnewcontext',
-  'vm.runinthiscontext',
+  '| bash',
 ];
 
 // Indicative patterns common in legitimate code — emit WARN/OBSERVE only, never block.
@@ -50,6 +43,14 @@ const WARN_SIGNATURES = [
   // Legitimate capabilities that false-positive on lodash/axios/express — warn, don't block.
   'new function',
   'process.binding',
+  // Legitimate capabilities in bundlers/process libs (esbuild, execa, cross-spawn, ws, undici) — F-26
+  'child_process.spawn',
+  'spawnsync',
+  'vm.runinnewcontext',
+  'vm.runinthiscontext',
+  // Bare words that also match prose/comments — F-26
+  'curl ',
+  'wget ',
 ];
 
 class Detector {
