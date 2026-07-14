@@ -1,6 +1,6 @@
 // packages/fw-agent/src/behavior-tracker.js
-// State machine behavioral analyzer for sequence-based threat detection.
-// Tracks dangerous action sequences both within a single module and across module loads.
+// Behavioral analyzer for sequence-based threat detection.
+// Tracks dangerous action sequences within a single module.
 
 // Signal detection patterns for each behavioral category
 const SIGNAL_PATTERNS = {
@@ -84,13 +84,6 @@ function matchesAny(content, patterns) {
 
 class BehaviorTracker {
   constructor() {
-    // Cross-module global state machine
-    this.globalState = {
-      sensitiveRead: false,
-      networkEgress: false,
-      dynamicCode: false,
-      processExec: false,
-    };
     // Per-module signal cache
     this.moduleSignals = new Map();
     // Accumulated violations for telemetry
@@ -99,7 +92,7 @@ class BehaviorTracker {
 
   /**
    * Analyze a module and return any behavioral violations found.
-   * Checks both intra-module sequences and cross-module state machine transitions.
+   * Checks intra-module signal sequences.
    */
   analyzeModule(filename, content) {
     if (!content) return [];
@@ -148,24 +141,6 @@ class BehaviorTracker {
       });
     }
 
-    // Cross-module rule: prior sensitive-read + this module makes network calls
-    if (this.globalState.sensitiveRead && signals.networkEgress && !signals.sensitiveRead && !signals.sensitivePath) {
-      found.push({
-        rule: 'CROSS_MODULE_EXFILTRATION',
-        severity: 'HIGH',
-        description: 'Network egress detected after sensitive file access in prior module',
-      });
-    }
-
-    // Cross-module rule: prior dynamic-code + this module executes processes
-    if (this.globalState.dynamicCode && signals.processExec && !signals.dynamicCode) {
-      found.push({
-        rule: 'CROSS_MODULE_CODE_EXEC',
-        severity: 'HIGH',
-        description: 'Process execution after dynamic code generation in prior module',
-      });
-    }
-
     // Standalone rule: dynamic require with non-literal path → module injection risk
     if (signals.dynamicRequire) {
       found.push({
@@ -173,21 +148,6 @@ class BehaviorTracker {
         severity: 'MEDIUM',
         description: 'Module uses dynamic require() or module._load with a non-literal path',
       });
-    }
-
-    // Update global state for subsequent modules.
-    // F-24: if this module is itself blocked (its own violations include a
-    // CRITICAL/HIGH rule), it never actually executes — so its signals must not
-    // leak into the cross-module state machine and raise suspicion on later,
-    // unrelated modules. Skip the globalState updates for blocked modules.
-    const isBlocked = found.some(v => v.severity === 'CRITICAL' || v.severity === 'HIGH');
-    if (!isBlocked) {
-      // Only genuine file-based reads (not bare env reads) set sensitiveRead to avoid
-      // CROSS_MODULE_EXFILTRATION false-positives on process.env + later HTTP module (F-16).
-      if (signals.sensitiveRead || signals.sensitivePath) this.globalState.sensitiveRead = true;
-      if (signals.networkEgress) this.globalState.networkEgress = true;
-      if (signals.dynamicCode) this.globalState.dynamicCode = true;
-      if (signals.processExec) this.globalState.processExec = true;
     }
 
     if (found.length > 0) {
@@ -198,7 +158,6 @@ class BehaviorTracker {
   }
 
   reset() {
-    this.globalState = { sensitiveRead: false, networkEgress: false, dynamicCode: false, processExec: false };
     this.moduleSignals.clear();
     this.violations = [];
   }
