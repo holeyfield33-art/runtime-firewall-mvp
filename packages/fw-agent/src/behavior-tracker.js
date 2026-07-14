@@ -21,14 +21,14 @@ const SIGNAL_PATTERNS = {
     // Match .env only as a file-path reference (preceded by quote, slash, or backtick),
     // not as a property access like `process.env.FOO` (F-16 false-positive fix).
     /['"\/`]\.env\b/i,
-    /credentials/i,
+    /[\/\\][\w.\-]{0,40}credentials/i,
     /\.ssh\b/,
     /id_rsa/,
     /\.netrc/,
     /\.aws\b/,
-    /secret/i,
-    /passwd/i,
-    /shadow/i,
+    /[\/\\][\w.\-]{0,40}secret/i,
+    /[\/\\][\w.\-]{0,40}passwd/i,
+    /[\/\\][\w.\-]{0,40}shadow/i,
   ],
   // Makes outbound network connections
   NETWORK_EGRESS: [
