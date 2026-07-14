@@ -1,0 +1,12 @@
+[
+  "lodash","chalk","ms","semver","debug","uuid","qs","mime","nanoid","picocolors",
+  "dayjs","commander","yargs","axios","express","react","react-dom","vue","moment","rxjs",
+  "async","bluebird","request","node-fetch","cross-env","dotenv","body-parser","cors","morgan","helmet",
+  "jsonwebtoken","bcryptjs","validator","joi","zod","yup","classnames","prop-types","styled-components","tailwindcss",
+  "webpack","rollup","esbuild","vite","babel-core","typescript","ts-node","eslint","prettier","jest",
+  "mocha","chai","sinon","supertest","nodemon","concurrently","glob","rimraf","fs-extra","chokidar",
+  "minimatch","picomatch","fast-glob","ignore","globby","execa","cross-spawn","which","node-gyp","tar",
+  "tar-fs","tar-stream","gunzip-maybe","pump","through2","readable-stream","split2","ndjson","JSONStream","event-stream",
+  "lru-cache","node-cache","ioredis","redis","pg","mysql2","mongodb","mongoose","sequelize","knex",
+  "socket.io","ws","got","undici","form-data","tough-cookie","cookie","set-cookie-parser","content-type","accepts"
+]

