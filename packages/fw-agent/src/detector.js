@@ -6,6 +6,9 @@ const { BehaviorTracker } = require('./behavior-tracker');
 // and supply-chain worm patterns (postinstall fetchers, credential harvesters).
 // High-confidence malicious signatures — trigger QUARANTINE/BLOCK on match.
 const BLOCK_SIGNATURES = [
+  '/dev/tcp/',
+  'bash -i',
+  'sh -i',
   // Crypto-miner pool identifiers
   'stratum',
   'pool.hashvault',
@@ -14,8 +17,6 @@ const BLOCK_SIGNATURES = [
   'nicehash',
   'coinhive',
   'cryptonight',
-  // Dynamic code execution (unambiguous in production code)
-  'new function',
   // Process/shell execution (unambiguous forms kept; broad forms moved to WARN, F-20)
   'child_process.spawn',
   'spawnsync',
@@ -25,7 +26,6 @@ const BLOCK_SIGNATURES = [
   '//pastebin',
   '//paste.ee',
   // Native binding / VM escape (sandbox bypass vectors)
-  'process.binding',
   'vm.runinnewcontext',
   'vm.runinthiscontext',
 ];
@@ -47,6 +47,9 @@ const WARN_SIGNATURES = [
   'eval(',
   'child_process.exec',
   'execsync',
+  // Legitimate capabilities that false-positive on lodash/axios/express — warn, don't block.
+  'new function',
+  'process.binding',
 ];
 
 class Detector {
