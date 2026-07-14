@@ -61,13 +61,10 @@ const SIGNAL_PATTERNS = {
   // Executes external processes
   PROCESS_EXEC: [
     /child_process/,
-    /\bexec\s*\(/,
-    /\bspawn\s*\(/,
     /\bexecSync\s*\(/,
     /\bspawnSync\s*\(/,
     /\bexecFile\s*\(/,
     /\bexecFileSync\s*\(/,
-    /\bfork\s*\(/,
     /ShellString/,
   ],
   // Loads modules dynamically or via non-literal paths
