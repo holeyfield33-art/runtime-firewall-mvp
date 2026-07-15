@@ -7,10 +7,17 @@ const { BehaviorTracker } = require('./behavior-tracker');
 // High-confidence malicious signatures — trigger QUARANTINE/BLOCK on match.
 const BLOCK_SIGNATURES = [
   '/dev/tcp/',
-  'bash -i',
-  'sh -i',
-  // Crypto-miner pool identifiers
-  'stratum',
+  // Reverse-shell redirect idiom (F-29): bare 'bash -i' / 'sh -i' also match ordinary
+  // interactive-shell invocations of unrelated tools (push -i, fish -i, wash -i, ...).
+  // Real reverse shells redirect stdio via '>&' — require that too.
+  'bash -i >&',
+  'sh -i >&',
+  // Crypto-miner pool identifiers. F-29: bare 'stratum' matches the mining-protocol word
+  // wherever it occurs in English prose (e.g. dictionary/word-list packages containing
+  // "stratum", "substratum", "stratus"), so match the pool-URL scheme instead — that's
+  // what real miner configs actually contain.
+  'stratum+tcp',
+  'stratum://',
   'pool.hashvault',
   'coin-hive',
   'xmr-stak',

@@ -102,7 +102,17 @@ class BehaviorTracker {
     // visible to SENSITIVE_PATH after the 'fs' specifier is blanked (F-27b regression: the
     // prior line-drop approach deleted this one-line idiom entirely, producing a false
     // negative on the most common credential-theft pattern).
+    //
+    // Comments come first in the chain (F-28): a path-shaped string mentioned only in
+    // prose (e.g. `// src/auth/credentials.ts`) previously survived into scanSrc and, next
+    // to any real networkEgress call elsewhere in the module, false-positived
+    // CREDENTIAL_EXFILTRATION. Block comments are blanked to a space (preserves token
+    // boundaries so adjoining code doesn't fuse); line comments are dropped up to the
+    // newline, guarded by a negative lookbehind on ':' so the "//" in "https://" is never
+    // mistaken for a comment start and real code following a same-line URL survives.
     const scanSrc = content
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')             // block comments
+      .replace(/(?<!:)\/\/[^\n]*/g, '')              // line comments
       .replace(/(\brequire\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')  // require('spec')
       .replace(/(\bfrom\s+)(['"`])(?:\\.|(?!\2)[^\\])*\2/g, '$1$2$2')                    // import ... from 'spec'
       .replace(/(\bimport\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')    // import('spec')
