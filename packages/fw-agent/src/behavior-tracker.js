@@ -94,9 +94,23 @@ class BehaviorTracker {
   analyzeModule(filename, content) {
     if (!content) return [];
 
+    // SENSITIVE_PATH / SENSITIVE_READ must only fire on genuine filesystem access, not on
+    // import/require module specifiers (e.g. "@memberjunction/credentials") or URL paths
+    // (e.g. "https://api.example.com/totpSecret"). Strip those out before matching.
+    // Split on statement boundaries (semicolons) in addition to newlines so a require()
+    // sharing a minified line with unrelated statements (e.g. `const fs=require('fs');
+    // const s=fs.readFileSync('.env')`) only strips the specifier, not sibling statements.
+    const scanSrc = content
+      .split('\n')
+      .flatMap(l => l.split(/(?<=;)/))
+      .filter(l => !/^\s*(import\s|export\s.*\bfrom\b|const\s+.*=\s*require\s*\()/.test(l))  // module specifiers
+      .join('\n')
+      .replace(/https?:\/\/[^\s'"`]+/g, '')          // URLs
+      .replace(/`[^`]*\$\{[^`]*`/g, '');             // template-literal URL builders
+
     const signals = {
-      sensitiveRead: matchesAny(content, SIGNAL_PATTERNS.SENSITIVE_READ),
-      sensitivePath: matchesAny(content, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      sensitiveRead: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_READ),
+      sensitivePath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
       envRead: matchesAny(content, SIGNAL_PATTERNS.ENV_READ),
       networkEgress: matchesAny(content, SIGNAL_PATTERNS.NETWORK_EGRESS),
       dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE),
