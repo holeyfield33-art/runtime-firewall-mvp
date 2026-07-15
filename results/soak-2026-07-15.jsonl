@@ -1,0 +1,2 @@
+{"ts":"2026-07-15T12:12:48.199Z","round":1,"legit_total":99,"legit_blocked":0,"false_positive_rate_pct":0,"fp_packages":[],"mal_total":5,"mal_caught":5,"true_positive_rate_pct":100,"mal_missed":[],"avg_scan_ms":120.4}
+{"ts":"2026-07-15T12:13:35.303Z","round":1,"legit_total":99,"legit_blocked":0,"false_positive_rate_pct":0,"fp_packages":[],"mal_total":5,"mal_caught":5,"true_positive_rate_pct":100,"mal_missed":[],"avg_scan_ms":122.6}
