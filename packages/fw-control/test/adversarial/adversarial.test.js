@@ -315,6 +315,20 @@ test('One-line require(fs).readFileSync(.env) chain is blocked (F-27b regression
   assert.strictEqual(credExfil.severity, 'CRITICAL', 'CREDENTIAL_EXFILTRATION should be CRITICAL severity');
 });
 
+// 18. Dictionary word list containing "stratum" is not a crypto-miner (F-29 regression guard)
+// Bare 'stratum' matched the mining-protocol word wherever it appeared in ordinary English
+// (dictionary/word-list packages), false-positiving e.g. @danielhaim/titlecaser. The
+// signature is now the pool-URL scheme ('stratum+tcp'/'stratum://'), which a plain word list
+// never contains.
+test('Word list containing "stratum"/"substratum"/"stratus" is not flagged as a crypto-miner (F-29 regression guard)', () => {
+  const src = pad(`
+    const words = ["stratification", "stratum", "stratus", "substratum"];
+    module.exports = { words };
+  `);
+  const result = detector.scanModuleSync('word-list.js', src, 'word-list.js');
+  assert.strictEqual(result.detections.length, 0, `Expected no detections but got: ${JSON.stringify(result.detections)}`);
+});
+
 // ─── report ──────────────────────────────────────────────────────────────────
 
 console.log('\n═══════════════════════════════════════════════════════════════');
