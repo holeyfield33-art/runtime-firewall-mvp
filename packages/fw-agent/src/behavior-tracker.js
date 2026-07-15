@@ -96,15 +96,16 @@ class BehaviorTracker {
 
     // SENSITIVE_PATH / SENSITIVE_READ must only fire on genuine filesystem access, not on
     // import/require module specifiers (e.g. "@memberjunction/credentials") or URL paths
-    // (e.g. "https://api.example.com/totpSecret"). Strip those out before matching.
-    // Split on statement boundaries (semicolons) in addition to newlines so a require()
-    // sharing a minified line with unrelated statements (e.g. `const fs=require('fs');
-    // const s=fs.readFileSync('.env')`) only strips the specifier, not sibling statements.
+    // (e.g. "https://api.example.com/totpSecret"). Blank just the specifier STRING in place
+    // (never drop the whole line/statement) so chained calls on the same line survive --
+    // e.g. `const s = require('fs').readFileSync('.env')` must keep the '.env' argument
+    // visible to SENSITIVE_PATH after the 'fs' specifier is blanked (F-27b regression: the
+    // prior line-drop approach deleted this one-line idiom entirely, producing a false
+    // negative on the most common credential-theft pattern).
     const scanSrc = content
-      .split('\n')
-      .flatMap(l => l.split(/(?<=;)/))
-      .filter(l => !/^\s*(import\s|export\s.*\bfrom\b|const\s+.*=\s*require\s*\()/.test(l))  // module specifiers
-      .join('\n')
+      .replace(/(\brequire\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')  // require('spec')
+      .replace(/(\bfrom\s+)(['"`])(?:\\.|(?!\2)[^\\])*\2/g, '$1$2$2')                    // import ... from 'spec'
+      .replace(/(\bimport\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')    // import('spec')
       .replace(/https?:\/\/[^\s'"`]+/g, '')          // URLs
       .replace(/`[^`]*\$\{[^`]*`/g, '');             // template-literal URL builders
 
