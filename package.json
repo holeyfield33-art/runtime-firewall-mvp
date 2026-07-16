@@ -15,6 +15,8 @@
     "test:bench": "node packages/fw-agent/test/bench-honest.js",
     "test:engine": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js && node packages/fw-agent/test/behavior-tracker-unit-test.js && node packages/fw-agent/test/policy-unit-test.js && node packages/fw-agent/test/quarantine-unit-test.js && node packages/fw-control/test/adversarial/adversarial.test.js",
     "test:coverage": "c8 --include packages/fw-agent/src/detector.js --include packages/fw-agent/src/behavior-tracker.js --include packages/fw-agent/src/aho-corasick.js --include packages/fw-agent/src/policy.js --include packages/fw-agent/src/quarantine.js --check-coverage --lines 95 --functions 95 --branches 90 --reporter text --reporter lcov npm run test:engine",
+    "redteam": "node red-team/run.js",
+    "redteam:bypass": "node red-team/run.js --only-bypass",
     "baseline": "node scripts/generate-baseline.js",
     "baseline:check": "node scripts/generate-baseline.js --check",
     "start:control": "node packages/fw-control/src/server.js",
