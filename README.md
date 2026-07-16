@@ -129,6 +129,15 @@ node packages/fw-control/src/server.js
 FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 ```
 
+> **Run `npm install` first.** The control plane depends on `fastify`, which is
+> installed as part of the workspace. If you start the server before installing
+> dependencies it exits immediately with a clear message
+> (`the "fastify" dependency is not installed`) — run `npm install` in the repo
+> root and start it again. The `/logs` dashboard is served at
+> `http://127.0.0.1:3000/logs`; it always requires a bearer token (set
+> `HELIOS_DASHBOARD_TOKEN`, or the server prints an auto-generated one at
+> startup). Check it's up with `curl http://127.0.0.1:3000/v1/health`.
+
 > **Preload note:** `--require=./packages/fw-agent` loads the agent *before* your
 > app's code, so every `require()` your app makes is screened from the very first
 > module. Loading the agent with a plain `require('./packages/fw-agent')` inside
@@ -221,6 +230,28 @@ npm test
 # Honest overhead benchmark (spawns cold-cache child processes)
 node packages/fw-agent/test/bench-honest.js
 ```
+
+> All test commands need dependencies installed first (`npm install`) — the
+> integration and control-plane auth tests load the `fastify`-based control
+> plane.
+
+### Red-team attack suite
+
+A standalone adversarial harness fires **151 malicious/benign JavaScript module
+payloads** at the detector and logs what gets **blocked (QUARANTINE)** vs. what
+gets **through (OBSERVE)**, with per-category gap analysis and a false-positive
+check. It writes a machine-readable `results/redteam-summary.json` and fails
+only on a new bypass (regression) or an over-block, so it doubles as a CI
+guardrail.
+
+```bash
+npm run redteam            # full suite + human-readable report + JSON summary
+npm run redteam:bypass     # only show what got through
+node red-team/run.js --category credential-exfil   # one category
+```
+
+See [`red-team/README.md`](red-team/README.md) for the corpus layout, the
+verdict model, and the current inventory of documented firewall blind spots.
 
 ---
 

@@ -65,7 +65,12 @@ function sync(name, fn) { return check(name, async () => fn()); }
   });
 
   await check('verifyPolicyIntegrity true when hash matches', async () => {
-    const policy = { rules: { pkg: 'BLOCK' } };
+    // Pin created_at so both hash computations (here and inside verifyPolicyIntegrity)
+    // reconstruct the SAME canonical object. Without it, createCanonicalObject() stamps
+    // a fresh `new Date().toISOString()` on each call, and when the millisecond rolls
+    // over between them the two hashes diverge — an intermittent false failure. A real
+    // signed policy always carries created_at, so this mirrors production, not masks a bug.
+    const policy = { rules: { pkg: 'BLOCK' }, created_at: '2026-01-01T00:00:00.000Z' };
     const canonical = createCanonicalObject(policy, 'security_policy');
     policy.helios_hash = hashMemoryObject(canonical);
     assert.strictEqual(await verifyPolicyIntegrity(policy), true);

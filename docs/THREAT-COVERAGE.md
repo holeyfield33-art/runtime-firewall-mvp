@@ -80,6 +80,19 @@ the boundary ever shifts.
 | Variable-alias eval | `const fn = eval; fn(code)` | no `eval(` call-site token in source | runtime Proxy / taint tracking |
 | Prototype-chain access | `Object.getPrototypeOf(eval).constructor(code)` | reaches Function constructor without literal | runtime instrumentation |
 | Array-join reassembly | `require(["ch","ild"].join(""))` | module/name assembled at runtime | dynamic taint analysis (may be caught by cross-module state in practice) |
+| Inline-require egress / dynamic-code | `require("net").connect(...)`, `require("vm").runInThisContext(...)` | egress + dynamic-code regexes match a **bound** call (`const net = require("net"); net.connect(`) but not the inline `require("net").connect(` form; only `http`/`https` have a dedicated inline pattern | anchor the behavioral regexes to `require("mod").method(` for `net`/`tls`/`dgram`/`vm` too |
+| Uncovered miner brands | coinimp, jsecoin, webminepool, deepMiner, wasm cores | not in `BLOCK_SIGNATURES` | broader signature set / behavioral mining heuristics |
+| Uncovered credential stores | `.docker/config.json`, `.kube/config`, `id_ecdsa`, browser cookie DBs | path not in `SENSITIVE_PATH` | expand `SENSITIVE_PATH` |
+| Egress outside the signal set | `dns.resolve`, `navigator.sendBeacon`, exfil by shelling out to `curl` | not a `NETWORK_EGRESS` primitive | add channels / treat outbound child-process fetchers as egress |
+| Reverse-shell tooling beyond `/dev/tcp` | `nc -e`, `socat EXEC`, php/ruby/powershell one-liners, mkfifo backpipe, HTTP-poll C2 | no `/dev/tcp` or `\| bash` literal; network+process-exec is not a blocking rule | shell-command semantic analysis |
+| `\| sh` stagers | `curl … \| sh`, `wget … \| sh` | only `\| bash` is a block literal | add `\| sh` / `\| dash` / `\| zsh` literals |
+
+> These rows (and their benign-control counterparts) are all exercised by the
+> **red-team attack suite** (`npm run redteam`, corpus under `red-team/`). Each
+> is asserted as a documented *known bypass* so the suite fails only if a
+> **new** hole opens (a `caught` case flips to `REGRESSION`) or a benign control
+> starts over-blocking. The full machine-readable inventory is the `gap_report`
+> array in `results/redteam-summary.json`.
 
 ### Architectural scope boundaries (out of scope by design)
 
@@ -99,5 +112,6 @@ npm run test:adversarial   # every Protected/Bypass row above is asserted here o
 npm run test:unit          # detector + behavior-tracker + policy + quarantine unit tests
 npm run test:coverage      # engine-core coverage gate (95%)
 npm run test:live          # end-to-end: miner + base64→eval both blocked (Blocked: 2)
+npm run redteam            # 151-payload red-team suite: logs caught vs. bypassed + gap report
 bash scripts/audit-1-policy.sh && bash scripts/audit-2-interception.sh && bash scripts/audit-3-runtime.sh
 ```

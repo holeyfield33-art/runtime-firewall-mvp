@@ -37,6 +37,9 @@ jobs:
       - name: Control-plane auth tests
         run: npm run test:auth
 
+      - name: Red-team attack suite (regression + false-positive gate)
+        run: npm run redteam
+
       - name: Integration tests (agent + detection)
         run: npm run test:integration
 
