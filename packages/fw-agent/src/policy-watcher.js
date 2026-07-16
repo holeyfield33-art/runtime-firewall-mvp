@@ -47,6 +47,37 @@ function canonicalPayload(version, rules, signedAt) {
   return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
 }
 
+/**
+ * F-33: production dev-key guard that does NOT depend on a policy file being present.
+ *
+ * The in-`start()` guard below only fires when a policy.signed.json exists (start() returns
+ * early otherwise), so a production deploy running the bundled dev key with no policy file on
+ * disk got zero signal — even though a policy file could be dropped in later and hot-loaded,
+ * and even though shipping the public dev key at all in production is a misconfiguration worth
+ * failing loud on. Call this from agent startup, before the watcher, so the check runs
+ * regardless of policy-file presence.
+ *
+ * Refuses to start (process.exit(1)) when running in production against the bundled dev key
+ * without an explicit acknowledgement. Local/dev/CI is unaffected: NODE_ENV is not 'production'
+ * there, and operators can still opt in with FW_ALLOW_DEV_POLICY_KEY=1.
+ *
+ * @param {object} [env]  - injectable for tests; defaults to process.env
+ * @param {function} [exit] - injectable for tests; defaults to process.exit
+ * @returns {boolean} true if a refusal was triggered (tests), false otherwise
+ */
+function assertProductionKeyConfig(env = process.env, exit = process.exit) {
+  if (env.NODE_ENV === 'production' && USING_DEV_POLICY_KEY && env.FW_ALLOW_DEV_POLICY_KEY !== '1') {
+    console.error(
+      '[CRITICAL] Running in production (NODE_ENV=production) with the bundled development ' +
+      'policy key. The matching private key is public, so any attacker can forge a policy ' +
+      'signature. Set FW_POLICY_PUBKEY to your production public key. Refusing to start.'
+    );
+    exit(1);
+    return true;
+  }
+  return false;
+}
+
 class PolicyWatcher {
   /**
    * @param {string} policyPath   - Absolute path to policy.signed.json
@@ -198,5 +229,5 @@ class PolicyWatcher {
   }
 }
 
-module.exports = { PolicyWatcher, canonicalPayload };
+module.exports = { PolicyWatcher, canonicalPayload, assertProductionKeyConfig };
 

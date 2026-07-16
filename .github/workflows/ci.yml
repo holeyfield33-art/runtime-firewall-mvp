@@ -37,6 +37,15 @@ jobs:
       - name: Control-plane auth tests
         run: npm run test:auth
 
+      - name: Integration tests (agent + detection)
+        run: npm run test:integration
+
+      - name: Live detection tests (active blocking)
+        run: npm run test:live
+
+      - name: Engine-core coverage gate (95%)
+        run: npm run test:coverage
+
       - name: Self-integrity baseline check
         working-directory: packages/fw-agent
         run: |

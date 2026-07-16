@@ -27,4 +27,22 @@ assert.strictEqual(result.action, 'QUARANTINE');
 const behavioralBlock = result.detections.find(d => d.type === 'behavioral' && d.rule === 'DYNAMIC_CODE_EXEC_CHAIN');
 assert.ok(behavioralBlock, 'eval + exec combination must still hard-block via DYNAMIC_CODE_EXEC_CHAIN (F-20)');
 
-console.log('Detector unit test passed.');
+// Non-string / empty content short-circuits to an OBSERVE no-op (defensive guard).
+detector.behaviorTracker.reset();
+const emptyResult = detector.scanModuleSync('empty', null);
+assert.strictEqual(emptyResult.action, 'OBSERVE');
+assert.deepStrictEqual(emptyResult.detections, []);
+
+// isSuspicious static helper: truthy only for non-empty strings (returns the &&-chain value).
+assert.ok(Detector.isSuspicious('x'), 'non-empty string is suspicious');
+assert.ok(!Detector.isSuspicious(''), 'empty string is not suspicious');
+assert.ok(!Detector.isSuspicious(null), 'null is not suspicious');
+
+// Async scanModule wrapper delegates to scanModuleSync.
+(async () => {
+  detector.behaviorTracker.reset();
+  const asyncResult = await detector.scanModule('async-pkg', 'const pool = "stratum://pool.hashvault.pro:8080";' + filler);
+  assert.strictEqual(asyncResult.action, 'QUARANTINE');
+  assert.strictEqual(asyncResult.detections[0].type, 'crypto-miner');
+  console.log('Detector unit test passed.');
+})().catch((e) => { console.error(e.message); process.exit(1); });

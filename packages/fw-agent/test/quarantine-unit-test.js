@@ -76,6 +76,45 @@ const { QuarantineStub } = require('../src/quarantine');
   console.log('  ✓ Rate-limit logs once per 10 suppressed events');
 }
 
+// ── Test 3b: remaining proxy traps (delete / ownKeys / descriptor) ───────────
+{
+  const stub = new QuarantineStub('trap-pkg', null);
+  const proxy = stub.createProxy();
+
+  // deleteProperty trap → returns true (pretend deletion succeeded)
+  assert.doesNotThrow(() => { delete proxy.foo; });
+
+  // ownKeys trap → returns [] (module exposes nothing)
+  assert.deepStrictEqual(Object.keys(proxy), [], 'ownKeys must report no keys');
+
+  // getOwnPropertyDescriptor trap → undefined
+  assert.strictEqual(Object.getOwnPropertyDescriptor(proxy, 'bar'), undefined, 'descriptor must be undefined');
+
+  assert.ok(stub.interceptCount > 0, 'trap accesses must be recorded');
+  console.log('  ✓ delete / ownKeys / getOwnPropertyDescriptor traps are inert and logged');
+}
+
+// ── Test 3c: telemetry.emit + first-breach console log paths ─────────────────
+{
+  const emitted = [];
+  const telemetry = { emit: (type, payload) => emitted.push({ type, payload }) };
+  const origWarn = console.warn;
+  let warnedFirstBreach = false;
+  console.warn = (msg) => { if (String(msg).includes('Quarantine Intercept')) warnedFirstBreach = true; };
+
+  const stub = new QuarantineStub('emit-pkg', telemetry);
+  const proxy = stub.createProxy();
+  proxy.doThing(); // property_access + method_call → 2 records, both emit
+
+  console.warn = origWarn;
+
+  assert.ok(emitted.length >= 1, 'telemetry.emit must be called with a forensic object');
+  assert.strictEqual(emitted[0].type, 'quarantine_event', 'emit event type');
+  assert.ok(emitted[0].payload.hash && /^[0-9a-f]{64}$/.test(emitted[0].payload.hash), 'forensic hash attached');
+  assert.ok(warnedFirstBreach, 'first breach must log a [Quarantine Intercept] line');
+  console.log('  ✓ telemetry.emit + first-breach console path covered');
+}
+
 console.log('All quarantine unit tests passed.');
 
 // ── Test 4: proxy is not an accidental thenable (F-17) ───────────────────────

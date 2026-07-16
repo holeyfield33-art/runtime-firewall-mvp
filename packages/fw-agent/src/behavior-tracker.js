@@ -85,6 +85,15 @@ const SIGNAL_PATTERNS = {
     /\bsetInterval\s*\(\s*['"`]/,
     /Script\s*\.\s*runInNewContext/,
   ],
+  // Decodes an encoded blob (base64/hex) back into a string. On its own this is benign
+  // (every HTTP/crypto library does it); it only matters combined with DYNAMIC_CODE — the
+  // classic "decode an opaque payload, then eval it" obfuscation. Kept narrow on purpose:
+  // Buffer.from must name a 'base64'/'hex' encoding (bare Buffer.from(x) is a byte copy, not
+  // a decode), and atob() is the browser/base64 decoder. F-31.
+  CODE_DECODE: [
+    /\batob\s*\(/,
+    /Buffer\s*\.\s*from\s*\([^)]*['"`](?:base64|hex)['"`]\s*\)/i,
+  ],
   // Executes external processes
   PROCESS_EXEC: [
     /child_process/,
@@ -180,6 +189,9 @@ class BehaviorTracker {
       envRead: matchesAny(content, SIGNAL_PATTERNS.ENV_READ),
       networkEgress: matchesAny(content, SIGNAL_PATTERNS.NETWORK_EGRESS),
       dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE),
+      // Matched against scanSrc (comments/URLs/specifiers stripped) so a decode call named
+      // only in a comment cannot manufacture the OBFUSCATED_CODE_EXECUTION signal. F-31.
+      codeDecode: matchesAny(scanSrc, SIGNAL_PATTERNS.CODE_DECODE),
       processExec: matchesAny(content, SIGNAL_PATTERNS.PROCESS_EXEC),
       dynamicRequire: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_REQUIRE),
     };
@@ -237,6 +249,21 @@ class BehaviorTracker {
         rule: 'DYNAMIC_CODE_EXEC_CHAIN',
         severity: 'CRITICAL',
         description: 'Module generates code dynamically and executes system processes',
+      });
+    }
+
+    // Intra-module rule: decode an encoded blob + evaluate it as code → the classic
+    // "unpack an opaque payload, then eval/Function it" obfuscation (F-31). Bare eval and
+    // Buffer.from are WARN-only (F-20 — both appear in legitimate build tools), so neither
+    // primitive blocks alone; it's the *decode-then-execute* combination that is the strong
+    // malicious signal. HIGH → hard block in index.js (detector.js escalates HIGH to a
+    // non-warnOnly block detection). This closes the base64→eval gap where a comment-free
+    // `Buffer.from(b64,'base64').toString(); eval(x)` previously fell through as OBSERVE.
+    if (signals.dynamicCode && signals.codeDecode) {
+      found.push({
+        rule: 'OBFUSCATED_CODE_EXECUTION',
+        severity: 'HIGH',
+        description: 'Module decodes an encoded blob (base64/hex) and evaluates it as code',
       });
     }
 
