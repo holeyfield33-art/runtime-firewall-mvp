@@ -24,11 +24,16 @@ const pool = 'stratum://pool.hashvault.pro:8080';
 module.exports = { pool };
 ` + filler);
 
-// Module 2: Obfuscated code (should be detected)
+// Module 2: Obfuscated code — base64-decode a blob then eval it. Blocked by the
+// OBFUSCATED_CODE_EXECUTION behavioral rule (F-31). The prior fixture used
+// Buffer.from('aWYo') with no 'base64' arg, so .toString() returned 'aWYo' unchanged
+// and eval threw a ReferenceError at runtime instead of being intercepted at compile
+// time — the module was never actually "blocked", so this test could never reach
+// Blocked: 2. This payload decodes to `module.exports={pwned:true}` and is caught.
 fs.writeFileSync(path.join(testDir, 'obfuscated.js'), `
-const b64 = Buffer.from('aWYo');
-eval(b64.toString());
-module.exports = {};
+const blob = 'bW9kdWxlLmV4cG9ydHM9e3B3bmVkOnRydWV9';
+const code = Buffer.from(blob, 'base64').toString();
+eval(code);
 ` + filler);
 
 // Module 3: Clean module (should NOT be detected)

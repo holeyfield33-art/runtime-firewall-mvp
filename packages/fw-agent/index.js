@@ -13,7 +13,7 @@ if (process.env.FW_ENABLE_DETECTION !== '1') {
 
 const { Detector } = require('./src/detector');
 const { QuarantineStub } = require('./src/quarantine');
-const { PolicyWatcher } = require('./src/policy-watcher');
+const { PolicyWatcher, assertProductionKeyConfig } = require('./src/policy-watcher');
 const { getAuditLog } = require('./src/audit-log');
 
 // ── Runtime detection: fail closed if running under Bun or Deno without preload ──────────────
@@ -37,9 +37,41 @@ const { getAuditLog } = require('./src/audit-log');
 // ── Preload verification ──────────────────────────────────────────────────────────────────────
 // Strict mode (FW_STRICT_PRELOAD=1) exits if agent was not injected via --require.
 // Default mode warns so programmatic loading (and tests) still work.
+//
+// Detection parses process.execArgv for an actual --require / -r flag whose value resolves
+// to THIS agent module. The earlier implementation did a substring search over the joined
+// execArgv for "fw-agent"/"helios"/"aletheia-firewall" — trivially spoofed: `node -e
+// "require('./packages/fw-agent')"` puts the whole inline script (containing "fw-agent")
+// into execArgv, so the check reported "preloaded" and silently no-op'd, defeating the very
+// guarantee it exists to enforce. We now require a genuine preload flag pointing at us.
 (function verifyPreloadManifold() {
-  const execArgsJoin = (process.execArgv || []).join(' ').replace(/\\/g, '/');
-  const isPreloaded = execArgsJoin.includes('aletheia-firewall') || execArgsJoin.includes('fw-agent') || execArgsJoin.includes('helios');
+  const execArgv = process.execArgv || [];
+
+  // Resolve a --require/-r value the same way Node would (relative to cwd), then compare its
+  // resolved module path to this agent. A failure to resolve is simply "not us".
+  const resolvesToAgent = (value) => {
+    if (!value) return false;
+    try {
+      const resolved = require.resolve(value, { paths: [process.cwd()] });
+      // __dirname is packages/fw-agent; index.js (this file) is the package entry point.
+      return resolved === __filename || resolved.startsWith(__dirname + path.sep);
+    } catch (e) {
+      // Bare specifier form (e.g. --require aletheia-firewall) that can't be resolved from
+      // cwd here still counts if it names this package.
+      return /(?:^|[\\/])(?:aletheia-firewall|fw-agent)(?:[\\/]|$)/.test(value);
+    }
+  };
+
+  let isPreloaded = false;
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i];
+    if (arg === '--require' || arg === '-r') {
+      if (resolvesToAgent(execArgv[i + 1])) { isPreloaded = true; break; }
+    } else if (arg.startsWith('--require=') || arg.startsWith('-r=')) {
+      if (resolvesToAgent(arg.slice(arg.indexOf('=') + 1))) { isPreloaded = true; break; }
+    }
+  }
+
   if (!isPreloaded) {
     if (process.env.FW_STRICT_PRELOAD === '1') {
       console.error('[CRITICAL] Helios was not injected via --require. Set --require=aletheia-firewall to ensure all modules are intercepted from startup. Exiting.');
@@ -106,6 +138,11 @@ const { getAuditLog } = require('./src/audit-log');
     process.exit(1);
   }
 })();
+
+// ── Production policy-key sanity check (F-33) ──────────────────────────────────────────────────
+// Runs regardless of whether a policy.signed.json exists on disk. Refuses to start in
+// production when the bundled (public) dev key would be used to verify policies.
+assertProductionKeyConfig();
 
 // ── npm lifecycle script scanning ────────────────────────────────────────────────────────────
 (function scanNpmLifecycleScripts() {
@@ -251,8 +288,15 @@ Module.prototype._compile = function (content, filename) {
     compileMetrics.filesCompiled++;
     const scanResult = detector.scanModuleSync(requestName, content, filename);
 
-    // Separate blocking detections (HIGH/CRITICAL/MEDIUM) from WARN-only observations.
-    // WARN-tier matches (e.g. https.request, buffer.from) never escalate to QUARANTINE.
+    // Split block-tier detections from WARN-only observations. WARN-tier matches (e.g.
+    // https.request, buffer.from) and MEDIUM behavioral findings never reach blockDetections:
+    // the detector marks anything below HIGH as warnOnly (see detector.js — only CRITICAL/HIGH
+    // behavioral violations are pushed as non-warnOnly). So blockDetections holds exactly the
+    // HIGH/CRITICAL findings, which hard-block. DYNAMIC_MODULE_LOAD (MEDIUM, require(variable))
+    // is intentionally NOT quarantined here — non-literal require() is pervasive in legitimate
+    // code (lazy loads, plugin systems, require(path.join(...))), so it surfaces as an OBSERVE
+    // telemetry signal only. (F-34: removed a dead `hasMediumOnly` quarantine branch that could
+    // never fire because no non-warnOnly MEDIUM detection is ever produced.)
     const blockDetections = scanResult.detections.filter(d => !d.warnOnly);
     const warnDetections  = scanResult.detections.filter(d => d.warnOnly);
 
@@ -270,15 +314,6 @@ Module.prototype._compile = function (content, filename) {
       };
       auditLog.write(event);
       emitTelemetry('DETECTION_TRIGGERED', requestName, null, { detections: blockDetections });
-
-      // MEDIUM detections (DYNAMIC_MODULE_LOAD) → quarantine silently; HIGH/CRITICAL → hard block
-      const hasMediumOnly = blockDetections.every(d => d.severity === 'MEDIUM');
-      if (hasMediumOnly) {
-        quarantinedModules.add(filename);
-        const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, requestName, null, d) });
-        this.exports = stub.createProxy();
-        return;
-      }
 
       const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map(d => d.rule || d.type).join(', ')}`;
       console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);

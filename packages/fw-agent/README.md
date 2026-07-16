@@ -25,7 +25,7 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
-| `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. With behavioral on: 14/14 adversarial test cases pass; with behavioral off: 12/14 (tests 6 and 7 assert a behavioral event type; both modules are still blocked by signature scanning). |
+| `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. Note: several detections (credential exfiltration, dynamic-code/exec chains, base64→eval obfuscation) rely on the behavioral pass — disabling it falls back to signature-only coverage. |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
@@ -41,23 +41,28 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 
 ## Policy File
 
-Create `policy.signed.json` in your working directory:
+`policy.signed.json` must be a **signed envelope** (`{ version, rules, signedAt, signature }`) —
+an unsigned `{ "rules": … }` object fails verification on startup and triggers emergency lockdown.
+Author a plain rules file and sign it:
 
-```json
-{
-  "rules": {
-    "malware.js": "BLOCK",
-    "untrusted-pkg.js": "QUARANTINE",
-    "noisy-lib.js": "OBSERVE"
-  }
-}
+```bash
+echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
+node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
 ```
+
+For the bundled dev key you must run with `FW_ALLOW_DEV_POLICY_KEY=1`; in production sign with your
+own key (`scripts/generate-policy-key.js`) and set `FW_POLICY_PUBKEY`.
 
 - **BLOCK**: Module never runs.
 - **QUARANTINE**: Exports replaced with a logging Proxy; child requires blocked.
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on detection.
 
-> **Naming note:** The `.signed` convention in `policy.signed.json` means the file is SHA-256 integrity-monitored at runtime (re-verified every 60 seconds). This is **not** asymmetric or cryptographic signing — no keys or certificates are involved.
+> **Signing:** `policy.signed.json` carries a real **Ed25519 signature** over its canonical
+> payload `{ version, rules (keys sorted), signedAt }`, re-verified every 60 seconds. An invalid
+> or missing signature triggers emergency lockdown. The verifying public key is compiled into
+> `src/policy-watcher.js` and overridable via `FW_POLICY_PUBKEY`; author a rules file and sign it
+> with `scripts/sign-policy.js`. (Since v0.2.0 this replaced the earlier SHA-256 trust-on-first-use
+> baseline — earlier docs describing SHA-256-only monitoring are obsolete.)
 
 ## Performance
 
@@ -82,25 +87,28 @@ This firewall provides defense-in-depth but cannot catch all threats. Documented
 
 | Technique | Status |
 |-----------|--------|
-| Direct `eval("code")` | **BLOCKED** |
-| `Buffer.from(b64).toString() -> eval` | **BLOCKED** |
+| Direct `eval("code")` + exec | **BLOCKED** (behavioral `DYNAMIC_CODE_EXEC_CHAIN`) |
+| `Buffer.from(b64,'base64').toString() -> eval` | **BLOCKED** (behavioral `OBFUSCATED_CODE_EXECUTION`; bare `buffer.from`/`eval(` are WARN-only, the decode+eval combination blocks) |
+| `atob`/hex-decode -> `new Function` | **BLOCKED** (behavioral `OBFUSCATED_CODE_EXECUTION`) |
 | Crypto-miner stratum URL | **BLOCKED** |
-| `process.env` + network call | **BLOCKED** |
+| `.env`/credential read + network call | **BLOCKED** |
 | `eval` + `child_process.exec` | **BLOCKED** |
 | `curl \| bash` in host project's npm scripts | **BLOCKED** (root scripts only; not dependency install hooks) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** — needs AST analysis |
 | String concat: `global["ev"+"al"]` | **BYPASSES** — needs taint tracking |
-| Array join: `["ch","ild"].join("")` | **BYPASSES** — needs dynamic analysis |
+| Variable-alias eval: `const fn = eval; fn("code")` | **BYPASSES** — needs runtime Proxy / taint tracking |
+| Array join: `["ch","ild"].join("")` | **BYPASSES (per-module)** — may be caught by cross-module state |
 | Prototype chain: `eval.constructor` | **BYPASSES** — needs runtime instrumentation |
 
-## Behavioral Detection Limitations
+See the monorepo's `docs/THREAT-COVERAGE.md` for the full, test-backed protection/bypass matrix.
 
-Two pre-existing gaps are documented and tracked as roadmap items:
+## Behavioral Detection Notes
 
-- **Sub-100B behavioral bypass:** the behavioral scanner skips modules shorter than 100 bytes. A payload consisting entirely of a dangerous action under 100 bytes evades the behavioral pass (signature scanning still applies to all non-empty modules).
-- **Inline require NETWORK_EGRESS gap:** `require("https").get(...)` (inline, no separate variable assignment) does not match the behavioral `NETWORK_EGRESS` regex, which expects `https.get(`. Signature scanning covers the `https.request` and `http.request` patterns.
-
-Both are MEDIUM findings. Fixes require engine changes (out of scope for docs-only releases).
+- **`process.env` + network egress is intentionally NOT blocked** (WARN only): it is the everyday
+  pattern legitimate analytics/telemetry SDKs use. Only a genuine credential *path* (`.env`, `.ssh`,
+  `id_rsa`, …) or `.npmrc` token/host/hardcoded-exfil signal escalates to a CRITICAL block.
+- **Dynamic `require(variable)`** surfaces as an `OBSERVE`/telemetry signal, not a block —
+  non-literal `require` is pervasive in legitimate code (lazy loading, plugin systems).
 
 ## Tests
 
@@ -111,7 +119,8 @@ git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
 cd runtime-firewall-mvp
 npm install
 npm run test:unit         # Aho-Corasick + Detector
-npm run test:adversarial  # 14 adversarial cases
+npm run test:adversarial  # adversarial bypass cases
+npm run test:coverage     # engine-core coverage gate (95%)
 npm test                  # all
 ```
 

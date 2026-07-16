@@ -76,23 +76,18 @@ Expected output:
 ## 4. Policy file — BLOCK and QUARANTINE
 
 ```bash
-# Create a policy file in the working directory
-cat > policy.signed.json << 'EOF'
-{
-  "rules": {
-    "untrusted.js": "QUARANTINE",
-    "evil.js": "BLOCK"
-  }
-}
-EOF
+# Author a rules file, then SIGN it into policy.signed.json (an unsigned file fails
+# verification and triggers emergency lockdown). The dev key requires FW_ALLOW_DEV_POLICY_KEY=1.
+echo '{ "untrusted.js": "QUARANTINE", "evil.js": "BLOCK" }' > rules.json
+node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
 
 # BLOCK: module never executes
 cat > /tmp/evil.js << 'EOF'
 console.log("I should never run");
 EOF
 
-FW_ENABLE_DETECTION=1 node --require ./packages/fw-agent /tmp/evil.js
-# Expected: [BLOCK] evil.js — module load prevented by policy
+FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent /tmp/evil.js
+# Expected: [Firewall] Compilation denied for module: "evil.js"
 
 # QUARANTINE: module is replaced with a logging Proxy
 cat > /tmp/untrusted.js << 'EOF'
@@ -104,32 +99,28 @@ const m = require('/tmp/untrusted.js');
 console.log(m.steal());
 EOF
 
-FW_ENABLE_DETECTION=1 node --require ./packages/fw-agent /tmp/app.js
+FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent /tmp/app.js
 # Expected: [Quarantine Intercept] warning; m.steal() returns null, not "stealing secrets"
 
-rm policy.signed.json
+rm -f policy.signed.json rules.json
 ```
 
 ## 5. Policy tamper detection
 
 ```bash
-cat > policy.signed.json << 'EOF'
-{ "rules": {} }
-EOF
+# Start from a validly signed (empty-rules) policy.
+echo '{}' > rules.json
+node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
 
-FW_ENABLE_DETECTION=1 node --require ./packages/fw-agent -e "
-  // Simulate policy file being replaced after startup
+FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent -e "
+  // Overwriting the signed file with an unsigned/tampered one makes the next 60s watcher
+  // tick fail signature verification → emergency lockdown (all module loads throw).
   const fs = require('fs');
-  setTimeout(() => {
-    fs.writeFileSync('policy.signed.json', JSON.stringify({ rules: { '*': 'ALLOW' } }));
-    console.log('Policy replaced — waiting for watcher to detect...');
-  }, 1000);
-  // Keep process alive for 70 seconds to trigger the 60s watcher interval
-  // (in practice you would wait; here we just observe the startup hash is set)
+  fs.writeFileSync('policy.signed.json', JSON.stringify({ rules: { '*': 'ALLOW' } }));
   console.log('Policy watcher started. Tamper detection active (60s interval).');
   process.exit(0);
 "
-rm -f policy.signed.json policy.signed.json.baseline
+rm -f policy.signed.json rules.json
 ```
 
 ## 6. Audit log
@@ -148,11 +139,12 @@ Each line is a JSON object with `type`, `module`, `reason`, `severity`, and `tim
 
 ```bash
 npm run test:adversarial
-# Expected: 14/14 passed
+# Expected: all cases pass (Results: N passed, 0 failed)
 ```
 
 ## Known limitations
 
-See the **Known Bypasses** section in the package README and the **Behavioral
-Detection Limitations** section for the two pre-existing MEDIUM gaps
-(sub-100B behavioral bypass; inline-require NETWORK_EGRESS miss).
+See [`docs/THREAT-COVERAGE.md`](THREAT-COVERAGE.md) for the authoritative, test-backed matrix of
+what is protected and what remains a bypass (bracket/string-concat/variable-alias/prototype-chain
+eval, dependency `postinstall` hooks). The former sub-100B and inline-require gaps have been fixed
+(F-07 / F-08).
