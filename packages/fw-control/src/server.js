@@ -1,5 +1,16 @@
 // packages/fw-control/src/server.js
-const fastify = require('fastify')({ logger: false });
+let fastify;
+try {
+  fastify = require('fastify')({ logger: false });
+} catch (err) {
+  if (err && err.code === 'MODULE_NOT_FOUND' && /'?fastify'?/.test(err.message)) {
+    console.error('[@fw/control] Cannot start the control plane: the "fastify" dependency is not installed.');
+    console.error('[@fw/control] Run "npm install" in the repository root, then start it again:');
+    console.error('[@fw/control]     npm install && npm run start:control');
+    process.exit(1);
+  }
+  throw err;
+}
 const fs = require('fs');
 const path = require('path');
 const os = require('os');

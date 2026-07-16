@@ -5,11 +5,17 @@
 
 const catalogs = [
   require('./crypto-miner'),
+  require('./crypto-miner-extended'),
   require('./reverse-shell'),
+  require('./reverse-shell-extended'),
   require('./credential-exfil'),
+  require('./credential-exfil-extended'),
   require('./dynamic-code-exec'),
+  require('./dynamic-code-exec-extended'),
   require('./supply-chain'),
+  require('./supply-chain-extended'),
   require('./benign-controls'),
+  require('./benign-controls-extended'),
 ];
 
 const corpus = catalogs.flat();

@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Red-team attack suite (`red-team/`, `npm run redteam`)**: A standalone adversarial harness that
+  fires **151 malicious/benign JavaScript module payloads** (125 malicious, 26 benign) through
+  `Detector.scanModuleSync` using the exact block rule `index.js` applies (a non-`warnOnly` detection
+  → BLOCKED), and logs what gets **blocked (QUARANTINE)** vs. what gets **through (OBSERVE)**. It
+  emits `results/redteam-summary.json` with a per-category rollup, a `gap_report` of everything that
+  bypassed, and a false-positive list. Verdicts are `caught` / `known-bypass` / `REGRESSION` / `clean`
+  / `FALSE-POSITIVE`; the suite fails (exit 1) only on a `REGRESSION` (a new hole) or a `FALSE-POSITIVE`
+  (over-block), so it doubles as a CI guardrail (wired into `.github/workflows/ci.yml`). Corpus covers
+  crypto-miners, reverse shells, credential exfil, dynamic-code execution, supply-chain stagers, and
+  benign controls, split into core + `-extended` catalogs. Methodology mirrors the `aletheia-redteam-kit`
+  command-center flow, adapted to this firewall's module-source input surface. Current run: 69/125
+  malicious caught, 0 false positives, 56 documented static-analysis bypasses. See
+  [`red-team/README.md`](red-team/README.md) and [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md).
+
+### Fixed
+
+- **Control plane fails fast with an actionable message when `fastify` is missing**: `packages/fw-control/src/server.js`
+  now wraps the `require('fastify')` in a guard. Starting the control plane / `/logs` dashboard before
+  running `npm install` previously crashed instantly with a raw `Cannot find module 'fastify'` stack
+  trace (the server "loads and turns right off"); it now prints
+  `the "fastify" dependency is not installed` plus the exact fix (`npm install && npm run start:control`)
+  and exits 1. Documented the `npm install` prerequisite in the README Quick Start.
+
+- **Flaky `policy-unit-test.js` "verifyPolicyIntegrity true when hash matches" case made deterministic**:
+  The test built a policy object with no `created_at`, so `createCanonicalObject()` stamped a fresh
+  `new Date().toISOString()` when computing the stored hash and *again* inside `verifyPolicyIntegrity()`.
+  When the millisecond rolled over between the two calls the hashes diverged and the assertion failed
+  (~1 in 8 runs), turning `npm test` red intermittently. The test now pins `created_at`, mirroring a
+  real signed policy (which always carries the field). No change to `policy.js` or the self-integrity
+  baseline.
+
 ### Security
 
 - **F-31 (HIGH) — base64/hex-decode → eval obfuscation is now blocked**: A comment-free

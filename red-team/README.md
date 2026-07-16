@@ -58,19 +58,24 @@ A machine-readable `results/redteam-summary.json` is written on every run
 - `false_positives` — benign controls that were over-blocked
 - `results` — full per-attack rows (expected, outcome, verdict, rules fired)
 
-## Corpus layout
+## Corpus
 
-One catalog file per threat category under `corpus/`, aggregated by
-`corpus/index.js` (which validates every entry and rejects duplicate ids):
+**151 payloads** across 6 threat categories (125 malicious, 26 benign), each
+category split into a core catalog and an `-extended` catalog under `corpus/`,
+all aggregated by `corpus/index.js` (which validates every entry and rejects
+duplicate ids):
 
-| File                    | Category            | Covers                                                        |
-|-------------------------|---------------------|---------------------------------------------------------------|
-| `crypto-miner.js`       | `crypto-miner`      | stratum pools, coinhive, xmr-stak, cryptonight, evasions      |
-| `reverse-shell.js`      | `reverse-shell`     | `/dev/tcp` shells, curl\|bash, pure-node socket shell         |
-| `credential-exfil.js`   | `credential-exfil`  | `.env`/`.ssh`/`.aws`/`.npmrc` theft, DNS + path evasions      |
-| `dynamic-code-exec.js`  | `dynamic-code-exec` | eval+exec, decode→eval, bracket/alias/unicode eval evasions   |
-| `supply-chain.js`       | `supply-chain`      | pastebin/paste.ee stagers, postinstall, worm self-propagation |
-| `benign-controls.js`    | `benign-controls`   | axios/dotenv/JWT/npm-tooling/word-list — must **not** block   |
+| Category            | Count | Covers                                                                             |
+|---------------------|:-----:|------------------------------------------------------------------------------------|
+| `crypto-miner`      |  26   | stratum pools, coinhive/xmr-stak/cryptonight/nicehash, uncovered brands, concat/hex/wasm evasions |
+| `reverse-shell`     |  22   | `/dev/tcp` + curl\|bash (caught); nc/ncat/socat/php/ruby/powershell/lua, http-beacon, mkfifo (bypass) |
+| `credential-exfil`  |  28   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require evasions |
+| `dynamic-code-exec` |  30   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions |
+| `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
+| `benign-controls`   |  24   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers — must **not** block |
+
+Files: `corpus/<category>.js` (core) and `corpus/<category>-extended.js` (the
+100+ added variants).
 
 ### Adding an attack
 
@@ -96,20 +101,40 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 
 ## Known gaps this suite documents
 
-All current bypasses are fundamental limits of static/signature analysis and
-require runtime/AST instrumentation to close (consistent with the notes in
-`packages/fw-control/test/adversarial/adversarial.test.js`):
+The current run catches **69/125** malicious payloads (≈55%) with **zero false
+positives** on the 26 benign controls. The 56 documented bypasses are
+fundamental limits of static/signature analysis and require runtime/AST
+instrumentation to close. They cluster into these classes:
 
 - **String-level evasion of literals** — `eval` via bracket/alias/unicode
-  escape, module names or pool URLs reassembled by concatenation/`join`.
-- **Egress channels outside the signal set** — credential exfil over
-  `dns.resolve`, a pure-Node `net` socket wired to a spawned shell (network +
-  process-exec is not, by itself, a blocking behavioral rule).
-- **Stager literals not on the list** — `wget … | sh` (only `| bash` is a
-  block literal), fetch-then-`eval` from a host that isn't a known-bad literal.
-- **Config obfuscation** — a miner pool URL kept as a base64 blob and decoded
-  at runtime without ever being `eval`'d.
+  escape/`fromCharCode`/reverse/`constructor.constructor`; module names or pool
+  URLs reassembled by concatenation/`join`; C2 domains held as base64.
+- **Inline-require dodges the behavioral regexes** *(surfaced by this suite)* —
+  the egress and dynamic-code rules match a **bound** call (`const tls =
+  require('tls'); tls.connect(…)`) but **not** the inline
+  `require('tls').connect(…)` form. Only `http`/`https` have a dedicated
+  inline-require pattern, so inline `net`/`tls`/`dgram`/`vm` calls slip past
+  `CREDENTIAL_EXFILTRATION` and `DYNAMIC_CODE_EXEC_CHAIN`. See
+  `exfil-inline-require-net` / `dce-inline-require-vm` (bypass) vs.
+  `exfil-aws-netconnect` / `dce-vm-runinthis-spawn` (bound form, blocked).
+- **Egress channels outside the signal set** — exfil over `dns.resolve`,
+  `navigator.sendBeacon`, or by shelling out to `curl` (the outbound call is a
+  child process, not a recognised `NETWORK_EGRESS` primitive).
+- **Uncovered brands / paths** — miner brands not in the signature list
+  (coinimp, jsecoin, webminepool, deepMiner, wasm cores); credential stores not
+  in `SENSITIVE_PATH` (`.docker/config.json`, `.kube/config`, `id_ecdsa`,
+  browser cookie stores).
+- **Reverse-shell tooling beyond `/dev/tcp`** — `nc -e`, `ncat --exec`,
+  `socat`, php/ruby/powershell/lua one-liners, mkfifo backpipes, and an
+  HTTP-polling C2 beacon (network + process-exec is not, by itself, a blocking
+  rule).
+- **Stager literals not on the list** — `wget … | sh` and `curl … | sh` (only
+  `| bash` is a block literal); fetch-then-`eval` from a host that isn't a
+  known-bad literal.
+- **Config obfuscation** — a miner pool URL kept as a base64/hex blob and
+  decoded at runtime without ever being `eval`'d.
 
 These are intentional trade-offs the detector makes to keep false positives at
 zero on the benign corpus. The value of logging them is a live, regression-
-guarded inventory of the firewall's real blind spots.
+guarded inventory of the firewall's real blind spots — the full machine-readable
+list is the `gap_report` array in `results/redteam-summary.json`.
