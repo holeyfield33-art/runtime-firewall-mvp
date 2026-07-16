@@ -74,16 +74,6 @@ const SIGNAL_PATTERNS = {
     // Inline require("https").get/request — not caught by the patterns above
     /require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request)\s*\(/,
   ],
-  // A quoted absolute URL passed directly as the argument of an actual network-call site --
-  // distinguishes theft (hardcodes the destination) from legit npm tooling (builds the URL
-  // from config, e.g. `fetch(`${registry}/${name}`)`). Anchored to the call site itself
-  // (not "any quoted URL anywhere in the file") so a legit fallback-default constant sitting
-  // next to a config-driven fetch -- e.g.
-  // `const registry = cfg.match(...) ? m[1] : 'https://registry.npmjs.org'` -- does not
-  // false-positive just because that literal exists somewhere in the module. Matched against
-  // raw `content`, not `scanSrc`: scanSrc already strips all https?:// literals wholesale
-  // (see the URL-stripping replace() below) so a content-based check here would never match.
-  HARDCODED_EGRESS_CALL: /(?:https?\s*\.\s*(?:get|request)|fetch|net\s*\.\s*(?:connect|createConnection)|socket\s*\.\s*connect|new\s+WebSocket|tls\s*\.\s*connect|require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request))\s*\(\s*['"`](https?:\/\/[^'"`$\s]+)/g,
   // Generates or evaluates code at runtime
   DYNAMIC_CODE: [
     /\beval\s*\(/,
@@ -115,6 +105,21 @@ const SIGNAL_PATTERNS = {
 function matchesAny(content, patterns) {
   return patterns.some(p => p.test(content));
 }
+
+// A quoted absolute URL passed directly as the argument of an actual network-call site --
+// distinguishes theft (hardcodes the destination) from legit npm tooling (builds the URL
+// from config, e.g. `fetch(`${registry}/${name}`)`). Anchored to the call site itself (not
+// "any quoted URL anywhere in the file") so a legit fallback-default constant sitting next to
+// a config-driven fetch -- e.g.
+// `const registry = cfg.match(...) ? m[1] : 'https://registry.npmjs.org'` -- does not
+// false-positive just because that literal exists somewhere in the module. Matched against
+// raw `content`, not `scanSrc`: scanSrc already strips all https?:// literals wholesale (see
+// the URL-stripping replace() in analyzeModule()) so a content-based check here would never
+// match if run against scanSrc. Kept outside SIGNAL_PATTERNS (and not a matchesAny() boolean
+// check) because it needs its capture group -- callers that iterate SIGNAL_PATTERNS expecting
+// arrays of boolean-test regexes (e.g. the registry's watch-changes.js evidence reconstruction)
+// would break on a single global regex with a capture group.
+const HARDCODED_EGRESS_CALL = /(?:https?\s*\.\s*(?:get|request)|fetch|net\s*\.\s*(?:connect|createConnection)|socket\s*\.\s*connect|new\s+WebSocket|tls\s*\.\s*connect|require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request))\s*\(\s*['"`](https?:\/\/[^'"`$\s]+)/g;
 
 class BehaviorTracker {
   constructor() {
@@ -160,7 +165,7 @@ class BehaviorTracker {
     // matched) so the escalation rule below can tell a hardcoded exfil host apart from a
     // hardcoded reference to the real npm registry (see hardcodedEgressNonRegistry).
     const hardcodedEgressUrls = [];
-    for (const m of content.matchAll(SIGNAL_PATTERNS.HARDCODED_EGRESS_CALL)) {
+    for (const m of content.matchAll(HARDCODED_EGRESS_CALL)) {
       hardcodedEgressUrls.push(m[1]);
     }
 
