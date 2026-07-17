@@ -450,4 +450,6 @@ class BehaviorTracker {
   }
 }
 
-module.exports = { BehaviorTracker };
+// SIGNAL_PATTERNS is exported so downstream tooling can iterate the raw signal regexes for
+// evidence reconstruction (the registry's watch-changes.js). Keeps this engine a drop-in copy.
+module.exports = { BehaviorTracker, SIGNAL_PATTERNS };
