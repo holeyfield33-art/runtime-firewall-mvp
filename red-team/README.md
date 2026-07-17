@@ -101,38 +101,39 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 
 ## Known gaps this suite documents
 
-The current run catches **69/125** malicious payloads (≈55%) with **zero false
-positives** on the 26 benign controls. The 56 documented bypasses are
-fundamental limits of static/signature analysis and require runtime/AST
-instrumentation to close. They cluster into these classes:
+The current run catches **95/125** malicious payloads (**76%**) with **zero false
+positives** on the 26 benign controls, after two hardening phases (see
+`docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline before Phase 1
+was 69/125 ≈ 55%). The remaining **30** documented bypasses are fundamental
+limits of static/signature analysis and require runtime/AST instrumentation
+(Phase 3) to close. They cluster into these classes:
 
 - **String-level evasion of literals** — `eval` via bracket/alias/unicode
   escape/`fromCharCode`/reverse/`constructor.constructor`; module names or pool
   URLs reassembled by concatenation/`join`; C2 domains held as base64.
-- **Inline-require dodges the behavioral regexes** *(surfaced by this suite)* —
-  the egress and dynamic-code rules match a **bound** call (`const tls =
-  require('tls'); tls.connect(…)`) but **not** the inline
-  `require('tls').connect(…)` form. Only `http`/`https` have a dedicated
-  inline-require pattern, so inline `net`/`tls`/`dgram`/`vm` calls slip past
-  `CREDENTIAL_EXFILTRATION` and `DYNAMIC_CODE_EXEC_CHAIN`. See
-  `exfil-inline-require-net` / `dce-inline-require-vm` (bypass) vs.
-  `exfil-aws-netconnect` / `dce-vm-runinthis-spawn` (bound form, blocked).
-- **Egress channels outside the signal set** — exfil over `dns.resolve`,
-  `navigator.sendBeacon`, or by shelling out to `curl` (the outbound call is a
-  child process, not a recognised `NETWORK_EGRESS` primitive).
-- **Uncovered brands / paths** — miner brands not in the signature list
-  (coinimp, jsecoin, webminepool, deepMiner, wasm cores); credential stores not
-  in `SENSITIVE_PATH` (`.docker/config.json`, `.kube/config`, `id_ecdsa`,
-  browser cookie stores).
-- **Reverse-shell tooling beyond `/dev/tcp`** — `nc -e`, `ncat --exec`,
-  `socat`, php/ruby/powershell/lua one-liners, mkfifo backpipes, and an
-  HTTP-polling C2 beacon (network + process-exec is not, by itself, a blocking
-  rule).
-- **Stager literals not on the list** — `wget … | sh` and `curl … | sh` (only
-  `| bash` is a block literal); fetch-then-`eval` from a host that isn't a
-  known-bad literal.
-- **Config obfuscation** — a miner pool URL kept as a base64/hex blob and
-  decoded at runtime without ever being `eval`'d.
+- **WASM / GeneratorFunction cores** — arbitrary logic with no JS `eval`/`Function`
+  literal at all.
+- **`decodeURIComponent` → eval** — deliberately not a `CODE_DECODE` signal
+  (`decodeURIComponent` is ubiquitous in benign query-string parsers, so
+  co-occurrence with `eval` is not enough — needs decode→eval dataflow).
+- **Network + process-exec chains** — pure-Node socket→`spawn('/bin/sh')` and an
+  HTTP-polling C2 beacon; both primitives present but not linked by a blocking
+  rule (a static "egress + child-process" rule would false-positive on legit CLIs).
+- **Shell-out / base64 command exec** — exfil by shelling out to `curl`; a
+  `/dev/tcp` command base64-encoded then `bash -c`.
+- **Config obfuscation** — a miner pool URL kept as a base64/hex blob (or
+  env/config value) and decoded at runtime without ever being `eval`'d.
+- **Low-and-slow / benign-looking C2** — ngrok/telegram/IP-literal beacons,
+  dependency-confusion fetch, exit-time deferred beacon; a single outbound call
+  to an attacker host is statically indistinguishable from legitimate telemetry
+  (needs runtime egress allow/deny lists).
+
+Closed since the 55% baseline (now caught, kept as `knownBypass: false` regression
+guards): inline-require `net`/`tls`/`dgram`/`vm`; miner brands
+coinimp/jsecoin/webminepool/deepminer; `.docker`/`.kube`/browser `Login Data`
+stores; `| sh`/`| dash`/`| zsh` stagers; fetch→eval (`REMOTE_FETCH_EXEC`);
+`nc -e`/`ncat`/`socat`/`mkfifo`/`fsockopen`/PowerShell/`ruby`/`lua` reverse shells;
+`dns.resolve` & `navigator.sendBeacon` channels; `process.binding` exec.
 
 These are intentional trade-offs the detector makes to keep false positives at
 zero on the benign corpus. The value of logging them is a live, regression-

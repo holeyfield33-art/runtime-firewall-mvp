@@ -110,7 +110,7 @@ module.exports = [
   {
     id: 'dce-process-binding',
     category: 'dynamic-code-exec', technique: 'process-binding-eval', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: process.binding added to PROCESS_EXEC (Phase 2)
     description: 'process.binding("spawn_sync") to launch a process alongside eval — process.binding is not in PROCESS_EXEC, so the DYNAMIC_CODE_EXEC_CHAIN never completes',
     code: `
       const b = process.binding('spawn_sync');
@@ -141,7 +141,7 @@ module.exports = [
   {
     id: 'dce-inline-require-vm',
     category: 'dynamic-code-exec', technique: 'inline-require-dynamiccode-evasion', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: inline require("vm") added to DYNAMIC_CODE (Phase 1)
     description: 'Inline require("vm").runInThisContext(...) + spawnSync. The DYNAMIC_CODE regexes match a bound `vm.runInThisContext(` but not the inline `require("vm").runInThisContext(` form, so DYNAMIC_CODE_EXEC_CHAIN never completes. (Compare dce-vm-runinthis-spawn, which uses the bound form and IS blocked.)',
     code: `require('vm').runInThisContext(payload); require('child_process').spawnSync('id'); module.exports = {};`,
   },

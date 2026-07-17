@@ -236,6 +236,21 @@ const quarantinedModules = new Set();
 // ── Core module interception hook ─────────────────────────────────────────────────────────────
 const originalCompile = Module.prototype._compile;
 
+// Derive the npm-package key for a filename so cross-file correlation stays scoped to ONE
+// package. The behavioral tracker is reset per dependency-tree root (below), which spans the
+// whole app — without this scoping, cross-file rules would pair a config-reading module with any
+// unrelated http module in the tree and false-positive. Returns null for first-party app code
+// (no node_modules segment): the developer's own files reading config and making network calls
+// across files is normal, not the split-attack threat model, so cross-file is skipped for them.
+function packageKeyForFilename(filename) {
+  const norm = String(filename).replace(/\\/g, '/');
+  const idx = norm.lastIndexOf('/node_modules/');
+  if (idx === -1) return null;
+  const rest = norm.slice(idx + '/node_modules/'.length).split('/');
+  if (rest[0] && rest[0][0] === '@') return rest[0] + '/' + (rest[1] || '');
+  return rest[0] || null;
+}
+
 Module.prototype._compile = function (content, filename) {
   // Reset cross-module behavioral state at each new dependency-tree root so that
   // benign modules in one tree cannot poison detection in an unrelated tree.
@@ -286,7 +301,7 @@ Module.prototype._compile = function (content, filename) {
     }
 
     compileMetrics.filesCompiled++;
-    const scanResult = detector.scanModuleSync(requestName, content, filename);
+    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKeyForFilename(filename));
 
     // Split block-tier detections from WARN-only observations. WARN-tier matches (e.g.
     // https.request, buffer.from) and MEDIUM behavioral findings never reach blockDetections:

