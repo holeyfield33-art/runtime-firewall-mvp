@@ -109,7 +109,7 @@ module.exports = [
     technique: 'dns-exfil-channel',
     severity: 'CRITICAL',
     expected: 'BLOCK',
-    knownBypass: true,
+    knownBypass: false, // closed: dns.resolve added to NETWORK_EGRESS (Phase 2)
     description: 'Reads .env then exfiltrates over DNS (dns.resolve), which is not in the NETWORK_EGRESS signal set — so CREDENTIAL_EXFILTRATION never fires',
     code: `
       const fs = require('fs');

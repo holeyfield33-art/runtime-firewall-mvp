@@ -147,7 +147,7 @@ module.exports = [
   {
     id: 'exfil-docker-config',
     category: 'credential-exfil', technique: 'docker-config-theft', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: SENSITIVE_CONFIG_PATH + hardcoded-egress rule (Phase 1)
     description: 'Reads ~/.docker/config.json (registry auth) — path is not in the SENSITIVE_PATH set',
     code: `
       const fs = require('fs');
@@ -159,7 +159,7 @@ module.exports = [
   {
     id: 'exfil-kube-config',
     category: 'credential-exfil', technique: 'kubeconfig-theft', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: SENSITIVE_CONFIG_PATH + hardcoded-egress rule (Phase 1)
     description: 'Reads ~/.kube/config (cluster tokens) — not in the SENSITIVE_PATH set',
     code: `
       const fs = require('fs');
@@ -183,7 +183,7 @@ module.exports = [
   {
     id: 'exfil-browser-cookies',
     category: 'credential-exfil', technique: 'browser-cookie-theft', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: SENSITIVE_CONFIG_PATH (Login Data) + hardcoded-egress rule (Phase 1)
     description: 'Reads the Chrome "Login Data" SQLite store — path not covered by SENSITIVE_PATH',
     code: `
       const fs = require('fs');
@@ -207,7 +207,7 @@ module.exports = [
   {
     id: 'exfil-env-sendbeacon',
     category: 'credential-exfil', technique: 'navigator-sendbeacon', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: navigator.sendBeacon added to NETWORK_EGRESS (Phase 2)
     description: 'Reads .env and exfiltrates via navigator.sendBeacon — not in the NETWORK_EGRESS set',
     code: `
       const fs = require('fs');
@@ -219,7 +219,7 @@ module.exports = [
   {
     id: 'exfil-inline-require-net',
     category: 'credential-exfil', technique: 'inline-require-egress-evasion', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: inline require("net") added to NETWORK_EGRESS (Phase 1)
     description: 'Reads ~/.aws/credentials and exfiltrates via an INLINE require("net").connect(...) call. The NETWORK_EGRESS regexes match a bound `net.connect(` but not the inline `require("net").connect(` form — only http/https have a dedicated inline-require pattern — so egress is not detected and CREDENTIAL_EXFILTRATION never fires. (Compare exfil-aws-netconnect, which uses the bound form and IS blocked.)',
     code: `
       const fs = require('fs');

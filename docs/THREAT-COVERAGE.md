@@ -20,8 +20,15 @@ O(N) full-content scan. A match is a hard block (crypto → CRITICAL, otherwise 
 | Threat class | Signatures | Test |
 |---|---|---|
 | Crypto-miner pool URLs | `stratum+tcp`, `stratum://`, `pool.hashvault`, `coin-hive`, `coinhive`, `xmr-stak`, `nicehash`, `cryptonight` | adversarial "Crypto-miner stratum pool reference is blocked" |
+| Crypto-miner brands (Phase 1) | `coinimp`, `jsecoin`, `webminepool`, `deepminer` | adversarial F-35 |
 | Reverse-shell stdio redirect | `bash -i >&`, `sh -i >&`, `/dev/tcp/` | detector unit / signature coverage |
-| Supply-chain fetch-and-run | `\| bash`, `//pastebin`, `//paste.ee` | adversarial "curl \| bash postinstall pattern" |
+| Reverse-shell tooling (Phase 2, `BLOCK_REGEXES`) | `nc -e`, `ncat --exec`, `socat …EXEC:`, `mkfifo …nc`, `fsockopen(`, `Net.Sockets.TCPClient`, `ruby -rsocket`, `lua -e …os.execute` | adversarial F-40 |
+| Supply-chain fetch-and-run | `\| bash`, `//pastebin`, `//paste.ee`, and (Phase 1 `BLOCK_REGEXES`) `\| sh` / `\| dash` / `\| zsh` — anchored `\bsh\b` to avoid `\| sha256sum`/`\| ssh` | adversarial "curl \| bash postinstall", F-38 |
+
+> **Regex tier (`BLOCK_REGEXES`, detector.js):** idioms that a literal substring cannot express
+> safely (a bare `\| sh` would match `\| shorten`) are matched with anchored regexes instead.
+> They scan raw content (including comments), same as `BLOCK_SIGNATURES` — a benign package that
+> writes e.g. `nc -e` in a *comment* would match; the top-100 soak (0 FP) is the guard for this.
 
 > **False-positive guards (F-29):** bare `stratum` / `bash -i` were removed because they matched
 > ordinary English prose and unrelated shell invocations. Guarded by the "word list containing
@@ -73,19 +80,59 @@ These require dynamic (runtime) analysis; static/behavioral analysis is fundamen
 against them. Each is asserted as an **expected bypass** in the adversarial suite so we notice if
 the boundary ever shifts.
 
+Detection has been raised from **55.2% → 76.0%** (69 → **95 / 125** malicious payloads caught,
+**0** false positives on the 26 benign controls and the top-100 soak) across two hardening
+phases — see the roadmap below. The **30** payloads that still bypass, grouped by root cause:
+
 | Technique | Example | Why it bypasses | Would need |
 |---|---|---|---|
-| Bracket-notation eval | `this["ev"+"al"](code)` | property name assembled dynamically; no `eval(` token | AST / V8 Inspector |
-| String-concatenation eval | `global["ev"+"al"](code)` | same, via global | taint tracking |
-| Variable-alias eval | `const fn = eval; fn(code)` | no `eval(` call-site token in source | runtime Proxy / taint tracking |
-| Prototype-chain access | `Object.getPrototypeOf(eval).constructor(code)` | reaches Function constructor without literal | runtime instrumentation |
-| Array-join reassembly | `require(["ch","ild"].join(""))` | module/name assembled at runtime | dynamic taint analysis (may be caught by cross-module state in practice) |
-| Inline-require egress / dynamic-code | `require("net").connect(...)`, `require("vm").runInThisContext(...)` | egress + dynamic-code regexes match a **bound** call (`const net = require("net"); net.connect(`) but not the inline `require("net").connect(` form; only `http`/`https` have a dedicated inline pattern | anchor the behavioral regexes to `require("mod").method(` for `net`/`tls`/`dgram`/`vm` too |
-| Uncovered miner brands | coinimp, jsecoin, webminepool, deepMiner, wasm cores | not in `BLOCK_SIGNATURES` | broader signature set / behavioral mining heuristics |
-| Uncovered credential stores | `.docker/config.json`, `.kube/config`, `id_ecdsa`, browser cookie DBs | path not in `SENSITIVE_PATH` | expand `SENSITIVE_PATH` |
-| Egress outside the signal set | `dns.resolve`, `navigator.sendBeacon`, exfil by shelling out to `curl` | not a `NETWORK_EGRESS` primitive | add channels / treat outbound child-process fetchers as egress |
-| Reverse-shell tooling beyond `/dev/tcp` | `nc -e`, `socat EXEC`, php/ruby/powershell one-liners, mkfifo backpipe, HTTP-poll C2 | no `/dev/tcp` or `\| bash` literal; network+process-exec is not a blocking rule | shell-command semantic analysis |
-| `\| sh` stagers | `curl … \| sh`, `wget … \| sh` | only `\| bash` is a block literal | add `\| sh` / `\| dash` / `\| zsh` literals |
+| String-reassembly eval / require | `this["ev"+"al"](code)`, `global["ev"+"al"]`, `const fn = eval`, `Object.getPrototypeOf(eval).constructor`, `require(["ch","ild"].join(""))`, `String.fromCharCode`, unicode-escape, reversed strings | trigger token assembled at runtime; no literal call site in source | AST / taint analysis (Phase 3) |
+| WASM / GeneratorFunction / constructor.constructor | `WebAssembly.instantiate`, `GeneratorFunction(code)`, `constructor.constructor(code)()` | no JS `eval`/`Function` literal at all | AST / runtime instrumentation (Phase 3) |
+| Decode-without-eval config | miner pool URL held as a base64/hex blob and decoded at runtime, never `eval`'d; config-/env-driven pool with no literal | decode alone is benign (`CODE_DECODE` only chains with `DYNAMIC_CODE`); no signature | taint from decode → sink (Phase 3) |
+| `decodeURIComponent` → eval | `eval(decodeURIComponent(...))`, `(0,eval)(decodeURIComponent(...))` | `decodeURIComponent` deliberately **not** a `CODE_DECODE` signal — it is ubiquitous in benign code (query-string parsers), so co-occurrence with `eval` is not enough | dataflow decode→eval (Phase 3) |
+| Network + process-exec chain | pure-Node socket→`spawn('/bin/sh')`, HTTP-poll C2 (`fetch` cmd → `exec` → POST) | both primitives present but not linked by a blocking rule; a static "egress + child-process" rule would false-positive on legit CLIs | taint / behavioral sequencing with FP guards (Phase 3) |
+| Shell-out / base64 command exec | exfil by shelling to `curl`; `/dev/tcp` base64-encoded then `bash -c` | outbound call is a child process, not a `NETWORK_EGRESS` primitive; command is decoded at runtime | command-string semantics (Phase 3) |
+| Low-and-slow / benign-looking C2 | ngrok/telegram/IP-literal beacons, dependency-confusion fetch, deferred (exit-time) beacon, `bash -i` without `>&` | a single outbound call to an attacker host is statically indistinguishable from legitimate telemetry | runtime network egress allow/deny lists (Phase 3) |
+
+**Closed in Phases 1–2** (were bypasses, now caught — kept as regression guards in the red-team
+corpus with `knownBypass: false`): inline-require `net`/`tls`/`dgram`/`vm` egress & dynamic-code;
+miner brands coinimp/jsecoin/webminepool/deepminer; `.docker/config.json` / `.kube/config` /
+browser `Login Data` stores; `\| sh`/`\| dash`/`\| zsh` stagers; `REMOTE_FETCH_EXEC` (fetch→eval);
+`nc -e`/`ncat`/`socat`/`mkfifo`/`fsockopen`/PowerShell-TCPClient/`ruby -rsocket`/`lua` reverse
+shells; `dns.resolve` & `navigator.sendBeacon` exfil channels; `process.binding` process exec.
+
+### Phased hardening roadmap
+
+- **Phase 1 (done) — signature/list extensions, near-zero FP risk.** Inline-require egress &
+  dynamic-code patterns; miner brands + `isCrypto` relabel; `SENSITIVE_CONFIG_PATH` for
+  infra/browser cred stores (gated on a *deliberate* exfil destination so legit k8s/docker/browser
+  clients are not flagged); anchored `\| sh`/`dash`/`zsh` stager regex. → **55.2% → 64.0%**.
+- **Phase 2 (done) — behavioral rules & primitive coverage, each soak-gated.** `REMOTE_FETCH_EXEC`
+  (network egress + dynamic code → HIGH); anchored reverse-shell tool signatures; `dns.resolve*`
+  and `navigator.sendBeacon` egress channels; `process.binding` in `PROCESS_EXEC`; indirect
+  `(0,eval)` in `DYNAMIC_CODE`. → **64.0% → 76.0%**.
+- **Phase 3 (planned) — architectural / out of static-scan scope.** AST / taint analysis
+  ("Phase 5" below) for string-reassembly, wasm, decode-without-eval, `decodeURIComponent→eval`,
+  and network+process-exec chains; **runtime network-egress allow/deny lists** in the agent's
+  runtime policy for the low-and-slow C2 class (a static scanner cannot separate an attacker
+  beacon from legitimate telemetry).
+
+### Cross-file correlation (opt-in: `FW_ENABLE_CROSSFILE=1`, default OFF)
+
+A malicious package can split an attack across files — read `.env` in `a.js`, exfiltrate in
+`b.js` — so no single per-file scan sees both halves. The engine can correlate signals across a
+package's files (`analyzePackage()` / `finalizePackage()`), **scoped to one npm package** (never
+across the whole app tree, or it would pair a config-reading module with any unrelated HTTP
+module). Rules: `CREDENTIAL_EXFILTRATION_CROSS_FILE` (a genuine credential *path* + egress — not
+bare `fs.readFile`, which the intra-file rule also excludes) and `DYNAMIC_CODE_EXEC_CHAIN_CROSS_FILE`.
+
+It is **off by default** because soak validation on the top-100 showed it false-positives on
+large legitimate packages that legitimately spread capabilities across files: `mongodb` reads
+`~/.aws/credentials` and calls the instance-metadata endpoint for IAM auth (statically
+indistinguishable from exfil), `babel`/`knex` generate code in one file and spawn processes in
+another. Static co-occurrence cannot separate these from a real split attack — that needs the
+Phase 3 taint analysis. The registry batch scanner enables it (via `finalizePackage()`) behind
+human review of any `*_CROSS_FILE` verdict before it is published.
 
 > These rows (and their benign-control counterparts) are all exercised by the
 > **red-team attack suite** (`npm run redteam`, corpus under `red-team/`). Each

