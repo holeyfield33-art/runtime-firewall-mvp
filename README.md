@@ -214,7 +214,7 @@ and troubleshooting.
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (25 cases, all passing)
+# Adversarial bypass test suite (52 cases, all passing)
 npm run test:adversarial
 
 # Control-plane authentication tests (dashboard + telemetry auth)
@@ -325,7 +325,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |
 | SIGTERM shuts down workers cleanly | ✅ Worker `TERMINATE` message + `Promise.all` await |
-| Adversarial test suite passes or documents remaining bypasses | ✅ 25 tests, bypasses documented in `docs/THREAT-COVERAGE.md` |
+| Adversarial test suite passes or documents remaining bypasses | ✅ 52 tests, bypasses documented in `docs/THREAT-COVERAGE.md` |
 
 ---
 
