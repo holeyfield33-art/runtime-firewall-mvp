@@ -66,18 +66,18 @@ own key (`scripts/generate-policy-key.js`) and set `FW_POLICY_PUBKEY`.
 
 ## Performance
 
-The firewall's cost is a **one-time per-module compile scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits it. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately and installs no hook).
+The firewall's cost is a **one-time per-module compile scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits repeat compilations. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately and installs no hook).
 
-Measured on a 900-module cold load (methodology: `packages/fw-control/test/bench.js` in the monorepo), AMD EPYC, Node v22 (CI: 18, 20, 22), Linux x64:
+The repo maintains a 25% median compilation-overhead gate budget, but this is a regression threshold, not a published release guarantee. Current v0.3.0 evidence shows the runtime `Module._compile` interception path is the dominant steady-state cost; `Detector.scanModuleSync` is a secondary contributor in the verified 900-module workload.
 
-| Metric | Measured | Gate budget | Enforced? |
-|--------|----------|-------------|-----------|
-| Median module-compile overhead | ~17–21% (varies by host) | 25% | **Yes** |
-| P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational |
+| Metric | Budget | Enforced? |
+|--------|--------|-----------|
+| Median module-compile overhead | 25% | **Yes** |
+| P95 overhead | 30% (informational only) | No |
 
-Environment: measured on two AMD EPYC Codespaces — 9V74 (80-core) and 7763 (64-core), Node v22. The median is host-dependent (7763 ~17%, 9V74 ~20–21%); after the v0.1.0 sub-512B scan-skip fix the measured range is ~17–21%.
+The gate is a **regression guard**, not a performance target. If the median exceeds 25%, the change needs review.
 
-The gate **enforces median only** (budget 25%). P95 (~25–37%) is informational and **not stable across hardware** — it reflects shared-CPU scheduler contention on multi-tenant Codespaces, not firewall algorithmic cost — so it is reported but never gated.
+For the v0.3.0 frozen baseline and diagnostic evidence, see `PERFORMANCE.md` and `results/benchmarks/steady-state-compile-attr-*.json`.
 
 To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
