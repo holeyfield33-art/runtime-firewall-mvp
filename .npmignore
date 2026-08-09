@@ -1,0 +1,10 @@
+# Exclude local generated data and sensitive files from root package tarballs
+results/
+policy.signed.json
+scripts/dev-private-key.pem
+node_modules/
+coverage/
+dist/
+*.log
+.env
+.DS_Store

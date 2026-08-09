@@ -1,0 +1,139 @@
+{
+  "metadata": {
+    "benchmarkVersion": "hook-cost-profile-v1",
+    "gitSha": "4eed02fbe6ad08a7b8743b08fe5f1eac095c1e17",
+    "package": {
+      "name": "aletheia-firewall",
+      "version": "0.3.0"
+    },
+    "nodeVersion": "v24.14.0",
+    "platform": "linux",
+    "arch": "x64",
+    "cpu": {
+      "model": "AMD EPYC 7763 64-Core Processor",
+      "cores": 2
+    },
+    "memoryBytes": 8330444800,
+    "timestamp": "2026-08-09T01:51:56.309Z"
+  },
+  "workload": {
+    "count": 900,
+    "bytes": 555900,
+    "iterations": 5,
+    "warmups": 3
+  },
+  "stages": {
+    "totalHook": {
+      "count": 5,
+      "mean": 12.544834200000002,
+      "median": 12.561217999999995,
+      "p95": 18.88723500000003,
+      "p99": 18.88723500000003,
+      "min": 6.974510999999991,
+      "max": 18.88723500000003,
+      "stddev": 4.010866137609361
+    },
+    "reset": {
+      "count": 5,
+      "mean": 0,
+      "median": 0,
+      "p95": 0,
+      "p99": 0,
+      "min": 0,
+      "max": 0,
+      "stddev": 0
+    },
+    "hash": {
+      "count": 5,
+      "mean": 1.9320279999999996,
+      "median": 1.7955990000000008,
+      "p95": 2.501283999999998,
+      "p99": 2.501283999999998,
+      "min": 1.3684829999999986,
+      "max": 2.501283999999998,
+      "stddev": 0.41861517404795523
+    },
+    "scan": {
+      "count": 5,
+      "mean": 0,
+      "median": 0,
+      "p95": 0,
+      "p99": 0,
+      "min": 0,
+      "max": 0,
+      "stddev": 0
+    },
+    "audit": {
+      "count": 5,
+      "mean": 0,
+      "median": 0,
+      "p95": 0,
+      "p99": 0,
+      "min": 0,
+      "max": 0,
+      "stddev": 0
+    },
+    "originalCompile": {
+      "count": 5,
+      "mean": 5.796499599999999,
+      "median": 6.4564749999999975,
+      "p95": 7.895799999999999,
+      "p99": 7.895799999999999,
+      "min": 3.2385189999999975,
+      "max": 7.895799999999999,
+      "stddev": 1.6780187035663934
+    }
+  },
+  "totalHook": {
+    "count": 5,
+    "mean": 12.544834200000002,
+    "median": 12.561217999999995,
+    "p95": 18.88723500000003,
+    "p99": 18.88723500000003,
+    "min": 6.974510999999991,
+    "max": 18.88723500000003,
+    "stddev": 4.010866137609361
+  },
+  "raw": [
+    {
+      "totalHook": 18.88723500000003,
+      "reset": 0,
+      "hash": 2.3194130000000004,
+      "scan": 0,
+      "audit": 0,
+      "originalCompile": 6.4564749999999975
+    },
+    {
+      "totalHook": 10.04470900000001,
+      "reset": 0,
+      "hash": 1.675361,
+      "scan": 0,
+      "audit": 0,
+      "originalCompile": 4.539872000000003
+    },
+    {
+      "totalHook": 6.974510999999991,
+      "reset": 0,
+      "hash": 1.3684829999999986,
+      "scan": 0,
+      "audit": 0,
+      "originalCompile": 3.2385189999999975
+    },
+    {
+      "totalHook": 14.256497999999988,
+      "reset": 0,
+      "hash": 2.501283999999998,
+      "scan": 0,
+      "audit": 0,
+      "originalCompile": 6.851832000000001
+    },
+    {
+      "totalHook": 12.561217999999995,
+      "reset": 0,
+      "hash": 1.7955990000000008,
+      "scan": 0,
+      "audit": 0,
+      "originalCompile": 7.895799999999999
+    }
+  ]
+}

@@ -257,26 +257,32 @@ verdict model, and the current inventory of documented firewall blind spots.
 
 ## Performance
 
-**Measured on AMD EPYC (9V74 80-core and 7763 64-core Codespaces), Node v22 (CI: 18, 20, 22), cold 900-module load.**
-All numbers come from `results/bench-n10-run-*.txt` (9V74) and `results/gate-3x-epyc-20260618.txt` (7763) in this repo.
+The v0.3.0 performance evidence is frozen in `PERFORMANCE.md`. This repo continues to maintain a 25% median compilation overhead budget for the gate, but that budget is a target/gate threshold, not a current guarantee of release performance.
 
-| Metric | Measured | Gate budget | Enforced? |
-|--------|----------|-------------|-----------|
-| Median module-compile overhead | ~17–21% (varies by host) | 25% | **Yes** |
-| P95 overhead | ~25–37% across hosts | 30% (reference) | No — informational only |
+Current v0.3.0 evidence shows the primary steady-state cost is the `Module._compile` interception hook itself. The diagnostic profile in `results/benchmarks/steady-state-compile-attr-*.json` shows that `Detector.scanModuleSync` contributes negligibly to the hook cost on the 900-module steady-state workload.
 
-The ~17–21% median overhead (host-dependent: 7763 ~17%, 9V74 ~20–21%) is the honest, irreducible cost of full-content behavioral scanning across 900 modules on a cold load. It is not a bug or inefficiency — the scan path is already optimal (automaton built once, single-pass no-alloc Aho-Corasick over full module content, cache short-circuits repeat compiles).
+| Metric | Recorded budget | Enforced? |
+|--------|-----------------|-----------|
+| Median module-compile overhead | 25% | **Yes** |
+| P95 overhead | 30% (informational only) | No |
 
-> **F-01 note:** v0.1.0 removed a sub-512B scan-skip that let small modules bypass scanning entirely. After the fix the measured median rose ~1–3pp over the pre-fix range of ~17–20%. The post-fix gate run is in `results/gate-post-f01.txt`.
+The gate is a **regression guard**, not a release performance claim. If a code change causes the median to exceed 25%, the gate is doing its job by catching a regression.
 
-The gate **enforces median only**. P95 tail latency is reported for operational transparency but is not a fail condition. On shared multi-core EPYC hardware, P95 reflects OS scheduler preemption of the synchronous main-thread scan (~25–37% across EPYC hosts — 9V74 ~26%, 7763 ~34%), not firewall algorithmic cost. Because P95 is host-dependent and not stable across hardware, gating on it would be gating on noise.
+### v0.3.0 performance baseline
 
-The gate is a **regression guard**, not a performance target: if a code change causes the median to exceed 25%, something went wrong.
+- baseline: `results/benchmarks/raw/bench-*.json`
+- steady-state compile attribution: `results/benchmarks/steady-state-compile-attr-*.json`
+- probe diagnostics: `results/benchmarks/probes/probe-*.json`
 
-**Scan design:**
+These artifacts are the authoritative frozen evidence for the current investigation.
 
-- Signature scan: Aho-Corasick over full module content (O(N) single-pass; capping was removed in F-03 to avoid missing late-injected payloads).
-- Behavioral scan: full-content regex state machine (action sequences span arbitrary lengths; capping would miss multi-phase attacks). Disable with `FW_ENABLE_BEHAVIORAL=0` for signature-only mode.
+### What this means
+
+- `Module._compile` interception cost is the current steady-state performance limiter.
+- `Detector.scanModuleSync` is not currently the primary cost driver in the verified 900-module steady-state case.
+- `FW_ENABLE_DETECTION=0` remains zero-overhead for normal runtime operation.
+
+For the latest v0.3.0 baseline and detailed methodology, see `PERFORMANCE.md`.
 
 ---
 

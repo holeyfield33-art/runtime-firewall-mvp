@@ -173,24 +173,126 @@ const steadyAgent = agentResults.slice(WARMUP_ITERS);
 const meanBaseline = steadyBaseline.reduce((s, v) => s + v, 0) / steadyBaseline.length;
 const meanAgent = steadyAgent.reduce((s, v) => s + v, 0) / steadyAgent.length;
 
-const overheads = [];
+const rawOverheads = [];
 for (let i = 0; i < steadyBaseline.length; i++) {
   const b = steadyBaseline[i];
-  const delta = steadyAgent[i] - b;
-  overheads.push(meanBaseline > 0 ? (delta / meanBaseline) * 100 : 0);
+  const a = steadyAgent[i];
+  if (b === 0) {
+    // Cannot compute percentage when baseline is zero: record null to preserve raw sample
+    rawOverheads.push(null);
+  } else {
+    const delta = a - b;
+    rawOverheads.push((delta / b) * 100);
+  }
 }
-overheads.sort((x, y) => x - y);
 
-const median = overheads[Math.floor(overheads.length / 2)];
-const p95 = overheads[Math.floor(overheads.length * 0.95)];
-const mean = overheads.reduce((s, v) => s + v, 0) / overheads.length;
+// numeric-only view for statistics and printing (exclude nulls)
+const numericOverheads = rawOverheads.filter(x => typeof x === 'number' && !Number.isNaN(x)).slice().sort((x, y) => x - y);
+const median = numericOverheads.length ? numericOverheads[Math.floor(numericOverheads.length / 2)] : 0;
+const p95 = numericOverheads.length ? numericOverheads[Math.floor(numericOverheads.length * 0.95)] : 0;
+const mean = numericOverheads.length ? numericOverheads.reduce((s, v) => s + v, 0) / numericOverheads.length : 0;
 
 console.log(`\n[Absolute Metrics] Mean Baseline: ${meanBaseline.toFixed(2)}ms | Mean Agent: ${meanAgent.toFixed(2)}ms | Mean Delta: ${(meanAgent - meanBaseline).toFixed(2)}ms`);
 console.log(`[Statistics] Mean: ${mean.toFixed(2)}% | Median: ${median.toFixed(2)}% | P95: ${p95.toFixed(2)}%`);
-console.log(`[Distribution] Min: ${overheads[0].toFixed(2)}% | Max: ${overheads[overheads.length - 1].toFixed(2)}%`);
+console.log(`[Distribution] Min: ${numericOverheads.length ? numericOverheads[0].toFixed(2) : 'n/a'}% | Max: ${numericOverheads.length ? numericOverheads[numericOverheads.length - 1].toFixed(2) : 'n/a'}%`);
 
+// -----------------------------
+// Emit machine-readable benchmark artifact
+// -----------------------------
 const MEDIAN_BUDGET = 25.00; // Measured ~17% on Linux EPYC node v24 + CI tolerance
 const P95_BUDGET = 30.00;   // P95 informational only — varies with EPYC scheduler contention (observed 29-40% run-to-run), not gated.
+
+function statsFromSamples(samples) {
+  // Ignore non-numeric samples (nulls from zero-baseline cases)
+  const numeric = samples.filter(x => typeof x === 'number' && !Number.isNaN(x)).slice().sort((a, b) => a - b);
+  const n = numeric.length;
+  const sum = n ? numeric.reduce((a, b) => a + b, 0) : 0;
+  const mean = n ? sum / n : 0;
+  const min = n ? numeric[0] : 0;
+  const max = n ? numeric[n - 1] : 0;
+  const median = n ? (n % 2 ? numeric[Math.floor(n / 2)] : (numeric[n / 2 - 1] + numeric[n / 2]) / 2) : 0;
+  const percentile = (p) => {
+    if (!n) return 0;
+    const rank = Math.ceil((p / 100) * n);
+    return numeric[Math.max(0, Math.min(n - 1, rank - 1))];
+  };
+  const p95 = percentile(95);
+  const p99 = percentile(99);
+  const variance = n ? numeric.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / n : 0;
+  const stddev = Math.sqrt(variance);
+  return { min, median, p95, p99, max, mean, stddev };
+}
+
+// Environment provenance
+const envMeta = {
+  benchmarkVersion: 'bench-v1',
+  gitSha: (() => {
+    try { const g = spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }); return (g.status === 0 ? g.stdout.trim() : null); } catch (e) { return null; }
+  })(),
+  package: (() => {
+    try { const pj = require(path.join(__dirname, '..', '..', '..', 'packages', 'fw-agent', 'package.json')); return { name: pj.name || null, version: pj.version || null }; } catch (e) { return { name: null, version: null }; }
+  })(),
+  repositoryVersion: (() => {
+    try { const pj = require(path.join(__dirname, '..', '..', '..', 'package.json')); return pj.version || null; } catch (e) { return null; }
+  })(),
+  nodeVersion: process.version,
+  npmVersion: (() => { try { const n = spawnSync('npm', ['--version'], { encoding: 'utf8' }); return n.status === 0 ? n.stdout.trim() : null; } catch (e) { return null; } })(),
+  platform: process.platform,
+  arch: process.arch,
+  cpu: (() => { try { const cp = os.cpus(); return { model: cp[0].model, cores: cp.length }; } catch (e) { return null; } })(),
+  memoryBytes: os.totalmem(),
+  timestamp: new Date().toISOString(),
+  chainLength: (typeof CHAIN_LENGTH !== 'undefined') ? CHAIN_LENGTH : 900,
+};
+
+// Raw samples (steady-state, warmup excluded)
+const raw = {
+  baseline: steadyBaseline.slice(),
+  agent: steadyAgent.slice(),
+  overheads: rawOverheads.slice(),
+};
+
+const results = {
+  metadata: envMeta,
+  workload: {
+    name: `cold-900-module-flat`,
+    modules: envMeta.chainLength,
+    iterations: steadyBaseline.length,
+    repeatsPerIter: REPEATS_PER_ITER,
+    warmupIters: WARMUP_ITERS,
+  },
+  mode: 'cold-process',
+  raw,
+  statistics: {
+    baseline: statsFromSamples(steadyBaseline),
+    agent: statsFromSamples(steadyAgent),
+    overhead: statsFromSamples(rawOverheads),
+  },
+  gate: {
+    configured: {
+      median: MEDIAN_BUDGET,
+      p95: P95_BUDGET
+    },
+    enforced: {
+      median: true,
+      p95: false
+    },
+    informational: {
+      p95: true
+    }
+  }
+};
+
+// Ensure output directory
+const outDir = path.join(process.cwd(), 'results', 'benchmarks', 'raw');
+try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) {}
+const outFile = path.join(outDir, `bench-${Date.now()}.json`);
+try {
+  fs.writeFileSync(outFile, JSON.stringify(results, null, 2), 'utf8');
+  console.log(`\n[Benchmark Artifact] Written machine-readable results to: ${outFile}`);
+} catch (e) {
+  console.warn('[Benchmark Artifact] Failed to write JSON artifact:', e && e.message);
+}
 
 console.log(`\n[Final Verification] Compilation hook performance gate evaluating...`);
 
