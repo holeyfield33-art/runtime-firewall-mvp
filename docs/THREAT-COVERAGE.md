@@ -29,7 +29,6 @@ O(N) full-content scan. A match is a hard block (crypto → CRITICAL, otherwise 
 > safely (a bare `\| sh` would match `\| shorten`) are matched with anchored regexes instead.
 > They scan raw content (including comments), same as `BLOCK_SIGNATURES` — a benign package that
 > writes e.g. `nc -e` in a *comment* would match; the top-100 soak (0 FP) is the guard for this.
-
 > **False-positive guards (F-29):** bare `stratum` / `bash -i` were removed because they matched
 > ordinary English prose and unrelated shell invocations. Guarded by the "word list containing
 > stratum/substratum/stratus is not flagged" adversarial case.
