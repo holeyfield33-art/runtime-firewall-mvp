@@ -69,7 +69,7 @@ The resulting `policy.signed.json` is a signed envelope: `{ version, rules, sign
 
 ### 4. Continuous Policy Integrity Verification
 
-Every 60 seconds the policy file is re-read and its Ed25519 signature is re-verified against the configured public key. If the signature is invalid or missing → **emergency lockdown**: all subsequent module loads throw an error. A valid signature with changed rules triggers an in-place hot-reload (no restart).
+Every 60 seconds, the policy file is reloaded and its Ed25519 signature is verified against the configured public key. If verification fails or the policy file is missing, the agent enters **emergency lockdown** and all subsequent module loads throw an error. A valid policy update is hot-reloaded in place without requiring a restart.
 
 ```text
 [CRITICAL] Policy integrity violation detected. EMERGENCY LOCKDOWN ACTIVE.
