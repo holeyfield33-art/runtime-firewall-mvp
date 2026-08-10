@@ -38,7 +38,7 @@ function buildSources(count) {
 
 function makeMetadata() {
   return {
-    benchmarkVersion: 'hook-cost-profile-v1',
+    benchmarkVersion: 'detector-stage-profile-v1',
     gitSha: (() => { try { const g = require('child_process').spawnSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }); return g.status === 0 ? g.stdout.trim() : null; } catch (e) { return null; } })(),
     package: (() => { try { const pj = require(path.join(process.cwd(), 'packages', 'fw-agent', 'package.json')); return { name: pj.name, version: pj.version }; } catch (e) { return { name: null, version: null }; } })(),
     nodeVersion: process.version,
@@ -53,7 +53,7 @@ function makeMetadata() {
 function writeJson(out) {
   const outDir = path.join(process.cwd(), 'results', 'benchmarks');
   try { fs.mkdirSync(outDir, { recursive: true }); } catch (e) {}
-  const outFile = path.join(outDir, `hook-cost-profile-${Date.now()}.json`);
+  const outFile = path.join(outDir, `detector-stage-profile-${Date.now()}.json`);
   fs.writeFileSync(outFile, JSON.stringify(out, null, 2), 'utf8');
   console.log('Wrote artifact:', outFile);
 }
@@ -68,8 +68,7 @@ async function main() {
 
   const sources = buildSources(count);
   const bytes = sources.reduce((sum, s) => sum + Buffer.byteLength(s.content, 'utf8'), 0);
-
-  const stageNames = ['totalHook', 'reset', 'hash', 'scan', 'audit', 'originalCompile'];
+  const stageNames = ['totalHook', 'hash', 'detectorTotal', 'blockScan', 'regexScan', 'warnScan', 'behaviorAnalysis', 'crossFileAnalysis', 'originalCompile'];
   const iterationsData = [];
   let currentIteration = null;
   let stageAccumulators = null;
@@ -79,52 +78,36 @@ async function main() {
     const t0 = nowNs();
     const result = originalNodeCompile.apply(this, arguments);
     const t1 = nowNs();
-    if (currentIteration !== null) {
-      stageAccumulators.originalCompile += hrToMs(t0, t1);
-    }
+    if (currentIteration !== null) stageAccumulators.originalCompile += hrToMs(t0, t1);
     return result;
   };
 
-  const Detector = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'detector')).Detector;
-  const DetTrack = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'behavior-tracker')).BehaviorTracker;
-  const AuditLog = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'audit-log')).AuditLog;
+  const DetectorModule = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'detector'));
+  const BehaviorTrackerModule = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'behavior-tracker'));
+  const AhoCorasickModule = require(path.join(process.cwd(), 'packages', 'fw-agent', 'src', 'aho-corasick'));
 
-  // Enable runtime detection in the profiled agent. The agent entrypoint is a no-op
-  // unless FW_ENABLE_DETECTION is set to '1'.
-  process.env.FW_ENABLE_DETECTION = '1';
+  const regexSources = new Set([
+    '\\|\\s+(?:ba|da|z)?sh\\b',
+    '\\bnc\\s+-e\\b',
+    '\\bncat\\s+(?:--exec|-e)\\b',
+    '\\bsocat\\b[^\\n]{0,120}EXEC:',
+    '\\bmkfifo\\b[^\\n]{0,120}\\bnc\\b',
+    '\\bfsockopen\\s*\\(',
+    'Net\\s*\\.\\s*Sockets\\s*\\.\\s*TCPClient',
+    '\\bruby\\s+-r\\s*socket\\b',
+    '\\blua\\s+-e\\b[^\\n]{0,120}os\\s*\\.\\s*execute',
+  ]);
 
-  if (Detector.prototype.scanModuleSync) {
-    const detectorScan = Detector.prototype.scanModuleSync;
-    Detector.prototype.scanModuleSync = function () {
-      const t0 = nowNs();
-      const result = detectorScan.apply(this, arguments);
-      const t1 = nowNs();
-      if (currentIteration !== null) stageAccumulators.scan += hrToMs(t0, t1);
-      return result;
-    };
-  }
-  
-  if (DetTrack.prototype.reset) {
-    const behaviorReset = DetTrack.prototype.reset;
-    DetTrack.prototype.reset = function () {
-      const t0 = nowNs();
-      const result = behaviorReset.apply(this, arguments);
-      const t1 = nowNs();
-      if (currentIteration !== null) stageAccumulators.reset += hrToMs(t0, t1);
-      return result;
-    };
-  }
-  
-  if (AuditLog.prototype.write) {
-    const auditWrite = AuditLog.prototype.write;
-    AuditLog.prototype.write = function () {
-      const t0 = nowNs();
-      const result = auditWrite.apply(this, arguments);
-      const t1 = nowNs();
-      if (currentIteration !== null) stageAccumulators.audit += hrToMs(t0, t1);
-      return result;
-    };
-  }
+  const originalRegExpTest = RegExp.prototype.test;
+  RegExp.prototype.test = function () {
+    const isProfiled = regexSources.has(this.source);
+    const t0 = isProfiled && currentIteration !== null ? nowNs() : null;
+    const result = originalRegExpTest.apply(this, arguments);
+    if (isProfiled && currentIteration !== null) {
+      stageAccumulators.regexScan += hrToMs(t0, nowNs());
+    }
+    return result;
+  };
 
   const originalCreateHash = crypto.createHash;
   crypto.createHash = function (algorithm, options) {
@@ -132,23 +115,71 @@ async function main() {
     const originalUpdate = hash.update.bind(hash);
     const originalDigest = hash.digest.bind(hash);
     hash.update = function () {
-      const t0 = nowNs();
+      const t0 = currentIteration !== null ? nowNs() : null;
       const result = originalUpdate.apply(this, arguments);
-      const t1 = nowNs();
-      if (currentIteration !== null) stageAccumulators.hash += hrToMs(t0, t1);
+      if (t0) stageAccumulators.hash += hrToMs(t0, nowNs());
       return result;
     };
     hash.digest = function () {
-      const t0 = nowNs();
+      const t0 = currentIteration !== null ? nowNs() : null;
       const result = originalDigest.apply(this, arguments);
-      const t1 = nowNs();
-      if (currentIteration !== null) stageAccumulators.hash += hrToMs(t0, t1);
+      if (t0) stageAccumulators.hash += hrToMs(t0, nowNs());
       return result;
     };
     return hash;
   };
 
+  const DetectorCtor = DetectorModule.Detector;
+  const DetectorProxy = function (...args) {
+    const instance = new DetectorCtor(...args);
+    global.__fw_detector = instance;
+    return instance;
+  };
+  DetectorProxy.prototype = DetectorCtor.prototype;
+  DetectorProxy.__proto__ = DetectorCtor;
+  DetectorModule.Detector = DetectorProxy;
+
+  const originalScanModuleSync = DetectorCtor.prototype.scanModuleSync;
+  DetectorCtor.prototype.scanModuleSync = function () {
+    const t0 = currentIteration !== null ? nowNs() : null;
+    const result = originalScanModuleSync.apply(this, arguments);
+    if (t0) stageAccumulators.detectorTotal += hrToMs(t0, nowNs());
+    return result;
+  };
+
+  const originalAnalyzeModule = BehaviorTrackerModule.BehaviorTracker.prototype.analyzeModule;
+  BehaviorTrackerModule.BehaviorTracker.prototype.analyzeModule = function () {
+    const t0 = currentIteration !== null ? nowNs() : null;
+    const result = originalAnalyzeModule.apply(this, arguments);
+    if (t0) stageAccumulators.behaviorAnalysis += hrToMs(t0, nowNs());
+    return result;
+  };
+
+  const originalAnalyzePackage = BehaviorTrackerModule.BehaviorTracker.prototype.analyzePackage;
+  BehaviorTrackerModule.BehaviorTracker.prototype.analyzePackage = function () {
+    const t0 = currentIteration !== null ? nowNs() : null;
+    const result = originalAnalyzePackage.apply(this, arguments);
+    if (t0) stageAccumulators.crossFileAnalysis += hrToMs(t0, nowNs());
+    return result;
+  };
+
+  const originalAhoSearch = AhoCorasickModule.AhoCorasick.prototype.searchInsensitive;
+  AhoCorasickModule.AhoCorasick.prototype.searchInsensitive = function (text) {
+    const t0 = currentIteration !== null ? nowNs() : null;
+    const result = originalAhoSearch.apply(this, arguments);
+    if (t0) {
+      const stage = this._profileStage || 'otherAho';
+      if (stage === 'blockScan' || stage === 'warnScan') {
+        stageAccumulators[stage] += hrToMs(t0, nowNs());
+      }
+    }
+    return result;
+  };
+
+  process.env.FW_ENABLE_DETECTION = '1';
+  process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
   require(path.join(process.cwd(), 'packages', 'fw-agent', 'index.js'));
+
   const agentHook = Module.prototype._compile;
   Module.prototype._compile = function () {
     const t0 = nowNs();
@@ -157,6 +188,12 @@ async function main() {
     if (currentIteration !== null) stageAccumulators.totalHook += hrToMs(t0, t1);
     return result;
   };
+
+  if (!global.__fw_detector) {
+    throw new Error('Instrumented detector instance not found.');
+  }
+  global.__fw_detector.blockMatcher._profileStage = 'blockScan';
+  global.__fw_detector.warnMatcher._profileStage = 'warnScan';
 
   function compileSources(label) {
     for (let i = 0; i < sources.length; i += 1) {
@@ -182,25 +219,22 @@ async function main() {
     stageAccumulators = null;
   }
 
-  const totalHookSamples = iterationsData.map(d => d.totalHook);
   const stageStats = {};
   for (const stage of stageNames) {
     stageStats[stage] = stats(iterationsData.map(d => d[stage]));
   }
+
   const summary = {
     metadata: makeMetadata(),
     workload: { count, bytes, iterations, warmups },
     stages: stageStats,
-    totalHook: stats(totalHookSamples),
     raw: iterationsData,
   };
   writeJson(summary);
-  console.log('Hook cost summary:');
-  console.log('  totalHook median', summary.totalHook.median.toFixed(3), 'ms');
+  console.log('Detector stage summary:');
   for (const stage of stageNames) {
     const st = stageStats[stage];
-    const pct = summary.totalHook.median ? (st.median / summary.totalHook.median) * 100 : 0;
-    console.log(`  ${stage.padEnd(15)} median=${st.median.toFixed(3)}ms p95=${st.p95.toFixed(3)}ms pct=${pct.toFixed(1)}%`);
+    console.log(`  ${stage.padEnd(17)} median=${st.median.toFixed(3)}ms p95=${st.p95.toFixed(3)}ms`);
   }
 }
 

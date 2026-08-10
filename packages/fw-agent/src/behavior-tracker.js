@@ -2,6 +2,8 @@
 // Behavioral analyzer for sequence-based threat detection.
 // Tracks dangerous action sequences within a single module.
 
+const { AhoCorasick } = require('./aho-corasick');
+
 // Signal detection patterns for each behavioral category
 const SIGNAL_PATTERNS = {
   // Reads sensitive credential files (fs-based). process.env is tracked separately
@@ -155,6 +157,45 @@ function matchesAny(content, patterns) {
   return patterns.some(p => p.test(content));
 }
 
+// Literal substrings that are a superset of all SIGNAL_PATTERN regexes.
+// Used as a fast pre-screener: if none appear in content, all signal checks are
+// guaranteed false and the expensive scanSrc normalization + regex loop can be
+// skipped. A false positive (keyword present but regex doesn't match) is safe;
+// a false negative would miss a detection and is prevented by the superset property.
+const BEHAVIOR_PRESCREENER_KEYWORDS = [
+  // SENSITIVE_READ
+  'readfile', 'fs.open',
+  // ENV_READ
+  'process.env',
+  // SENSITIVE_PATH
+  '.env', 'credentials', '.ssh', 'id_rsa', '.netrc', '.aws', 'secret', 'passwd', 'shadow',
+  // SENSITIVE_CONFIG_PATH
+  '.kube', '.docker', 'login data',
+  // NPMRC_READ / NPMRC_TOKEN
+  '.npmrc', '_authtoken', '_auth', '_password', 'authtoken',
+  // HOST_OPTION
+  'host:',
+  // NETWORK_EGRESS
+  'http.request', 'https.request', 'http.get', 'https.get',
+  'fetch(', 'net.connect', 'net.createconnection', 'socket.connect',
+  'websocket', 'xmlhttprequest', 'tls.connect', 'dgram.createsocket',
+  'dns.resolve', 'sendbeacon',
+  // inline require("http"|"https"|"net"|"tls"|"dgram").method() forms
+  'require("http', "require('http", 'require("https', "require('https",
+  'require("net', "require('net", 'require("tls', "require('tls",
+  'require("dgram', "require('dgram",
+  // DYNAMIC_CODE
+  'eval(', 'new function', 'vm.runincontext', 'vm.runinnewcontext',
+  'vm.runinthiscontext', 'vm.script(', 'settimeout(', 'setinterval(', '(0,eval)',
+  // CODE_DECODE
+  'atob(', 'buffer.from',
+  // PROCESS_EXEC
+  'child_process', 'execsync(', 'spawnsync(', 'execfile(', 'shellstring',
+  'process.binding(',
+  // DYNAMIC_REQUIRE (unambiguous forms; bare require(var) is checked separately)
+  'require.resolve(', 'module._load',
+];
+
 // A quoted absolute URL passed directly as the argument of an actual network-call site --
 // distinguishes theft (hardcodes the destination) from legit npm tooling (builds the URL
 // from config, e.g. `fetch(`${registry}/${name}`)`). Anchored to the call site itself (not
@@ -183,6 +224,8 @@ class BehaviorTracker {
     this.filePackage = new Map();
     // Accumulated violations for telemetry
     this.violations = [];
+    // Fast-path pre-screener: single Aho-Corasick over all signal literal substrings.
+    this._prescreener = new AhoCorasick(BEHAVIOR_PRESCREENER_KEYWORDS);
   }
 
   /**
@@ -192,6 +235,32 @@ class BehaviorTracker {
    */
   analyzeModule(filename, content, packageKey) {
     if (!content) return [];
+
+    // Fast-path: if no signal keyword is present in the raw content, all regex-based
+    // signal checks are guaranteed to be false (the pre-screener is a superset of all
+    // SIGNAL_PATTERN regexes). Skip the expensive scanSrc normalization chain and 60+
+    // regex tests. DYNAMIC_REQUIRE is the one signal without an unambiguous literal
+    // keyword (require(var) vs require('literal')), so it is checked separately.
+    if (!this._prescreener.searchInsensitive(content)) {
+      const dynamicRequire = matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_REQUIRE);
+      const signals = {
+        sensitiveRead: false, sensitivePath: false, sensitiveConfigPath: false,
+        npmrcRead: false, npmrcToken: false, hostOption: false,
+        hardcodedEgress: false, hardcodedEgressNonRegistry: false,
+        envRead: false, networkEgress: false, dynamicCode: false,
+        codeDecode: false, processExec: false, dynamicRequire,
+      };
+      this.moduleSignals.set(filename, signals);
+      if (packageKey !== undefined && packageKey !== null) this.filePackage.set(filename, packageKey);
+      if (!dynamicRequire) return [];
+      const found = [{
+        rule: 'DYNAMIC_MODULE_LOAD',
+        severity: 'MEDIUM',
+        description: 'Module uses dynamic require() or module._load with a non-literal path',
+      }];
+      this.violations.push({ filename, violations: found, timestamp: Date.now() });
+      return found;
+    }
 
     // SENSITIVE_PATH / SENSITIVE_READ must only fire on genuine filesystem access, not on
     // import/require module specifiers (e.g. "@memberjunction/credentials") or URL paths
