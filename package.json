@@ -5,6 +5,10 @@
   "workspaces": [
     "packages/*"
   ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "enginesNote": "Not published, not authoritative. This is the workspace root; the real Node floors live in each package: packages/fw-agent requires >=18.0.0 (zero runtime deps), packages/fw-control requires >=20.0.0 (Fastify 5). Check both before changing this value.",
   "scripts": {
     "test": "npm run test:unit && npm run test:adversarial && npm run test:integration && npm run test:auth",
     "test:unit": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js && node packages/fw-agent/test/behavior-tracker-unit-test.js && node packages/fw-agent/test/prescreener-superset-test.js && node packages/fw-agent/test/policy-unit-test.js && node packages/fw-agent/test/quarantine-unit-test.js && node packages/fw-agent/test/policy-watcher-unit-test.js && node packages/fw-agent/test/audit-log-unit-test.js",
@@ -23,6 +27,6 @@
     "gate": "node run-gate-test.js"
   },
   "devDependencies": {
-    "c8": "^12.0.0"
+    "c8": "^10.1.3"
   }
 }

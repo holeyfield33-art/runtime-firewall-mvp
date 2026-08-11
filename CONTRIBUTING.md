@@ -112,6 +112,15 @@ Before opening a PR, confirm that:
 3. `npm pack --dry-run` from `packages/fw-agent` shows exactly 13 files.
 4. If you touched any of the seven engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
 
+### CI is split by package Node version
+
+CI runs two independent jobs, gated by each package's own engines.node floor:
+
+- test-fw-agent - matrix [18, 20, 22]. Runs everything that only exercises packages/fw-agent code (unit tests, the adversarial suite, the red-team suite, the integration/live detection tests, the coverage gate, the self-integrity baseline check, and npm pack --dry-run). These stay on >=18.0.0 because fw-agent has zero runtime dependencies.
+- test-fw-control - matrix [20, 22]. Runs anything that touches packages/fw-control (Fastify) code: the control-plane auth tests and the Fastify integration test (which spawns a real Fastify server, optionally with the agent loaded inside it). This floor is >=20.0.0 because of the Fastify 5 dependency.
+
+If you add a new test, classify it by what it actually requires (not by which test/ directory it lives in) before adding it to either job. If you raise or lower either package's engines.node, update the matching CI matrix in the same PR.
+
 ## PR Description
 
 Include:
