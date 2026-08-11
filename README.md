@@ -1,5 +1,8 @@
 # Aletheia Firewall
 
+[![CI](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/306349207?branch=main&label=CodeQL)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/306349207)
+
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
 **What this intercepts:** `require()`-time module compilation (signature + behavioral scan), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), and AST-obfuscated eval techniques (documented below as known bypasses).
