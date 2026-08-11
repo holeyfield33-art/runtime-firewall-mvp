@@ -92,6 +92,7 @@ async function main() {
   // Enable runtime detection in the profiled agent. The agent entrypoint is a no-op
   // unless FW_ENABLE_DETECTION is set to '1'.
   process.env.FW_ENABLE_DETECTION = '1';
+  process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
 
   if (Detector.prototype.scanModuleSync) {
     const detectorScan = Detector.prototype.scanModuleSync;
