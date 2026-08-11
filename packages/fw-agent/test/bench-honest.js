@@ -32,7 +32,7 @@ const path = require('path');
 
 const AGENT_ENTRY = path.resolve(__dirname, '..', 'index.js');
 const MODULE_COUNT = 200;   // user modules generated per run
-const TRIALS = 7;           // fresh-process trials per arm; median is reported
+const TRIALS = 30;          // fresh-process trials per arm; median is reported
 
 // ── Generate a tree of distinct, non-trivial user modules in a temp dir ───────
 // Distinct content per file defeats any single-file cache and gives the
@@ -62,7 +62,7 @@ function childSource(moduleDir, enabled, outFile) {
 'use strict';
 const path = require('path');
 const fs = require('fs');
-${enabled ? `process.env.FW_ENABLE_DETECTION = '1'; require(${JSON.stringify(AGENT_ENTRY)});` : ``}
+${enabled ? `process.env.FW_ENABLE_DETECTION = '1'; process.env.FW_ALLOW_DEV_POLICY_KEY = '1'; require(${JSON.stringify(AGENT_ENTRY)});` : ``}
 const dir = ${JSON.stringify(moduleDir)};
 const n = ${MODULE_COUNT};
 const start = process.hrtime.bigint();
