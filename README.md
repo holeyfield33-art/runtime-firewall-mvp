@@ -1,7 +1,7 @@
 # Aletheia Firewall
 
 [![CI](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/306349207?branch=main&label=CodeQL)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/306349207)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/dynamic/github-code-scanning/codeql?branch=main&label=CodeQL)](https://github.com/holeyfield33-art/runtime-firewall-mvp/security/code-scanning)
 
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
