@@ -109,6 +109,8 @@ HELIOS_LOG_DIR=/data/logs node --require=aletheia-firewall app.js
 
 **Prerequisites:** Node.js ≥ 18
 
+The optional fw-control dashboard/telemetry server requires Node.js ≥ 20 (Fastify 5); the firewall agent itself only needs Node.js ≥ 18.
+
 ```bash
 git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
 cd runtime-firewall-mvp
