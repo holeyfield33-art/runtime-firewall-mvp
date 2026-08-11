@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`c8` pinned to `^10.1.3` (down from `^12.0.0`) so the fw-agent coverage gate runs on Node 18**:
+  `c8@12` depends on `yargs@18`, which is ESM-only; `c8`'s CLI does a synchronous `require('yargs')`,
+  which throws `ERR_REQUIRE_ESM` on any Node version without synchronous `require(esm)` support
+  (Node 18 never got this — it landed in Node 20.19+ / 22.12+). This broke `npm run test:coverage`
+  under Node 18 specifically, failing the `fw-agent` CI job's Node 18 leg even though every other
+  suite (unit, adversarial, red-team, integration, live) passed fine. `c8@10.1.3` is the last major
+  with a CJS-compatible `yargs`. `c8@12+` requires Node 20+.
+
 - **Control plane fails fast with an actionable message when `fastify` is missing**: `packages/fw-control/src/server.js`
   now wraps the `require('fastify')` in a guard. Starting the control plane / `/logs` dashboard before
   running `npm install` previously crashed instantly with a raw `Cannot find module 'fastify'` stack
