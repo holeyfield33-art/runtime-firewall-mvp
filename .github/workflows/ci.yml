@@ -40,6 +40,9 @@ jobs:
       - name: Red-team attack suite (regression + false-positive gate)
         run: npm run redteam
 
+      # test:integration/test:live invoke files under packages/fw-control/test/ that
+      # require('../../fw-agent/index.js') directly (no Fastify) -- they exercise
+      # fw-agent only, so their placement in this job is correct; do not move them.
       - name: Integration tests (agent + detection)
         run: npm run test:integration
 
