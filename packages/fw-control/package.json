@@ -4,7 +4,7 @@
   "private": true,
   "description": "Runtime Firewall Control Plane and Telemetry Ingestion Engine",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "fastify": "^4.25.0"
