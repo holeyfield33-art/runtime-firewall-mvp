@@ -115,6 +115,7 @@ Before opening a PR, confirm that:
 ## PR Description
 
 Include:
+
 - What changed and why.
 - Which rules above apply and how you satisfied them.
 - If any performance numbers are added or updated, which `results/` file they come from.

@@ -55,7 +55,7 @@ not functional breakage — hence "ship with risks," not "do not ship."
 
 ## Commands run (baseline before → after)
 
-```
+```bash
 $ npm install
 added 105 packages, and audited 108 packages in 3s
 7 high severity vulnerabilities
@@ -119,6 +119,7 @@ environment noise, not reproduced against the repo's own EPYC evidence files)
 
 This IS a private key committed to the repo, but it is **intentional and correctly gated**, not
 an accidental leak — verified by reading the code, not just trusting the README:
+
 - `packages/fw-agent/src/policy-watcher.js:177` refuses to start (`process.exit(1)`) if a policy
   file is present and signed with this key, unless `FW_ALLOW_DEV_POLICY_KEY=1` is explicitly set —
   regardless of `NODE_ENV`.

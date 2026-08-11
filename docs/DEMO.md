@@ -29,7 +29,7 @@ FW_ENABLE_DETECTION=1 node --require ./packages/fw-agent /tmp/miner.js
 
 Expected output:
 
-```
+```text
 [COMPILATION LOCKDOWN] /tmp/miner.js blocked (sig: pool.hashvault)
 ```
 
@@ -49,7 +49,7 @@ FW_ENABLE_DETECTION=1 FW_ENABLE_BEHAVIORAL=1 node --require ./packages/fw-agent 
 
 Expected output:
 
-```
+```text
 [COMPILATION LOCKDOWN] /tmp/exfil.js blocked (behavioral: CREDENTIAL_EXFILTRATION, severity: CRITICAL)
 ```
 
@@ -69,7 +69,7 @@ FW_ENABLE_DETECTION=1 node --require ./packages/fw-agent /tmp/tiny_miner.js
 
 Expected output:
 
-```
+```text
 [COMPILATION LOCKDOWN] /tmp/tiny_miner.js blocked (sig: stratum)
 ```
 
