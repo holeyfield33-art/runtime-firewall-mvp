@@ -122,14 +122,4 @@ async function main() {
   console.log(JSON.stringify(summary, null, 2));
 }
 
-function stats(arr) {
-  const numeric = arr.slice().sort((a, b) => a - b);
-  const n = numeric.length;
-  if (!n) return { count: 0, mean: 0, median: 0, p95: 0, max: 0 };
-  const mean = numeric.reduce((sum, v) => sum + v, 0) / n;
-  const median = n % 2 ? numeric[(n - 1) / 2] : (numeric[n / 2 - 1] + numeric[n / 2]) / 2;
-  const quantile = p => numeric[Math.max(0, Math.min(n - 1, Math.ceil((p / 100) * n) - 1))];
-  return { count: n, mean, median, p95: quantile(95), max: numeric[n - 1] };
-}
-
 main().catch(err => { console.error(err && err.stack ? err : err); process.exit(1); });
