@@ -183,14 +183,14 @@ const BEHAVIOR_PRESCREENER_KEYWORDS = [
   // inline require("http"|"https"|"net"|"tls"|"dgram").method() forms
   'require("http', "require('http", 'require("https', "require('https",
   'require("net', "require('net", 'require("tls', "require('tls",
-  'require("dgram', "require('dgram",
+  'require("dgram', "require('dgram", 'require("vm', "require('vm",
   // DYNAMIC_CODE
-  'eval(', 'new function', 'vm.runincontext', 'vm.runinnewcontext',
-  'vm.runinthiscontext', 'vm.script(', 'settimeout(', 'setinterval(', '(0,eval)',
+  'eval(', 'new function', 'function(', 'vm.runincontext', 'vm.runinnewcontext',
+  'vm.runinthiscontext', 'runinnewcontext', 'vm.script(', 'settimeout(', 'setinterval(', '(0,eval)',
   // CODE_DECODE
   'atob(', 'buffer.from',
   // PROCESS_EXEC
-  'child_process', 'execsync(', 'spawnsync(', 'execfile(', 'shellstring',
+  'child_process', 'execsync(', 'spawnsync(', 'execfile(', 'execfilesync(', 'shellstring',
   'process.binding(',
   // DYNAMIC_REQUIRE (unambiguous forms; bare require(var) is checked separately)
   'require.resolve(', 'module._load',
@@ -521,4 +521,4 @@ class BehaviorTracker {
 
 // SIGNAL_PATTERNS is exported so downstream tooling can iterate the raw signal regexes for
 // evidence reconstruction (the registry's watch-changes.js). Keeps this engine a drop-in copy.
-module.exports = { BehaviorTracker, SIGNAL_PATTERNS };
+module.exports = { BehaviorTracker, SIGNAL_PATTERNS, BEHAVIOR_PRESCREENER_KEYWORDS };
