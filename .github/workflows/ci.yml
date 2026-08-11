@@ -13,47 +13,62 @@ jobs:
   test:
     name: Test (Node ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    container:
+      image: node:${{ matrix.node-version }}-bookworm
     strategy:
       fail-fast: false
       matrix:
         node-version: [20, 22]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Install git
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
 
-      - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: npm
+      - name: Checkout repository without external actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" repo
+          cd repo
+          git fetch --depth=1 origin "${{ github.sha }}"
+          git checkout --detach "${{ github.sha }}"
 
       - name: Install dependencies
+        working-directory: repo
         run: npm install
 
       - name: Unit tests
+        working-directory: repo
         run: npm run test:unit
 
       - name: Adversarial test suite
+        working-directory: repo
         run: npm run test:adversarial
 
       - name: Control-plane auth tests
+        working-directory: repo
         run: npm run test:auth
 
       - name: Red-team attack suite (regression + false-positive gate)
+        working-directory: repo
         run: npm run redteam
 
       - name: Integration tests (agent + detection)
+        working-directory: repo
         run: npm run test:integration
 
       - name: Live detection tests (active blocking)
+        working-directory: repo
         run: npm run test:live
 
       - name: Engine-core coverage gate (95%)
+        working-directory: repo
         run: npm run test:coverage
 
       - name: Self-integrity baseline check
-        working-directory: packages/fw-agent
+        working-directory: repo/packages/fw-agent
         run: |
           node -e "
           const crypto = require('crypto');
@@ -81,5 +96,5 @@ jobs:
           "
 
       - name: Pack dry run (verify 13-file manifest)
-        working-directory: packages/fw-agent
+        working-directory: repo/packages/fw-agent
         run: npm pack --dry-run
