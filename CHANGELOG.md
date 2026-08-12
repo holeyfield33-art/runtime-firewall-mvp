@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-11
+
 ### Added
 
 - **Red-team attack suite (`red-team/`, `npm run redteam`)**: A standalone adversarial harness that
@@ -20,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (over-block), so it doubles as a CI guardrail (wired into `.github/workflows/ci.yml`). Corpus covers
   crypto-miners, reverse shells, credential exfil, dynamic-code execution, supply-chain stagers, and
   benign controls, split into core + `-extended` catalogs. Methodology mirrors the `aletheia-redteam-kit`
-  command-center flow, adapted to this firewall's module-source input surface. Current run: 69/125
-  malicious caught, 0 false positives, 56 documented static-analysis bypasses. See
+  command-center flow, adapted to this firewall's module-source input surface. Current run: 95/125
+  malicious caught (76%), 0 false positives, 30 documented static-analysis bypasses. See
   [`red-team/README.md`](red-team/README.md) and [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md).
 
 ### Fixed
@@ -260,7 +262,8 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.2.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.3.0...v0.4.0
 [0.2.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/releases/tag/v0.1.0
