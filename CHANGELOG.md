@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (over-block), so it doubles as a CI guardrail (wired into `.github/workflows/ci.yml`). Corpus covers
   crypto-miners, reverse shells, credential exfil, dynamic-code execution, supply-chain stagers, and
   benign controls, split into core + `-extended` catalogs. Methodology mirrors the `aletheia-redteam-kit`
-  command-center flow, adapted to this firewall's module-source input surface. Current run: 69/125
-  malicious caught, 0 false positives, 56 documented static-analysis bypasses. See
+  command-center flow, adapted to this firewall's module-source input surface. Current run: 95/125
+  malicious caught (76%), 0 false positives, 30 documented static-analysis bypasses. See
   [`red-team/README.md`](red-team/README.md) and [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md).
 
 ### Fixed

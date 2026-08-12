@@ -30,7 +30,7 @@ Aletheia hooks `Module.prototype._compile`, Node's CommonJS compilation step. Th
 | `import` / `import()` (ESM, `.mjs`) | ❌ separate Node loader, not hooked |
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
-| npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
+| Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your CommonJS require graph, after `npm install` has finished. It is not an
@@ -39,7 +39,7 @@ install-time scanner and does not intercept package installation.
 Detection is signature + behavioral, not AST-based, so payloads can evade static matching
 through string-splitting, encoding, or indirection. Our adversarial corpus documents this
 honestly: **95/125 (76%) of malicious payloads caught, 30 known bypasses, 0 false positives**
-on the current corpus — run it yourself with `npm run redteam`. Every bypass class is listed
+on the current corpus — run it yourself from the repository root with `npm run redteam`. Every bypass class is listed
 in [`red-team/README.md`](../../red-team/README.md).
 
 ## Environment Variables

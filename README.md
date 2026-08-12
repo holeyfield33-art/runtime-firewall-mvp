@@ -21,7 +21,7 @@ Aletheia hooks `Module.prototype._compile`, Node's CommonJS compilation step. Th
 | `import` / `import()` (ESM, `.mjs`) | ❌ separate Node loader, not hooked |
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
-| npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
+| Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your CommonJS require graph, after `npm install` has finished. It is not an
