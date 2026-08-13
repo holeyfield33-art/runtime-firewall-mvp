@@ -1,0 +1,164 @@
+
+> runtime-firewall-monorepo@1.0.0 test:coverage
+> c8 --include packages/fw-agent/src/detector.js --include packages/fw-agent/src/behavior-tracker.js --include packages/fw-agent/src/aho-corasick.js --include packages/fw-agent/src/policy.js --include packages/fw-agent/src/quarantine.js --check-coverage --lines 95 --functions 95 --branches 90 --reporter text --reporter lcov npm run test:engine
+
+
+> runtime-firewall-monorepo@1.0.0 test:engine
+> node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js && node packages/fw-agent/test/behavior-tracker-unit-test.js && node packages/fw-agent/test/prescreener-superset-test.js && node packages/fw-agent/test/policy-unit-test.js && node packages/fw-agent/test/quarantine-unit-test.js && node packages/fw-control/test/adversarial/adversarial.test.js
+
+AhoCorasick unit test passed.
+Detector unit test passed.
+  ✓ CREDENTIAL_EXFILTRATION: .env read + network egress → CRITICAL
+  ✓ CREDENTIAL_EXFILTRATION: id_rsa / .ssh / .aws paths trigger
+  ✓ No exfil when sensitive path present but NO network egress
+  ✓ ENV_NETWORK_EGRESS: process.env + egress → WARN only (not block)
+  ✓ process.env.FOO property access is NOT treated as a .env file path (F-16)
+  ✓ DYNAMIC_CODE_EXEC_CHAIN: eval + child_process → CRITICAL
+  ✓ OBFUSCATED_CODE_EXECUTION: Buffer.from base64 + eval → HIGH
+  ✓ OBFUSCATED_CODE_EXECUTION: atob + new Function → HIGH
+  ✓ OBFUSCATED_CODE_EXECUTION: hex decode + eval → HIGH
+  ✓ F-31 guard: decode WITHOUT eval does not block (JWT/HTTP libs)
+  ✓ F-31 guard: eval WITHOUT decode does not block (build tools)
+  ✓ F-31 guard: bare Buffer.from (no encoding) + eval does not block
+  ✓ F-31 guard: decode named only in a COMMENT + real eval does not block
+  ✓ DYNAMIC_MODULE_LOAD: require(variable) → MEDIUM (never hard-block)
+  ✓ .npmrc read + egress to hardcoded non-registry host → CRITICAL
+  ✓ .npmrc read + _authToken field reference + egress → CRITICAL
+  ✓ .npmrc read + egress built from config (legit tooling) → WARN not block
+  ✓ .npmrc read + hardcoded fetch of real registry.npmjs.org → WARN not block
+  ✓ Chained one-line require("fs").readFileSync(".env") + egress → blocks (F-27b)
+  ✓ Sensitive path mentioned only in a comment + egress → clean (F-28)
+  ✓ Import specifier containing "credentials" is not a filesystem read (F-27b)
+  ✓ URL path segment resembling a secret is stripped before matching
+  ✓ Inline require("https").get + .env read → blocks (F-08 egress regex)
+  ✓ fetch / net.createConnection / WebSocket all count as egress
+  ✓ Sub-100-byte credential exfil still analyzed (F-07, no size skip)
+  ✓ Empty / null content returns no violations
+  ✓ reset() clears accumulated violations and signals
+
+All behavior-tracker unit tests passed (27).
+  ✓ Prescreener canary coverage matches all SIGNAL_PATTERNS regexes
+  ✓ Cross-file Function + execSync split triggers DYNAMIC_CODE_EXEC_CHAIN_CROSS_FILE
+  ✓ Whitespace-tolerant fetch + Function payload now triggers a violation
+All prescreener superset tests passed.
+  ✓ createCanonicalObject fills defaults
+  ✓ createCanonicalObject honors provided fields and objectType
+  ✓ createCanonicalObject prefers value over rules
+  ✓ hashMemoryObject is deterministic (64-hex SHA-256)
+  ✓ hashMemoryObject differs for different content
+[Policy Verification] Missing or empty policy object
+[Policy Verification] Missing or empty policy object
+  ✓ verifyPolicyIntegrity false on missing/empty policy
+[Policy Verification] ✅ Policy integrity verified
+  ✓ verifyPolicyIntegrity true when hash matches
+[CRITICAL] Policy tampering detected! Hash mismatch.
+Expected: deadbeef
+Calculated: 99ff3d5f32ae03c257d630dfec68aa4f7c6c9268ba9d4ba109e5ef34c9dcf46e
+  ✓ verifyPolicyIntegrity false when hash mismatches
+[Policy Verification] ⚠️ No integrity hash provided (unsigned policy)
+  ✓ verifyPolicyIntegrity true (graceful) when no hash present
+  ✓ createForensicObject shapes a quarantine event
+  ✓ createForensicObject keys are unique across calls
+
+All policy unit tests passed (11).
+[Quarantine Intercept] Package: test-pkg | Operation: property_access | Hash: 08cb3cad115e8dfa...
+  ✓ QuarantineStub proxy is inert and returns null
+  ✓ Rate-limit fires without process.exit
+  ✓ Rate-limit logs once per 10 suppressed events
+[Quarantine Intercept] Package: trap-pkg | Operation: property_delete | Hash: 4ba46a0b8255d776...
+  ✓ delete / ownKeys / getOwnPropertyDescriptor traps are inert and logged
+  ✓ telemetry.emit + first-breach console path covered
+All quarantine unit tests passed.
+  ✓ Quarantine proxy is not an accidental thenable (F-17)
+All quarantine unit tests passed (with F-17 thenable guard).
+  [KNOWN BYPASS] bracket-notation eval evades signature + regex detection
+  Future work: instrument via Proxy on globalThis or AST pre-processing
+  [KNOWN BYPASS] string-concatenation eval evades both scanner and behavioral analysis
+  Future work: taint-tracking or V8 Inspector API integration
+  [KNOWN BYPASS] variable-alias eval evades signature scanner (no "eval(" in source)
+  Future work: runtime Proxy on globalThis.eval or V8 Inspector hooks
+  [NOTE] join-reassembly was caught
+
+═══════════════════════════════════════════════════════════════
+  Helios Adversarial Test Suite
+═══════════════════════════════════════════════════════════════
+
+✅ Direct eval() is blocked
+✅ Obfuscated eval via bracket access is a known bypass [EXPECTED BYPASS]
+✅ eval with string concatenation bypass is a known bypass [EXPECTED BYPASS]
+✅ Buffer.from base64 decode + eval is blocked by OBFUSCATED_CODE_EXECUTION
+✅ Decode-only and eval-only modules do NOT false-positive (F-31 guard)
+✅ Crypto-miner stratum pool reference is blocked
+✅ Credential-read + network-egress in one module triggers behavioral detection
+✅ Dynamic-code + process-exec in one module triggers behavioral detection
+✅ curl | bash postinstall pattern is blocked by signature scanner
+✅ process.env + network call emits ENV_NETWORK_EGRESS WARN but does not hard-block (F-16)
+✅ Clean module passes without false positive
+✅ Variable-alias eval is a known bypass [EXPECTED BYPASS]
+✅ Multi-line string reassembly is a known bypass [EXPECTED BYPASS]
+✅ Sub-512-byte malicious module is blocked (F-01 regression guard)
+✅ Sub-512-byte clean module has no false positive (F-01 regression guard)
+✅ Padded-payload: malicious signature after 3KB padding is blocked (F-03 regression guard)
+✅ Sub-100-byte module with credential-read + network-egress triggers behavioral detection (F-07 regression guard)
+✅ One-line require(fs).readFileSync(.env) chain is blocked (F-27b regression guard)
+✅ Word list containing "stratum"/"substratum"/"stratus" is not flagged as a crypto-miner (F-29 regression guard)
+✅ F-30 redo: whole .npmrc read + hardcoded exfil URL is blocked (no _authToken string present)
+✅ F-30 redo: .npmrc read + POST body to a hardcoded host is blocked
+✅ F-30 redo: .npmrc _authToken extraction with a {host: ...} override is blocked
+✅ F-30 redo: npm tooling reading .npmrc to resolve the registry, then fetching from config, is not blocked
+✅ F-30 redo: hardcoded registry.npmjs.org fallback default (not the actual fetch target) is not blocked
+✅ F-30 redo: hardcoded fetch of registry.npmjs.org itself is WARN, not a hard block
+✅ Miner brand signature (coinimp) is blocked and labeled crypto-miner (F-35 TP)
+✅ coinhive signature is labeled crypto-miner after isCrypto fix (F-35 label)
+✅ Prose mentioning coin/pool/miner without a brand literal is not blocked (F-35 FP)
+✅ Inline require("net").connect + .aws read is blocked (F-36 TP)
+✅ Inline require("vm").runInThisContext + spawn is blocked (F-36 TP)
+✅ Inline require("https").get without a credential read is not blocked (F-36 FP)
+✅ .kube/config read + hardcoded exfil host is blocked (F-37 TP)
+✅ .kube/config read + config-derived (non-hardcoded) server is clean (F-37 FP)
+✅ curl ... | sh stager is blocked (F-38 TP)
+✅ Pipe to sha256sum / ssh does not false-positive as a shell stager (F-38 FP)
+✅ fetch(...).then(eval) is blocked by REMOTE_FETCH_EXEC (F-39 TP)
+✅ fetch(...).then((0,eval)) is blocked by REMOTE_FETCH_EXEC (F-39 TP indirect)
+✅ fetch(...).then(r=>r.json()) without eval is not blocked (F-39 FP)
+✅ new Function without network egress is not blocked (F-39 FP)
+✅ nc -e reverse shell is blocked (F-40 TP)
+✅ socat ... EXEC: reverse shell is blocked (F-40 TP)
+✅ Benign rsync -e / pipe-to-ssh command strings do not false-positive (F-40 FP)
+✅ .env read + dns.resolve exfil channel is blocked (F-41 TP)
+✅ process.binding("spawn_sync") + eval is blocked (F-41 TP)
+✅ dns.resolve without a credential read is not blocked (F-41 FP)
+✅ Cross-file split (.env read + egress) in one package is blocked (F-42 TP)
+✅ Cross-file split (eval + child_process) in one package is blocked (F-42 TP)
+✅ Cross-file bare fs.readFile + egress (no credential path) is not blocked (F-42 FP)
+✅ Cross-file across two different packages does not pair (F-42 FP)
+✅ Cross-file for first-party app code (no packageKey) is skipped (F-42 FP)
+✅ Registry batch finalizePackage() catches a cross-file split (F-42 batch)
+✅ Cross-file is opt-in: default-off runtime does not block a split (F-42 default-off)
+
+─────────────────────────────────────────────────────────────
+Results: 52 passed, 0 failed out of 52 tests
+─────────────────────────────────────────────────────────────
+
+Known bypasses (documented for future work):
+  1. Bracket-notation eval:   this["ev"+"al"]  → needs AST or V8 Inspector
+  2. String concatenation:    global["ev"+"al"] → needs taint tracking
+  3. Variable-alias eval:     const fn = eval; fn("code") → needs runtime Proxy
+  4. Prototype chain access:  Object.getPrototypeOf(eval).constructor → needs runtime instrumentation
+
+Note: Array join reassembly (["ch","ild"].join("")) bypasses per-module isolation; may be caught by cross-module state in practice.
+
+All bypasses require runtime (dynamic) analysis. Static analysis has fundamental limits.
+Behavioral detection mitigates bypasses by flagging dangerous ACTION SEQUENCES
+rather than specific strings, providing defense-in-depth.
+
+---------------------|---------|----------|---------|---------|-------------------
+File                 | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+---------------------|---------|----------|---------|---------|-------------------
+All files            |    98.8 |       96 |     100 |    98.8 |                   
+ aho-corasick.js     |     100 |    94.73 |     100 |     100 | 51,77             
+ behavior-tracker.js |   97.55 |     93.9 |     100 |   97.55 | 429-434,498-504   
+ detector.js         |     100 |     97.5 |     100 |     100 | 170               
+ policy.js           |     100 |      100 |     100 |     100 |                   
+ quarantine.js       |     100 |      100 |     100 |     100 |                   
+---------------------|---------|----------|---------|---------|-------------------

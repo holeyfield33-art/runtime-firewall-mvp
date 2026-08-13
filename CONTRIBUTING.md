@@ -94,6 +94,18 @@ If you must swallow an error, name the specific case you are handling and why.
 
 All commands run from `packages/fw-agent` unless noted otherwise.
 
+**Windows:** several root-level scripts (`test:integration`, `test:live`) use inline
+`VAR=1 node script.js` env-var syntax, which npm's default `cmd.exe` script-shell can't
+parse on Windows -- it fails with `'VAR' is not recognized as an internal or external
+command`. Fix once per machine, not per command:
+
+```powershell
+npm config set script-shell "C:\Program Files\Git\bin\bash.exe"
+```
+
+After that, every `npm run ...` script routes through Git Bash automatically, from
+PowerShell, cmd, or the VS Code integrated terminal.
+
 ```bash
 # Unit tests (Aho-Corasick automaton + detector logic)
 npm test

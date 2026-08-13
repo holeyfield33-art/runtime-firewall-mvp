@@ -1,0 +1,20 @@
+Source: pasted by user from a separate session, host path /workspaces/runtime-firewall-mvp (GitHub Codespaces)
+Not independently executed or verified by this session — recorded here for provenance only.
+Date reported: 2026-08-13
+
+Commands run (as reported):
+  cd /workspaces/runtime-firewall-mvp && git checkout main && git pull
+  mkdir -p results && npm test 2>&1 | tee results/full-test-v0.4.0-$(date +%Y%m%d).txt
+  npm run gate 2>&1 | tee results/gate-v0.4.0-$(date +%Y%m%d).txt
+  npm install $(node -e "console.log(require('./corpus-top100.json').join(' '))")
+  node aletheia-soak-test.js --agent ./packages/fw-agent 2>&1 | tee results/soak-v0.4.0-$(date +%Y%m%d).txt
+
+Reported results:
+  npm test            -> PASS (52/52 detection tests, integration, auth all passing)
+  npm run gate         -> FAIL — median overhead 40.08% (budget: 25%), P95 55.24%
+  soak test             -> PASS — 0/99 false positives, 5/5 malicious caught (100% TP), avg scan/pkg 128.2ms
+                            (cross-env not installed, skipped as expected)
+
+No raw per-iteration gate output or JSON benchmark artifact was pasted — only the
+narrative summary above. Environment (visible core count, exact commit hash) not
+independently confirmed by this session.

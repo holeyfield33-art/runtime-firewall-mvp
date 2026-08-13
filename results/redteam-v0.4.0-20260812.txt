@@ -1,0 +1,257 @@
+
+> runtime-firewall-monorepo@1.0.0 redteam
+> node red-team/run.js
+
+
+════════════════════════════════════════════════════════════════════════
+  Helios Runtime Firewall — Red-Team Attack Suite
+  runtime-firewall-mvp :: Detector.scanModuleSync (index.js block rule)
+════════════════════════════════════════════════════════════════════════
+
+▸ crypto-miner  (26)
+  ✅ caught         BLOCKED  miner-stratum-tcp [crypto-miner]
+  ✅ caught         BLOCKED  miner-stratum-scheme [crypto-miner]
+  ✅ caught         BLOCKED  miner-coinhive [crypto-miner]
+  ✅ caught         BLOCKED  miner-xmr-stak [crypto-miner]
+  ✅ caught         BLOCKED  miner-cryptonight [crypto-miner]
+  ✅ caught         BLOCKED  miner-nicehash [crypto-miner]
+  ✅ caught         BLOCKED  miner-pool-hashvault [crypto-miner]
+  ⚠️  known-bypass   PASSED   miner-concat-stratum
+        └─ Pool URL reassembled from fragments to dodge the literal "stratum+tcp" signature (host is deliberately not a known-bad literal either)
+  ⚠️  known-bypass   PASSED   miner-base64-pool [warn: buffer.from]
+        └─ Pool URL held as a base64 blob and decoded at runtime (never eval'd, so OBFUSCATED_CODE_EXECUTION does not fire)
+  ✅ caught         BLOCKED  miner-supportxmr [crypto-miner]
+  ✅ caught         BLOCKED  miner-moneroocean [crypto-miner]
+  ✅ caught         BLOCKED  miner-cryptonight-heavy [crypto-miner]
+  ✅ caught         BLOCKED  miner-coinhive-hyphen [crypto-miner]
+  ✅ caught         BLOCKED  miner-xmr-stak-rx [crypto-miner]
+  ✅ caught         BLOCKED  miner-nicehash-ethash [crypto-miner]
+  ✅ caught         BLOCKED  miner-hashvault-alt-port [crypto-miner]
+  ✅ caught         BLOCKED  miner-randomx-stratum [crypto-miner]
+  ✅ caught         BLOCKED  miner-coinimp [crypto-miner]
+  ✅ caught         BLOCKED  miner-jsecoin [crypto-miner]
+  ✅ caught         BLOCKED  miner-webminepool-ws [crypto-miner]
+  ✅ caught         BLOCKED  miner-deepminer [crypto-miner]
+  ⚠️  known-bypass   PASSED   miner-hex-pool [warn: buffer.from]
+        └─ Pool URL held as a hex blob, decoded at runtime, never eval'd
+  ⚠️  known-bypass   PASSED   miner-env-pool [warn: ENV_NETWORK_EGRESS]
+        └─ Pool URL supplied via env/config so no literal is present in source
+  ⚠️  known-bypass   PASSED   miner-charcode-coinhive
+        └─ Brand name reconstructed from char codes to dodge the literal
+  ⚠️  known-bypass   PASSED   miner-concat-cryptonight
+        └─ cryptonight algorithm string assembled from fragments
+  ⚠️  known-bypass   PASSED   miner-wasm
+        └─ WebAssembly miner core — no textual mining signature at all
+
+▸ reverse-shell  (22)
+  ✅ caught         BLOCKED  revsh-bash-devtcp [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-sh-devtcp [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-devtcp-redirect [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-curl-pipe-bash [dynamic-code-exec, dynamic-code-exec]
+  ⚠️  known-bypass   PASSED   revsh-node-net-spawn
+        └─ Pure-Node reverse shell: TCP socket wired to a spawned /bin/sh, no /dev/tcp string and no dynamic-code primitive (network+process-exec is not a blocking behavioral rule)
+  ✅ caught         BLOCKED  revsh-wget-pipe-sh [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-python-devtcp [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-perl-devtcp [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-exec-fd-devtcp [dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-curl-fsSL-bash [dynamic-code-exec, dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-gsocket-bash [dynamic-code-exec, dynamic-code-exec]
+  ✅ caught         BLOCKED  revsh-nc-e [reverse-shell]
+  ✅ caught         BLOCKED  revsh-ncat-exec [reverse-shell]
+  ✅ caught         BLOCKED  revsh-socat [reverse-shell]
+  ✅ caught         BLOCKED  revsh-php-fsockopen [reverse-shell]
+  ✅ caught         BLOCKED  revsh-ruby-socket [reverse-shell]
+  ✅ caught         BLOCKED  revsh-powershell-tcpclient [reverse-shell]
+  ⚠️  known-bypass   PASSED   revsh-node-http-beacon
+        └─ HTTP-polling C2 beacon: fetch a command, run it, POST the output (network + process-exec, which is not a blocking rule)
+  ✅ caught         BLOCKED  revsh-mkfifo-backpipe [reverse-shell]
+  ⚠️  known-bypass   PASSED   revsh-bash-i-only
+        └─ bash -i without the >& redirect — deliberately not matched (F-29 hardened the signature to require the stdio redirect)
+  ⚠️  known-bypass   PASSED   revsh-base64-devtcp [warn: buffer.from]
+        └─ The /dev/tcp command is base64-encoded and shelled out via bash -c (no plaintext /dev/tcp literal, and decode+exec is not eval so OBFUSCATED_CODE_EXECUTION does not fire)
+  ✅ caught         BLOCKED  revsh-lua-socket [reverse-shell]
+
+▸ credential-exfil  (28)
+  ✅ caught         BLOCKED  exfil-dotenv-fetch [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-ssh-key [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-aws-credentials [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-npmrc-whole [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-npmrc-token-host [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-oneline-chain [CREDENTIAL_EXFILTRATION]
+  ✅ clean          PASSED   exfil-env-token-network [warn: ENV_NETWORK_EGRESS]
+  ✅ caught         BLOCKED  exfil-dns-tunnel [CREDENTIAL_EXFILTRATION]
+  ⚠️  known-bypass   PASSED   exfil-concat-path
+        └─ Credential path assembled from fragments so the SENSITIVE_PATH regex never matches the literal
+  ✅ caught         BLOCKED  exfil-etc-shadow [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-etc-passwd [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-git-credentials [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-env-websocket [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-netrc-tls [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-idrsa-dgram [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-gcp-adc [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-secret-xhr [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-aws-netconnect [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-env-async-read [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-passwd-createReadStream [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-docker-config [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-kube-config [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-id-ecdsa [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-browser-cookies [CREDENTIAL_EXFILTRATION]
+  ⚠️  known-bypass   PASSED   exfil-env-via-curl [warn: curl ]
+        └─ Reads .env then exfiltrates by shelling out to curl — the outbound call is a child_process, not a recognised NETWORK_EGRESS primitive, so the credential rule never fires
+  ✅ caught         BLOCKED  exfil-env-sendbeacon [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  exfil-inline-require-net [CREDENTIAL_EXFILTRATION]
+  ⚠️  known-bypass   PASSED   exfil-concat-etc-shadow
+        └─ Sensitive path assembled from fragments so no literal matches SENSITIVE_PATH
+
+▸ dynamic-code-exec  (30)
+  ✅ caught         BLOCKED  dce-eval-exec [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-newfunction-execsync [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-base64-eval [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  dce-atob-eval [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  dce-hex-eval [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  dce-vm-spawn [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ clean          PASSED   dce-eval-only [warn: eval(]
+  ⚠️  known-bypass   PASSED   dce-bracket-eval
+        └─ eval reached via computed member access this["ev"+"al"] — no "eval(" literal for the regex
+  ⚠️  known-bypass   PASSED   dce-alias-eval
+        └─ eval aliased to a variable then called — source contains no "eval(" call site
+  ⚠️  known-bypass   PASSED   dce-join-require [warn: DYNAMIC_MODULE_LOAD]
+        └─ child_process module name reassembled from an array join
+  ⚠️  known-bypass   PASSED   dce-unicode-escape-eval
+        └─ eval spelled with a unicode escape (\u0065val) so the /\beval\s*\(/ regex misses it
+  ✅ caught         BLOCKED  dce-eval-spawnsync [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-function-execfile [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-base64-function [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  dce-atob-function [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  dce-settimeout-string-exec [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-setinterval-string-exec [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-vm-script-exec [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-vm-runinthis-spawn [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-eval-shellstring [DYNAMIC_CODE_EXEC_CHAIN]
+  ✅ caught         BLOCKED  dce-hex-function [OBFUSCATED_CODE_EXECUTION]
+  ⚠️  known-bypass   PASSED   dce-eval-decodeuri [warn: eval(]
+        └─ eval(decodeURIComponent(...)) — decodeURIComponent is not a CODE_DECODE signal, and bare eval is WARN-only, so nothing chains
+  ⚠️  known-bypass   PASSED   dce-fromcharcode-eval [warn: eval(]
+        └─ Payload built with String.fromCharCode then eval'd — no decode primitive is recognised
+  ⚠️  known-bypass   PASSED   dce-reverse-eval [warn: eval(]
+        └─ Reversed source string un-reversed at runtime then eval'd
+  ⚠️  known-bypass   PASSED   dce-constructor-constructor
+        └─ Function reached via constructor.constructor(...) — no eval/new Function literal for the regex, even though a process exec follows
+  ✅ caught         BLOCKED  dce-process-binding [DYNAMIC_CODE_EXEC_CHAIN]
+  ⚠️  known-bypass   PASSED   dce-generatorfunction [warn: execsync]
+        └─ Code compiled via the GeneratorFunction constructor — not matched by the DYNAMIC_CODE regexes
+  ⚠️  known-bypass   PASSED   dce-indirect-eval-decodeuri
+        └─ Indirect (0, eval) call on a decodeURIComponent payload — indirect eval still matches /\beval\s*\(/ but there is no chained decode/exec signal, so it stays WARN-only
+  ✅ caught         BLOCKED  dce-inline-require-vm [DYNAMIC_CODE_EXEC_CHAIN]
+  ⚠️  known-bypass   PASSED   dce-wasm-code
+        └─ Arbitrary logic delivered as a WebAssembly module — no JS dynamic-code signal at all
+
+▸ supply-chain  (21)
+  ✅ caught         BLOCKED  sc-pastebin-eval [dynamic-code-exec, REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-paste-ee [dynamic-code-exec, REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-postinstall-curl-bash [dynamic-code-exec, dynamic-code-exec]
+  ✅ caught         BLOCKED  sc-worm-selfpropagate [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  sc-fetch-eval-generic-host [REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-postinstall-wget-bash [dynamic-code-exec, dynamic-code-exec]
+  ✅ caught         BLOCKED  sc-pastebin-raw-newfunction [dynamic-code-exec, REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-paste-ee-eval [dynamic-code-exec, REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-preinstall-npmrc-steal [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  sc-discord-webhook-env [CREDENTIAL_EXFILTRATION]
+  ✅ caught         BLOCKED  sc-githubusercontent-eval [REMOTE_FETCH_EXEC]
+  ✅ caught         BLOCKED  sc-transfer-sh [REMOTE_FETCH_EXEC]
+  ⚠️  known-bypass   PASSED   sc-ngrok-beacon
+        └─ Periodic beacon to an ngrok C2 tunnel
+  ⚠️  known-bypass   PASSED   sc-telegram-bot [warn: ENV_NETWORK_EGRESS]
+        └─ Exfiltrates host info to a Telegram bot API (env read only, so no credential-file rule)
+  ⚠️  known-bypass   PASSED   sc-ip-literal-c2
+        └─ Fetches commands from a bare IP-literal C2 and runs them
+  ✅ caught         BLOCKED  sc-base64-domain [OBFUSCATED_CODE_EXECUTION, REMOTE_FETCH_EXEC]
+  ⚠️  known-bypass   PASSED   sc-dependency-confusion
+        └─ Beacons the resolved internal package list to an attacker registry (benign-looking network call, no dangerous chain)
+  ✅ caught         BLOCKED  sc-s3-remote-config-eval [REMOTE_FETCH_EXEC]
+  ⚠️  known-bypass   PASSED   sc-setimmediate-beacon [warn: ENV_NETWORK_EGRESS]
+        └─ Defers a beacon to process exit to dodge load-time scanning heuristics
+  ✅ caught         BLOCKED  sc-atob-eval-inline [OBFUSCATED_CODE_EXECUTION]
+  ✅ caught         BLOCKED  sc-preinstall-curl-sh [dynamic-code-exec]
+
+▸ benign-controls  (24)
+  ✅ clean          PASSED   benign-math
+  ✅ clean          PASSED   benign-http-client [warn: https.request, ENV_NETWORK_EGRESS]
+  ✅ clean          PASSED   benign-jwt-decode [warn: buffer.from]
+  ✅ clean          PASSED   benign-build-eval [warn: eval(]
+  ✅ clean          PASSED   benign-npmrc-registry [warn: NPMRC_NETWORK_EGRESS]
+  ✅ clean          PASSED   benign-word-list-stratum
+  ✅ clean          PASSED   benign-spawn-process-lib
+  ✅ clean          PASSED   benign-dotenv
+  ✅ clean          PASSED   benign-lodash-newfunction [warn: new function]
+  ✅ clean          PASSED   benign-node-fetch-client [warn: http.request, ENV_NETWORK_EGRESS]
+  ✅ clean          PASSED   benign-config-json-read
+  ✅ clean          PASSED   benign-ws-client
+  ✅ clean          PASSED   benign-dgram-dns
+  ✅ clean          PASSED   benign-tls-client
+  ✅ clean          PASSED   benign-vm-sandbox-config
+  ✅ clean          PASSED   benign-settimeout-fn
+  ✅ clean          PASSED   benign-fromcharcode-decoder
+  ✅ clean          PASSED   benign-decodeuri-parser
+  ✅ clean          PASSED   benign-base64-image [warn: buffer.from]
+  ✅ clean          PASSED   benign-spawn-git
+  ✅ clean          PASSED   benign-template-newfunction [warn: new function]
+  ✅ clean          PASSED   benign-pkg-registry-fetch [warn: ENV_NETWORK_EGRESS]
+  ✅ clean          PASSED   benign-axios-proxy-env [warn: ENV_NETWORK_EGRESS]
+  ✅ clean          PASSED   benign-execfile-ffprobe
+
+────────────────────────────────────────────────────────────────────────
+  Summary
+────────────────────────────────────────────────────────────────────────
+  Attacks run .............. 151  (125 malicious, 26 benign)
+  Blocked (QUARANTINE) ..... 95
+  Passed  (OBSERVE) ........ 56
+  Malicious caught ......... 95/125   (detection rate 76%)
+  Known bypasses ........... 30   (accepted static-analysis gaps)
+  NEW bypasses (regressions)  0
+  False positives .......... 0
+
+  Per category  (malicious caught / total malicious, false pos)
+    crypto-miner         19/26 known-bypass:7
+    reverse-shell        18/22 known-bypass:4
+    credential-exfil     24/27 known-bypass:3
+    dynamic-code-exec    18/29 known-bypass:11
+    supply-chain         16/21 known-bypass:5
+    benign-controls      —  
+
+  What got through (gap report)
+    [known] miner-concat-stratum  (string-concat-evasion)
+    [known] miner-base64-pool  (base64-config-evasion)
+    [known] miner-hex-pool  (hex-config-evasion)
+    [known] miner-env-pool  (config-driven-pool)
+    [known] miner-charcode-coinhive  (charcode-evasion)
+    [known] miner-concat-cryptonight  (string-concat-evasion)
+    [known] miner-wasm  (wasm-miner)
+    [known] revsh-node-net-spawn  (pure-node-socket-shell)
+    [known] revsh-node-http-beacon  (http-poll-c2)
+    [known] revsh-bash-i-only  (interactive-shell-only)
+    [known] revsh-base64-devtcp  (base64-cmd-evasion)
+    [known] exfil-concat-path  (concat-credential-path-evasion)
+    [known] exfil-env-via-curl  (exfil-through-shell)
+    [known] exfil-concat-etc-shadow  (concat-path-evasion)
+    [known] dce-bracket-eval  (bracket-notation-eval)
+    [known] dce-alias-eval  (variable-alias-eval)
+    [known] dce-join-require  (array-join-require)
+    [known] dce-unicode-escape-eval  (unicode-escape-eval)
+    [known] dce-eval-decodeuri  (decodeuri-eval)
+    [known] dce-fromcharcode-eval  (fromcharcode-eval)
+    [known] dce-reverse-eval  (reversed-string-eval)
+    [known] dce-constructor-constructor  (constructor-sandbox-escape)
+    [known] dce-generatorfunction  (generatorfunction-constructor)
+    [known] dce-indirect-eval-decodeuri  (indirect-eval-decodeuri)
+    [known] dce-wasm-code  (wasm-instantiate)
+    [known] sc-ngrok-beacon  (ngrok-c2-beacon)
+    [known] sc-telegram-bot  (telegram-bot-exfil)
+    [known] sc-ip-literal-c2  (ip-literal-c2)
+    [known] sc-dependency-confusion  (dependency-confusion-fetch)
+    [known] sc-setimmediate-beacon  (deferred-beacon)
+
+  PASS — no regressions, no false positives
+
+JSON summary written to results\redteam-summary.json

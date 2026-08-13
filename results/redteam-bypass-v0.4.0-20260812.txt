@@ -1,0 +1,136 @@
+
+> runtime-firewall-monorepo@1.0.0 redteam:bypass
+> node red-team/run.js --only-bypass
+
+
+════════════════════════════════════════════════════════════════════════
+  Helios Runtime Firewall — Red-Team Attack Suite
+  runtime-firewall-mvp :: Detector.scanModuleSync (index.js block rule)
+════════════════════════════════════════════════════════════════════════
+
+▸ crypto-miner  (26)
+  ⚠️  known-bypass   PASSED   miner-concat-stratum
+        └─ Pool URL reassembled from fragments to dodge the literal "stratum+tcp" signature (host is deliberately not a known-bad literal either)
+  ⚠️  known-bypass   PASSED   miner-base64-pool [warn: buffer.from]
+        └─ Pool URL held as a base64 blob and decoded at runtime (never eval'd, so OBFUSCATED_CODE_EXECUTION does not fire)
+  ⚠️  known-bypass   PASSED   miner-hex-pool [warn: buffer.from]
+        └─ Pool URL held as a hex blob, decoded at runtime, never eval'd
+  ⚠️  known-bypass   PASSED   miner-env-pool [warn: ENV_NETWORK_EGRESS]
+        └─ Pool URL supplied via env/config so no literal is present in source
+  ⚠️  known-bypass   PASSED   miner-charcode-coinhive
+        └─ Brand name reconstructed from char codes to dodge the literal
+  ⚠️  known-bypass   PASSED   miner-concat-cryptonight
+        └─ cryptonight algorithm string assembled from fragments
+  ⚠️  known-bypass   PASSED   miner-wasm
+        └─ WebAssembly miner core — no textual mining signature at all
+
+▸ reverse-shell  (22)
+  ⚠️  known-bypass   PASSED   revsh-node-net-spawn
+        └─ Pure-Node reverse shell: TCP socket wired to a spawned /bin/sh, no /dev/tcp string and no dynamic-code primitive (network+process-exec is not a blocking behavioral rule)
+  ⚠️  known-bypass   PASSED   revsh-node-http-beacon
+        └─ HTTP-polling C2 beacon: fetch a command, run it, POST the output (network + process-exec, which is not a blocking rule)
+  ⚠️  known-bypass   PASSED   revsh-bash-i-only
+        └─ bash -i without the >& redirect — deliberately not matched (F-29 hardened the signature to require the stdio redirect)
+  ⚠️  known-bypass   PASSED   revsh-base64-devtcp [warn: buffer.from]
+        └─ The /dev/tcp command is base64-encoded and shelled out via bash -c (no plaintext /dev/tcp literal, and decode+exec is not eval so OBFUSCATED_CODE_EXECUTION does not fire)
+
+▸ credential-exfil  (28)
+  ⚠️  known-bypass   PASSED   exfil-concat-path
+        └─ Credential path assembled from fragments so the SENSITIVE_PATH regex never matches the literal
+  ⚠️  known-bypass   PASSED   exfil-env-via-curl [warn: curl ]
+        └─ Reads .env then exfiltrates by shelling out to curl — the outbound call is a child_process, not a recognised NETWORK_EGRESS primitive, so the credential rule never fires
+  ⚠️  known-bypass   PASSED   exfil-concat-etc-shadow
+        └─ Sensitive path assembled from fragments so no literal matches SENSITIVE_PATH
+
+▸ dynamic-code-exec  (30)
+  ⚠️  known-bypass   PASSED   dce-bracket-eval
+        └─ eval reached via computed member access this["ev"+"al"] — no "eval(" literal for the regex
+  ⚠️  known-bypass   PASSED   dce-alias-eval
+        └─ eval aliased to a variable then called — source contains no "eval(" call site
+  ⚠️  known-bypass   PASSED   dce-join-require [warn: DYNAMIC_MODULE_LOAD]
+        └─ child_process module name reassembled from an array join
+  ⚠️  known-bypass   PASSED   dce-unicode-escape-eval
+        └─ eval spelled with a unicode escape (\u0065val) so the /\beval\s*\(/ regex misses it
+  ⚠️  known-bypass   PASSED   dce-eval-decodeuri [warn: eval(]
+        └─ eval(decodeURIComponent(...)) — decodeURIComponent is not a CODE_DECODE signal, and bare eval is WARN-only, so nothing chains
+  ⚠️  known-bypass   PASSED   dce-fromcharcode-eval [warn: eval(]
+        └─ Payload built with String.fromCharCode then eval'd — no decode primitive is recognised
+  ⚠️  known-bypass   PASSED   dce-reverse-eval [warn: eval(]
+        └─ Reversed source string un-reversed at runtime then eval'd
+  ⚠️  known-bypass   PASSED   dce-constructor-constructor
+        └─ Function reached via constructor.constructor(...) — no eval/new Function literal for the regex, even though a process exec follows
+  ⚠️  known-bypass   PASSED   dce-generatorfunction [warn: execsync]
+        └─ Code compiled via the GeneratorFunction constructor — not matched by the DYNAMIC_CODE regexes
+  ⚠️  known-bypass   PASSED   dce-indirect-eval-decodeuri
+        └─ Indirect (0, eval) call on a decodeURIComponent payload — indirect eval still matches /\beval\s*\(/ but there is no chained decode/exec signal, so it stays WARN-only
+  ⚠️  known-bypass   PASSED   dce-wasm-code
+        └─ Arbitrary logic delivered as a WebAssembly module — no JS dynamic-code signal at all
+
+▸ supply-chain  (21)
+  ⚠️  known-bypass   PASSED   sc-ngrok-beacon
+        └─ Periodic beacon to an ngrok C2 tunnel
+  ⚠️  known-bypass   PASSED   sc-telegram-bot [warn: ENV_NETWORK_EGRESS]
+        └─ Exfiltrates host info to a Telegram bot API (env read only, so no credential-file rule)
+  ⚠️  known-bypass   PASSED   sc-ip-literal-c2
+        └─ Fetches commands from a bare IP-literal C2 and runs them
+  ⚠️  known-bypass   PASSED   sc-dependency-confusion
+        └─ Beacons the resolved internal package list to an attacker registry (benign-looking network call, no dangerous chain)
+  ⚠️  known-bypass   PASSED   sc-setimmediate-beacon [warn: ENV_NETWORK_EGRESS]
+        └─ Defers a beacon to process exit to dodge load-time scanning heuristics
+
+▸ benign-controls  (24)
+
+────────────────────────────────────────────────────────────────────────
+  Summary
+────────────────────────────────────────────────────────────────────────
+  Attacks run .............. 151  (125 malicious, 26 benign)
+  Blocked (QUARANTINE) ..... 95
+  Passed  (OBSERVE) ........ 56
+  Malicious caught ......... 95/125   (detection rate 76%)
+  Known bypasses ........... 30   (accepted static-analysis gaps)
+  NEW bypasses (regressions)  0
+  False positives .......... 0
+
+  Per category  (malicious caught / total malicious, false pos)
+    crypto-miner         19/26 known-bypass:7
+    reverse-shell        18/22 known-bypass:4
+    credential-exfil     24/27 known-bypass:3
+    dynamic-code-exec    18/29 known-bypass:11
+    supply-chain         16/21 known-bypass:5
+    benign-controls      —  
+
+  What got through (gap report)
+    [known] miner-concat-stratum  (string-concat-evasion)
+    [known] miner-base64-pool  (base64-config-evasion)
+    [known] miner-hex-pool  (hex-config-evasion)
+    [known] miner-env-pool  (config-driven-pool)
+    [known] miner-charcode-coinhive  (charcode-evasion)
+    [known] miner-concat-cryptonight  (string-concat-evasion)
+    [known] miner-wasm  (wasm-miner)
+    [known] revsh-node-net-spawn  (pure-node-socket-shell)
+    [known] revsh-node-http-beacon  (http-poll-c2)
+    [known] revsh-bash-i-only  (interactive-shell-only)
+    [known] revsh-base64-devtcp  (base64-cmd-evasion)
+    [known] exfil-concat-path  (concat-credential-path-evasion)
+    [known] exfil-env-via-curl  (exfil-through-shell)
+    [known] exfil-concat-etc-shadow  (concat-path-evasion)
+    [known] dce-bracket-eval  (bracket-notation-eval)
+    [known] dce-alias-eval  (variable-alias-eval)
+    [known] dce-join-require  (array-join-require)
+    [known] dce-unicode-escape-eval  (unicode-escape-eval)
+    [known] dce-eval-decodeuri  (decodeuri-eval)
+    [known] dce-fromcharcode-eval  (fromcharcode-eval)
+    [known] dce-reverse-eval  (reversed-string-eval)
+    [known] dce-constructor-constructor  (constructor-sandbox-escape)
+    [known] dce-generatorfunction  (generatorfunction-constructor)
+    [known] dce-indirect-eval-decodeuri  (indirect-eval-decodeuri)
+    [known] dce-wasm-code  (wasm-instantiate)
+    [known] sc-ngrok-beacon  (ngrok-c2-beacon)
+    [known] sc-telegram-bot  (telegram-bot-exfil)
+    [known] sc-ip-literal-c2  (ip-literal-c2)
+    [known] sc-dependency-confusion  (dependency-confusion-fetch)
+    [known] sc-setimmediate-beacon  (deferred-beacon)
+
+  PASS — no regressions, no false positives
+
+JSON summary written to results\redteam-summary.json

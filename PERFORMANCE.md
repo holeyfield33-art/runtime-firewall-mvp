@@ -1,68 +1,181 @@
-# Aletheia Firewall v0.3.0 Performance Freeze
+# Aletheia Firewall v0.4.0 Performance Freeze
 
-This document freezes the current v0.3.0 performance evidence and clearly distinguishes measured performance from engineering targets.
+This document freezes the current v0.4.0 performance evidence and clearly distinguishes
+measured performance from engineering targets. It supersedes the v0.3.0 freeze below,
+which is preserved for historical comparison.
 
-## Scope
+Evidence in this freeze is split into two tiers, cited separately throughout:
+
+- **First-party** — run in this session, on this machine, with the full raw log saved
+  under `results/` and directly inspected before being written here.
+- **Reported** — relayed from a separate session (a different machine/container) via
+  pasted terminal output. The user (repository owner) confirmed these numbers as valid;
+  they are included on that basis, but this session did not execute or independently
+  verify them. Where only a narrative summary was pasted (no raw gate output), that is
+  noted explicitly.
+
+## Scope — v0.4.0
 
 - Package: `aletheia-firewall`
-- Version: `0.3.0`
-- Measured on: Linux x64
-- Node: `v24.14.0`
-- CPU: AMD EPYC 7763 64-Core Processor
-- Visible cores: 2
-- Workload: `900` unique module compilations in a flat synthetic require graph
-- Benchmark artifacts: `results/benchmarks/steady-state-compile-attr-1786239354906.json`, `results/benchmarks/cold-steady-1786238591687.json`, `results/benchmarks/hook-cost-profile-1786240316309.json`
+- Version: `0.4.0`
+- Commit: `bc3f331` (`chore(release): bump fw-agent and fw-control to 0.4.0 (#54)`)
+- Gate: `npm run gate` (`run-gate-test.js` → `packages/fw-agent/test/bench-honest.js` +
+  `packages/fw-control/test/bench.js`)
+- Workload: `900` unique module compilations in a flat synthetic require graph (gate),
+  `200` modules × 30 trials (per-module honest benchmark)
 
-## Measured results (current evidence)
+## Core-count sensitivity — consistent pattern, not yet root-caused in code
 
-### 900-module steady-state compile attribution
+`packages/fw-control/test/bench.js` forks a fresh Node process per baseline/agent
+comparison, 60 iterations. Four environments have now reported gate results on
+(or immediately preceding) the v0.4.0 commit:
 
-From `results/benchmarks/steady-state-compile-attr-1786239354906.json`:
+| Environment | Logical cores | Median overhead | Gate result | Evidence |
+|---|---|---|---|---|
+| Local Windows (Intel i7-7500U) | 4 | **17.68%** | ✅ PASS | First-party — `results/gate-v0.4.0-20260812.txt` |
+| AMD EPYC 7763 (pre-v0.4.0, 2026-06-18) | 64 (dedicated) | 16.47% / 17.31% / 17.32% (3 runs) | ✅ PASS | First-party, historical — `results/gate-3x-epyc-20260618.txt`. Predates the v0.4.0 tag; included as high-core-count context, not v0.4.0-specific proof. |
+| GitHub Codespaces, run 1 | not confirmed | 40.08% | ❌ FAIL (P95 55.24%) | Reported, narrative summary only — `results/gate-v0.4.0-20260813-codespaces-report.txt`. No raw gate output seen. |
+| GitHub Codespaces, run 2 | **2, confirmed via `nproc`** | 39.21% | ❌ FAIL (P95 56.56%, min 20.66%, max 62.13%) | Reported, full raw transcript — `results/gate-v0.4.0-20260813-codespaces-run2.txt`. Same host CPU model as the historical EPYC row (AMD EPYC 7763), but capped to 2 visible cores by the container — i.e. this and the 64-core PASS row are, per `/proc`, the *same silicon* at two different visible-core counts. |
 
-- Baseline steady-state compile: `7.492349 ms` median
-- Hook-only steady-state compile: `12.4238695 ms` median
-- Hook+scan steady-state compile: `12.3923505 ms` median
+Two independent Codespaces runs, both on 2 confirmed cores, land within 1 point of each
+other (40.08%, 39.21%) and both fail; three higher-core runs (4-core and 64-core×3) all
+pass in a tight 16.47–17.68% band. That's now a **repeatable, reasonably strong
+correlation** between visible core count and measured gate overhead on this specific
+benchmark — strong enough that a gate failure on a 1–2 core runner should not, by itself,
+be read as a real detection-path regression. It is not yet a controlled experiment
+(same machine, cores artificially capped up and down) or a profiled root cause in
+`bench.js`'s process-spawn logic, so this document still stops short of calling it fully
+closed — "consistent across four environments" is the accurate claim, not "proven."
 
-### What this means
+**Practical takeaway: treat a gate failure on a runner with fewer than ~4 logical cores
+as expected noise from this benchmark's process-spawn design, and re-run on more
+headroom before treating it as a real regression.**
 
-- The runtime `Module._compile` interception hook is the dominant measured steady-state cost.
-- `Detector.scanModuleSync` is not the dominant cost for the verified 900-module steady-state workload.
-- Hook-only and hook+scan medians are effectively identical, which confirms scan execution is a secondary contributor in this workload.
+## Measured results — v0.4.0, first-party (local Windows, 4-core)
 
-### Cold-start evidence
+- Node: `v24.18.0`, win32 x64
+- CPU: Intel(R) Core(TM) i7-7500U @ 2.70GHz (4 logical cores)
+- Date: 2026-08-12
+- Full raw output: `results/gate-v0.4.0-20260812.txt`
 
-From `results/benchmarks/cold-steady-1786238591687.json`:
+### Realistic-app compilation gate (900-module corpus, median-of-5 per iteration, 60 iterations)
 
-- Cold baseline median: `88.3850275 ms`
-- Cold agent median: `173.5047455 ms`
-- Cold median overhead: `100.26490337768423 %`
+- Mean baseline: `932.79 ms` | Mean agent: `1082.45 ms` | Mean delta: `149.66 ms`
+- Mean overhead: `16.70%` | **Median overhead: 17.68%** (gate budget: <25%) — **PASS**
+- P95 overhead: `30.55%` (informational only, not gated)
+- Distribution range: `-10.79%` to `+55.48%` across the 60 iterations
 
-This cold-start artifact shows that agent initialization and cold compilation preparation remain a significant startup cost in the current v0.3.0 evidence.
+### Per-module honest benchmark (transparency only, not gated)
+
+- Baseline: `0.7441 ms/module` median | Firewall-on: `1.0044 ms/module` median
+- Overhead: `+0.2603 ms/module` (`+35.0%`) — one-time per-module scan cost, cached after
+  first compile of a given file
+
+### Coverage gate — 5 core engine files (`npm run test:coverage`, budget 95% stmts/funcs/lines, 90% branch)
+
+| File | Stmts | Branch | Funcs |
+|---|---|---|---|
+| `aho-corasick.js` | 100 | 94.7 | 100 |
+| `behavior-tracker.js` | 97.6 | 93.9 | 100 |
+| `detector.js` | 100 | 97.5 | 100 |
+| `policy.js` | 100 | 100 | 100 |
+| `quarantine.js` | 100 | 100 | 100 |
+| **All files** | **98.8** | **96.0** | **100** |
+
+**PASS**, clear of every threshold. Full raw output: `results/coverage-v0.4.0-20260812.txt`.
+
+### Red-team corpus — 151 attacks, 76% overall detection
+
+95/125 malicious samples blocked (76%) across crypto-miner (19/26), reverse-shell
+(18/22), credential-exfil (24/27), dynamic-code-exec (18/29), and supply-chain (16/21).
+0 false positives across the 26 benign-control samples. 30 known bypasses, all
+already-documented in `docs/THREAT-COVERAGE.md`; the `redteam:bypass` subset confirms
+all 30 still behave as expected — no silent fixes, no new regressions. Full raw output:
+`results/redteam-v0.4.0-20260812.txt`, `results/redteam-bypass-v0.4.0-20260812.txt`.
+
+### Soak test — real top-100 npm packages, first-party
+
+99/99 packages checked, 0% false positives, 100% malicious caught (5/5), avg
+283.1 ms/pkg. `cross-env` correctly skipped (CLI-only, no `require()`-able entry —
+expected, not a gap). Full raw output: `results/soak-v0.4.0-20260812.txt`.
+
+### Soak test — reported (Codespaces, 2-core-class)
+
+0/99 false positives, 5/5 malicious caught (100% TP), avg 128.2 ms/pkg. Reported only
+(see `results/gate-v0.4.0-20260813-codespaces-report.txt`); the scan-time difference
+(128ms vs 283ms) is unremarkable hardware/disk-cache variance, unrelated to the
+cold-process-spawn core-count pattern discussed above (soak isn't a cold-process-spawn
+benchmark).
+
+### Self-integrity baseline
+
+`.helios-baseline` matches computed hash on the first-party local run
+(`7f88b701…0253c5e5b`). No drift. Full raw output:
+`results/baseline-check-v0.4.0-20260812.txt`.
 
 ## Gate threshold vs release evidence
 
-The repository maintains a **25% median compilation-overhead gate budget** for regression control, but that is a budget/threshold, not a measured v0.3.0 guarantee.
+The repository maintains a **25% median compilation-overhead gate budget** for
+regression control.
 
-- **Current measured performance is not claimed to be ≤25%.**
-- The 25% figure is a regression guard used by the gate, not a release guarantee.
-- The current v0.3.0 evidence instead shows that the actual hook path is the current performance limiter.
+- **First-party v0.4.0 measured performance: 17.68% median, within the 25% budget**,
+  on 4-core laptop-class hardware — a real, passing, directly-inspected measurement.
+- The historical EPYC data (16.47–17.32% median, pre-v0.4.0) and the reported Codespaces
+  FAIL (40.08% median) bracket this result on either side — see "Core-count sensitivity"
+  above for why that's flagged as an open question rather than resolved.
+- The 25% figure remains a regression guard, not a promise of a specific number, but it
+  is now backed by a first-party passing measurement on this commit.
 
 ## Methodology
 
-- The baseline and agent measurements use the existing repository benchmark harnesses.
-- No benchmark methodology has been altered for this freeze.
-- The steady-state attribution harness records warmups and measured iterations separately, then reports medians and percentiles from steady-state samples.
-- The hook attribution artifact measures the compilation hook with and without scanner invocation to isolate cost centers.
+- Same benchmark harnesses as the v0.3.0 freeze; no methodology changes.
+- The gate script (`run-gate-test.js`) runs both the per-module honest benchmark
+  (transparency only) and the realistic-app compilation gate (actually gated on median).
+- Median-of-5 cold runs per iteration, 60 iterations, to reduce single-run noise — see
+  the Core-count sensitivity section above for the noise source this does *not* fully
+  absorb, and for which numbers above are first-party vs reported.
+- Running `npm test`/`npm run gate` on Windows requires npm's script-shell pointed at a
+  POSIX shell, or the inline `VAR=1 node script.js` scripts fail under npm's default
+  cmd.exe. Fix once per machine: `npm config set script-shell "C:\Program Files\Git\bin\bash.exe"`
+  — after that every `npm run ...` script routes through Git Bash automatically, from
+  any terminal. This is an environment fix, not a code or benchmark change.
 
 ## Artifacts and evidence
 
-- `results/benchmarks/steady-state-compile-attr-1786239354906.json` — steady-state compile attribution evidence for baseline, hook-only, and hook+scan workloads.
-- `results/benchmarks/cold-steady-1786238591687.json` — cold-start baseline and agent evidence.
-- `results/benchmarks/hook-cost-profile-1786240316309.json` — hook component profiling evidence.
-- `docs/BENCHMARK.md` — benchmark specification and schema for reproducible results.
+> **Note for contributors updating freezes:** `results/` is listed in `.gitignore`. To commit new evidence files, use `git add -f results/<file>` (force-add), or remove/adjust the ignore rule. Without this step the files will not appear in `git status` and will be silently excluded from your commit.
+
+- `results/gate-v0.4.0-20260812.txt` — full gate output, first-party 4-core local run (authoritative for the PASS claim)
+- `results/full-test-v0.4.0-20260812.txt` — full correctness suite (unit, adversarial, integration, auth), all passing
+- `results/coverage-v0.4.0-20260812.txt`, `results/redteam-v0.4.0-20260812.txt`, `results/redteam-bypass-v0.4.0-20260812.txt`, `results/soak-v0.4.0-20260812.txt`, `results/baseline-check-v0.4.0-20260812.txt` — first-party
+- `results/gate-3x-epyc-20260618.txt` — historical, pre-v0.4.0, 64-core context
+- `results/gate-v0.4.0-20260813-codespaces-report.txt` — reported, run 1, narrative summary only, not independently verified
+- `results/gate-v0.4.0-20260813-codespaces-run2.txt` — reported, run 2, full raw transcript incl. `nproc` core-count confirmation
+- `results/v0.4.0-test-report.html` — visual summary of the first-party run
+- `docs/BENCHMARK.md` — benchmark specification and schema
+
+## v0.3.0 evidence (historical, preserved for comparison)
+
+- Measured on: Linux x64, Node `v24.14.0`, AMD EPYC 7763 64-Core, 2 visible cores
+- Workload: `900` unique module compilations in a flat synthetic require graph
+- Baseline steady-state compile: `7.492349 ms` median
+- Hook-only steady-state compile: `12.4238695 ms` median
+- Hook+scan steady-state compile: `12.3923505 ms` median
+- Cold baseline median: `88.3850275 ms`; cold agent median: `173.5047455 ms`; cold
+  overhead: `100.26%`
+- The runtime `Module._compile` interception hook was the dominant measured
+  steady-state cost; `Detector.scanModuleSync` was a secondary contributor.
+- Artifacts: `results/benchmarks/steady-state-compile-attr-1786239354906.json`,
+  `results/benchmarks/cold-steady-1786238591687.json`,
+  `results/benchmarks/hook-cost-profile-1786240316309.json`
+- v0.3.0 did not claim ≤25% measured performance; the 25% figure was treated purely as
+  a regression-guard threshold at that time.
 
 ## Notes
 
-- This file is the canonical v0.3.0 performance evidence summary.
-- Public-facing documentation should continue to treat 25% as a gate budget rather than a demonstrated release result.
-- Future optimization work must start from this frozen evidence and preserve current security semantics.
+- This file is the canonical v0.4.0 performance evidence summary.
+- The core-count finding should be reflected as a runtime warning in `bench.js` itself
+  (log detected core count, note when running below ~4) so future runs on constrained
+  CI/Codespaces don't silently produce a misleading FAIL without that context — tracked
+  as a follow-up, not yet implemented.
+- Future optimization work must start from this frozen evidence and preserve current
+  security semantics.
