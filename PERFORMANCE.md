@@ -142,6 +142,8 @@ regression control.
 
 ## Artifacts and evidence
 
+> **Note for contributors updating freezes:** `results/` is listed in `.gitignore`. To commit new evidence files, use `git add -f results/<file>` (force-add), or remove/adjust the ignore rule. Without this step the files will not appear in `git status` and will be silently excluded from your commit.
+
 - `results/gate-v0.4.0-20260812.txt` — full gate output, first-party 4-core local run (authoritative for the PASS claim)
 - `results/full-test-v0.4.0-20260812.txt` — full correctness suite (unit, adversarial, integration, auth), all passing
 - `results/coverage-v0.4.0-20260812.txt`, `results/redteam-v0.4.0-20260812.txt`, `results/redteam-bypass-v0.4.0-20260812.txt`, `results/soak-v0.4.0-20260812.txt`, `results/baseline-check-v0.4.0-20260812.txt` — first-party
