@@ -1,0 +1,12 @@
+Aletheia soak test | agent: C:\Users\SuperAdmin\.vscode\runtime-firewall-mvp\packages\fw-agent
+================================================================
+NOTE: 1 corpus package(s) not installed, skipping: cross-env
+      To include them, run:  npm install cross-env
+
+
+[round 1/1] 2026-08-13T01:39:56.991Z
+  FALSE POSITIVES : 0/99 legit blocked  (0%)  
+  TRUE POSITIVES  : 5/5 malicious caught (100%)  
+  avg scan/pkg    : 283.1 ms
+
+Results appended to results/soak-2026-08-13.jsonl

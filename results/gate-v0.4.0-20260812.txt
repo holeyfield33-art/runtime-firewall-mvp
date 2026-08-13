@@ -1,0 +1,49 @@
+
+> runtime-firewall-monorepo@1.0.0 gate
+> node run-gate-test.js
+
+Runtime Firewall performance audit - both scopes.
+
+=== Per-module honest benchmark (transparency, NOT gated) ===
+(packages\fw-agent\test\bench-honest.js)
+
+# aletheia-firewall bench-honest | node v24.18.0 | win32 x64 | Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz | 200 modules x 30 trials | 2026-08-13T01:18:25.370Z
+baseline    median: 0.7441 ms/module
+firewall-on median: 1.0044 ms/module
+overhead          : +0.2603 ms/module (+35.0%)
+note: one-time per-module startup cost (scan runs once per file, then cached)
+
+=== Realistic-app compilation gate (median < 25%, P95 informational) ===
+(packages\fw-control\test\bench.js)
+
+⏱️  Running Cold-Process Realistic Compilation Hook Gate (60 iterations, median-of-5 per iter for robustness)...
+
+[Setup] Temp dir: C:\Users\SUPERA~1\AppData\Local\Temp\fw-bench-6G5wGx
+[Setup] Agent: C:\Users\SuperAdmin\.vscode\runtime-firewall-mvp\packages\fw-agent\index.js
+[Setup] 900-module corpus generated (flat). Baseline: -r agent (no FW=1 → disabled hook); Agent: -r + FW_ENABLE_DETECTION=1 (hook+scans). Fair preload A/B. Per-iter uses median of 5 cold runs for noise resistance. Larger corpus amortizes fixed jitter.
+
+[Iter   1] Baseline: 1129.48ms | Agent: 942.54ms | Delta: -186.94ms | Overhead: -16.55% (median-of-5)
+[Iter  10] Baseline: 1263.08ms | Agent: 1509.43ms | Delta: 246.35ms | Overhead: 19.50% (median-of-5)
+[Iter  20] Baseline: 1169.11ms | Agent: 1042.94ms | Delta: -126.18ms | Overhead: -10.79% (median-of-5)
+[Iter  30] Baseline: 985.67ms | Agent: 960.66ms | Delta: -25.01ms | Overhead: -2.54% (median-of-5)
+[Iter  40] Baseline: 844.41ms | Agent: 988.49ms | Delta: 144.08ms | Overhead: 17.06% (median-of-5)
+[Iter  50] Baseline: 1056.81ms | Agent: 1215.16ms | Delta: 158.36ms | Overhead: 14.98% (median-of-5)
+[Iter  60] Baseline: 865.39ms | Agent: 1017.09ms | Delta: 151.70ms | Overhead: 17.53% (median-of-5)
+
+[Absolute Metrics] Mean Baseline: 932.79ms | Mean Agent: 1082.45ms | Mean Delta: 149.66ms
+[Statistics] Mean: 16.70% | Median: 17.68% | P95: 30.55%
+[Distribution] Min: -10.79% | Max: 55.48%
+
+[Benchmark Artifact] Written machine-readable results to: C:\Users\SuperAdmin\.vscode\runtime-firewall-mvp\results\benchmarks\raw\bench-1786584565242.json
+
+[Final Verification] Compilation hook performance gate evaluating...
+
+✅ CRITERIA MET: Compilation hook overhead within budget.
+   Median 17.68% < 25% (gate) | P95 30.55% (informational)
+
+========================================
+Per-module benchmark ran: clean
+Realistic-app gate:       PASS
+========================================
+
+Gate result: PASS - realistic-app overhead within budget.

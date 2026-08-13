@@ -1,0 +1,5 @@
+
+> runtime-firewall-monorepo@1.0.0 baseline:check
+> node scripts/generate-baseline.js --check
+
+[generate-baseline] OK — baseline matches (7f88b7011cdf41ed82ce047932b27fee86e36aca3cc010845acdcea0253c5e5b).

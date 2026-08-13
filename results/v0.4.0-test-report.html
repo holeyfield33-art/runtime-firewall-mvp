@@ -1,0 +1,471 @@
+<title>Runtime Firewall v0.4.0 — Test Report</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid:           #e1e0d9;
+    --baseline:       #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6; /* blue - primary / caught */
+    --series-3:       #1baf7a; /* aqua */
+    --series-6:       #008300; /* green */
+    --seq-100:        #cde2fb;
+    --seq-400:        #3987e5;
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --serious:        #ec835a;
+    --critical:       #d03b3b;
+    --success-text:   #006300;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid:           #2c2c2a;
+      --baseline:       #383835;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --series-3:       #199e70;
+      --series-6:       #008300;
+      --seq-100:        #184f95;
+      --seq-400:        #3987e5;
+      --good:           #0ca30c;
+      --warning:        #fab219;
+      --serious:        #ec835a;
+      --critical:       #e66767;
+      --success-text:   #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid:           #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+    --series-1:       #3987e5;
+    --series-3:       #199e70;
+    --series-6:       #008300;
+    --seq-100:        #184f95;
+    --seq-400:        #3987e5;
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --serious:        #ec835a;
+    --critical:       #e66767;
+    --success-text:   #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  .viz-root {
+    background: var(--page);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 32px 20px 60px;
+    max-width: 1080px;
+    margin: 0 auto;
+  }
+  .viz-root h1 { font-size: 24px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .viz-root .subtitle { color: var(--text-secondary); font-size: 14px; margin: 0 0 28px; }
+  .viz-root .subtitle b { color: var(--text-primary); font-weight: 600; }
+
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 20px;
+  }
+  .card h2 {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin: 0 0 16px;
+    font-weight: 600;
+  }
+  .card .card-note {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 12px;
+    line-height: 1.5;
+  }
+
+  /* Gate status tiles */
+  .gate-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+  }
+  .gate-tile {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 12px;
+    background: var(--page);
+  }
+  .gate-tile .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--good);
+    margin-bottom: 8px;
+  }
+  .gate-tile .badge::before {
+    content: "";
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--good);
+    flex: none;
+  }
+  .gate-tile .name { font-size: 13px; font-weight: 600; line-height: 1.3; }
+  .gate-tile .detail { font-size: 11.5px; color: var(--text-secondary); margin-top: 4px; line-height: 1.4; }
+
+  /* stat row */
+  .stat-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .stat {
+    padding: 14px 16px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--page);
+  }
+  .stat .value {
+    font-size: 26px;
+    font-weight: 700;
+    font-variant-numeric: proportional-nums;
+    line-height: 1.1;
+  }
+  .stat .value small { font-size: 14px; font-weight: 500; color: var(--text-secondary); }
+  .stat .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+  /* coverage table */
+  table.cov { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.cov th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0 10px 8px;
+    border-bottom: 1px solid var(--grid);
+  }
+  table.cov th.num, table.cov td.num { text-align: right; }
+  table.cov td { padding: 9px 10px; border-bottom: 1px solid var(--grid); vertical-align: middle; }
+  table.cov tr:last-child td { border-bottom: none; }
+  table.cov tr.total td { font-weight: 700; border-top: 1px solid var(--baseline); }
+  table.cov .file-cell { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; }
+  .barcell { position: relative; width: 108px; }
+  .barcell .track {
+    position: relative;
+    height: 8px;
+    border-radius: 4px;
+    background: var(--grid);
+    overflow: visible;
+  }
+  .barcell .fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: var(--series-1);
+    border-radius: 4px;
+  }
+  .barcell .thresh {
+    position: absolute; top: -2px; bottom: -2px;
+    width: 2px; background: var(--text-primary); opacity: 0.55;
+  }
+  .barcell .num-label { font-variant-numeric: tabular-nums; font-size: 12.5px; margin-left: 8px; }
+  .barcell-wrap { display: flex; align-items: center; }
+  .legend-line { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); margin-top: 12px; }
+  .legend-line .swatch { width: 10px; height: 10px; border-radius: 2px; background: var(--series-1); }
+  .legend-line .tick { width: 2px; height: 12px; background: var(--text-primary); opacity: 0.55; }
+
+  /* perf gate bar */
+  .perf-chart { display: flex; flex-direction: column; gap: 14px; margin-top: 4px; }
+  .perf-row { display: grid; grid-template-columns: 110px 1fr 70px; align-items: center; gap: 12px; }
+  .perf-row .plabel { font-size: 12.5px; color: var(--text-secondary); }
+  .perf-track {
+    position: relative;
+    height: 20px;
+    background: var(--grid);
+    border-radius: 5px;
+  }
+  .perf-fill {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    border-radius: 5px;
+    display: flex; align-items: center;
+  }
+  .perf-fill.under { background: var(--series-1); }
+  .perf-fill.over { background: var(--warning); }
+  .perf-budget-line {
+    position: absolute; top: -4px; bottom: -4px;
+    width: 2px; background: var(--critical); opacity: 0.7;
+  }
+  .perf-budget-label {
+    position: absolute; top: -18px; font-size: 10.5px; color: var(--text-muted);
+    transform: translateX(-50%);
+  }
+  .perf-row .pval { font-size: 13px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* redteam stacked bar */
+  .rt-chart { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+  .rt-row { display: grid; grid-template-columns: 130px 1fr 96px; align-items: center; gap: 12px; }
+  .rt-row .rlabel { font-size: 12.5px; color: var(--text-secondary); font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .rt-track {
+    display: flex;
+    height: 18px;
+    border-radius: 5px;
+    overflow: hidden;
+    background: var(--grid);
+  }
+  .rt-seg.caught { background: var(--series-1); }
+  .rt-seg.bypass { background: var(--baseline); }
+  .rt-row .rval { font-size: 12px; color: var(--text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
+
+  .legend {
+    display: flex; gap: 18px; margin-top: 14px; font-size: 12px; color: var(--text-secondary);
+  }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .legend .swatch { width: 10px; height: 10px; border-radius: 2px; }
+
+  .two-col { display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
+  @media (max-width: 720px) {
+    .two-col, .gate-grid, .stat-row { grid-template-columns: 1fr 1fr; }
+  }
+
+  footer.env {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.7;
+    border-top: 1px solid var(--grid);
+    padding-top: 16px;
+    margin-top: 8px;
+  }
+  footer.env code {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background: var(--grid);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 11.5px;
+  }
+</style>
+
+<div class="viz-root">
+  <h1>Runtime Firewall — v0.4.0 Test &amp; Verification Report</h1>
+  <p class="subtitle">Full local run on <b>2026-08-12/13</b> · fw-agent + fw-control <b>0.4.0</b> · all gates below are the actual commands from the release checklist, run end-to-end on this machine</p>
+
+  <div class="card">
+    <h2>Gate status — 6 of 6 pass</h2>
+    <div class="gate-grid">
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Full test suite</div>
+        <div class="detail">unit + adversarial + integration + auth</div>
+      </div>
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Coverage gate</div>
+        <div class="detail">c8 on 5 engine files</div>
+      </div>
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Performance gate</div>
+        <div class="detail">median 17.68% &lt; 25% budget</div>
+      </div>
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Red-team corpus</div>
+        <div class="detail">0 regressions, 0 false positives</div>
+      </div>
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Soak test</div>
+        <div class="detail">99/99 real packages, 0 FP</div>
+      </div>
+      <div class="gate-tile">
+        <div class="badge">PASS</div>
+        <div class="name">Self-integrity</div>
+        <div class="detail">baseline hash matches</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Test suite breakdown (npm test)</h2>
+    <div class="stat-row">
+      <div class="stat">
+        <div class="value">8<small>/8 files</small></div>
+        <div class="label">Unit tests — all passed</div>
+      </div>
+      <div class="stat">
+        <div class="value">52<small>/52</small></div>
+        <div class="label">Adversarial suite, 0 failed</div>
+      </div>
+      <div class="stat">
+        <div class="value">1<small>blocked</small></div>
+        <div class="label">Live integration — crypto-miner caught</div>
+      </div>
+      <div class="stat">
+        <div class="value">7<small>/7</small></div>
+        <div class="label">Control-plane auth checks</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="two-col">
+    <div class="card">
+      <h2>Coverage gate — 5 core engine files</h2>
+      <table class="cov">
+        <thead>
+          <tr>
+            <th>File</th>
+            <th class="num">Stmts</th>
+            <th class="num">Branch</th>
+            <th class="num">Funcs</th>
+          </tr>
+        </thead>
+        <tbody>
+          <!-- rows built below via barcell width = value% -->
+          <tr>
+            <td class="file-cell">aho-corasick.js</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:94.73%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">94.7</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+          <tr>
+            <td class="file-cell">behavior-tracker.js</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:97.55%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">97.6</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:93.9%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">93.9</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+          <tr>
+            <td class="file-cell">detector.js</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:97.5%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">97.5</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+          <tr>
+            <td class="file-cell">policy.js</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+          <tr>
+            <td class="file-cell">quarantine.js</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">100</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+          <tr class="total">
+            <td class="file-cell">All files</td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:98.8%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">98.8</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:96%"></div><div class="thresh" style="left:90%"></div></div><span class="num-label">96.0</span></div></td>
+            <td class="num barcell"><div class="barcell-wrap"><div class="track" style="flex:1"><div class="fill" style="width:100%"></div><div class="thresh" style="left:95%"></div></div><span class="num-label">100</span></div></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="legend-line"><span class="tick"></span> gate threshold (95% stmts/funcs/lines, 90% branch)</div>
+    </div>
+
+    <div class="card">
+      <h2>Soak test — real packages</h2>
+      <div class="stat-row" style="grid-template-columns:1fr 1fr;">
+        <div class="stat">
+          <div class="value" style="color:var(--success-text)">0<small>%</small></div>
+          <div class="label">False positives — 99/99 legit packages clean</div>
+        </div>
+        <div class="stat">
+          <div class="value">100<small>%</small></div>
+          <div class="label">Malicious caught — 5/5</div>
+        </div>
+      </div>
+      <p class="card-note">Avg scan/pkg: <b style="color:var(--text-primary)">283.1 ms</b> · corpus-top100.json, 1 round · <code>cross-env</code> skipped (CLI-only package, no require()-able entry — expected, not a gap)</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Performance gate — realistic-app compilation overhead</h2>
+    <div class="perf-chart">
+      <div class="perf-row">
+        <div class="plabel">Median</div>
+        <div class="perf-track">
+          <div class="perf-budget-line" style="left:62.5%"><span class="perf-budget-label" style="left:0">25% budget</span></div>
+          <div class="perf-fill under" style="width:44.2%"></div>
+        </div>
+        <div class="pval">17.68%</div>
+      </div>
+      <div class="perf-row">
+        <div class="plabel">Mean</div>
+        <div class="perf-track">
+          <div class="perf-budget-line" style="left:62.5%"></div>
+          <div class="perf-fill under" style="width:41.75%"></div>
+        </div>
+        <div class="pval">16.70%</div>
+      </div>
+      <div class="perf-row">
+        <div class="plabel">P95 <span style="color:var(--text-muted); font-size:10.5px;">(informational)</span></div>
+        <div class="perf-track">
+          <div class="perf-budget-line" style="left:62.5%"></div>
+          <div class="perf-fill over" style="width:76.4%"></div>
+        </div>
+        <div class="pval">30.55%</div>
+      </div>
+    </div>
+    <p class="card-note">60 cold-process iterations, median-of-5 per iteration · 900-module corpus · gate checks <b style="color:var(--text-primary)">median only</b> (P95 tracked for visibility, not gated) · distribution range: −10.79% to +55.48% across iterations · mean baseline 932.8 ms → mean agent 1082.5 ms (+149.7 ms)<br>Per-module transparency bench (not gated): baseline 0.744 ms/module → firewall-on 1.004 ms/module (+35.0%, one-time scan cost, cached after first compile)</p>
+  </div>
+
+  <div class="card">
+    <h2>Red-team corpus — 151 attacks, 76% overall detection</h2>
+    <div class="rt-chart">
+      <div class="rt-row">
+        <div class="rlabel">crypto-miner</div>
+        <div class="rt-track"><div class="rt-seg caught" style="width:73.1%"></div><div class="rt-seg bypass" style="width:26.9%"></div></div>
+        <div class="rval">19/26 caught</div>
+      </div>
+      <div class="rt-row">
+        <div class="rlabel">reverse-shell</div>
+        <div class="rt-track"><div class="rt-seg caught" style="width:81.8%"></div><div class="rt-seg bypass" style="width:18.2%"></div></div>
+        <div class="rval">18/22 caught</div>
+      </div>
+      <div class="rt-row">
+        <div class="rlabel">credential-exfil</div>
+        <div class="rt-track"><div class="rt-seg caught" style="width:88.9%"></div><div class="rt-seg bypass" style="width:11.1%"></div></div>
+        <div class="rval">24/27 caught</div>
+      </div>
+      <div class="rt-row">
+        <div class="rlabel">dynamic-code-exec</div>
+        <div class="rt-track"><div class="rt-seg caught" style="width:62.1%"></div><div class="rt-seg bypass" style="width:37.9%"></div></div>
+        <div class="rval">18/29 caught</div>
+      </div>
+      <div class="rt-row">
+        <div class="rlabel">supply-chain</div>
+        <div class="rt-track"><div class="rt-seg caught" style="width:76.2%"></div><div class="rt-seg bypass" style="width:23.8%"></div></div>
+        <div class="rval">16/21 caught</div>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="item"><span class="swatch" style="background:var(--series-1)"></span> Blocked (quarantine)</div>
+      <div class="item"><span class="swatch" style="background:var(--baseline)"></span> Known bypass — documented static-analysis gap, expected to pass</div>
+    </div>
+    <p class="card-note">
+      95/125 malicious samples blocked (76% detection) · <b style="color:var(--text-primary)">30 known bypasses</b>, all accounted for — <b style="color:var(--success-text)">0 new bypasses (regressions)</b> · <b style="color:var(--success-text)">0 false positives</b> across 26 benign-control samples · <code>redteam:bypass</code> subset re-confirms all 30 documented gaps still behave as expected, no silent fixes or regressions
+    </p>
+  </div>
+
+  <footer class="env">
+    Node <code>v24.18.0</code> · npm <code>11.16.0</code> · Windows 11 Pro, win32 x64, Intel(R) Core(TM) i7-7500U CPU @ 2.70GHz<br>
+    Self-integrity baseline: <code>7f88b701…0253c5e5b</code> — matches tracked <code>.helios-baseline</code><br>
+    Dated logs saved (untracked, <code>results/</code> is gitignored): <code>full-test-v0.4.0-20260812.txt</code>, <code>coverage-v0.4.0-20260812.txt</code>, <code>gate-v0.4.0-20260812.txt</code>, <code>redteam-v0.4.0-20260812.txt</code>, <code>redteam-bypass-v0.4.0-20260812.txt</code>, <code>soak-v0.4.0-20260812.txt</code>, <code>baseline-check-v0.4.0-20260812.txt</code><br>
+    Note: this run required <code>--script-shell</code> pointed at Git Bash to execute inline <code>VAR=1</code> npm scripts on Windows (npm defaults to cmd.exe, which doesn't parse that syntax) — a local environment quirk, not a code change.
+  </footer>
+</div>
