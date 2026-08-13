@@ -1,4 +1,4 @@
-Aletheia soak test | agent: C:\Users\SuperAdmin\.vscode\runtime-firewall-mvp\packages\fw-agent
+Aletheia soak test | agent: packages/fw-agent
 ================================================================
 NOTE: 1 corpus package(s) not installed, skipping: cross-env
       To include them, run:  npm install cross-env
