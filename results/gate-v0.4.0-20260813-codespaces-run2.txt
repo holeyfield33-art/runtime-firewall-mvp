@@ -1,0 +1,70 @@
+Source: pasted by user, host path /workspaces/runtime-firewall-mvp (GitHub Codespaces)
+Not independently executed by this session, but this is a full raw gate transcript
+(not just a narrative summary) — treated as higher-confidence than the first
+Codespaces report (results/gate-v0.4.0-20260813-codespaces-report.txt), which had
+no raw output attached.
+Date reported: 2026-08-13
+
+Confirmed core count (pasted directly after the gate run, same shell session):
+  $ nproc
+  2
+  $ cat /sys/fs/cgroup/cpu.max
+  max 100000   (no cgroup CPU quota cap beyond the 2 visible cores)
+
+--- soak test (same session, run before the gate) ---
+Aletheia soak test | agent: /workspaces/runtime-firewall-mvp/packages/fw-agent
+NOTE: 1 corpus package(s) not installed, skipping: cross-env
+[round 1/1] 2026-08-13T01:14:46.235Z
+  FALSE POSITIVES : 0/99 legit blocked  (0%)
+  TRUE POSITIVES  : 5/5 malicious caught (100%)
+  avg scan/pkg    : 128.2 ms
+
+--- npm run gate ---
+
+> runtime-firewall-monorepo@1.0.0 gate
+> node run-gate-test.js
+
+Runtime Firewall performance audit - both scopes.
+
+=== Per-module honest benchmark (transparency, NOT gated) ===
+(packages/fw-agent/test/bench-honest.js)
+
+# aletheia-firewall bench-honest | node v24.14.0 | linux x64 | AMD EPYC 7763 64-Core Processor | 200 modules x 30 trials | 2026-08-13T01:23:05.090Z
+baseline    median: 0.2180 ms/module
+firewall-on median: 0.3352 ms/module
+overhead          : +0.1172 ms/module (+53.8%)
+note: one-time per-module startup cost (scan runs once per file, then cached)
+
+=== Realistic-app compilation gate (median < 25%, P95 informational) ===
+(packages/fw-control/test/bench.js)
+
+Running Cold-Process Realistic Compilation Hook Gate (60 iterations, median-of-5 per iter for robustness)...
+
+[Setup] Temp dir: /tmp/fw-bench-5q6tNE
+[Setup] Agent: /workspaces/runtime-firewall-mvp/packages/fw-agent/index.js
+[Setup] 900-module corpus generated (flat). Baseline: -r agent (no FW=1 -> disabled hook); Agent: -r + FW_ENABLE_DETECTION=1 (hook+scans). Fair preload A/B. Per-iter uses median of 5 cold runs for noise resistance. Larger corpus amortizes fixed jitter.
+
+[Iter   1] Baseline: 154.20ms | Agent: 216.07ms | Delta: 61.87ms | Overhead: 40.12% (median-of-5)
+[Iter  10] Baseline: 163.33ms | Agent: 223.90ms | Delta: 60.57ms | Overhead: 37.09% (median-of-5)
+[Iter  20] Baseline: 156.09ms | Agent: 236.19ms | Delta: 80.10ms | Overhead: 51.32% (median-of-5)
+[Iter  30] Baseline: 155.29ms | Agent: 220.46ms | Delta: 65.16ms | Overhead: 41.96% (median-of-5)
+[Iter  40] Baseline: 160.63ms | Agent: 218.49ms | Delta: 57.86ms | Overhead: 36.02% (median-of-5)
+[Iter  50] Baseline: 157.76ms | Agent: 223.07ms | Delta: 65.31ms | Overhead: 41.40% (median-of-5)
+[Iter  60] Baseline: 158.81ms | Agent: 215.86ms | Delta: 57.06ms | Overhead: 35.93% (median-of-5)
+
+[Absolute Metrics] Mean Baseline: 159.28ms | Mean Agent: 222.97ms | Mean Delta: 63.69ms
+[Statistics] Mean: 40.15% | Median: 39.21% | P95: 56.56%
+[Distribution] Min: 20.66% | Max: 62.13%
+
+[Benchmark Artifact] Written machine-readable results to: /workspaces/runtime-firewall-mvp/results/benchmarks/raw/bench-1786584310640.json
+
+[Final Verification] Compilation hook performance gate evaluating...
+
+BUILD FAILED: Median compilation overhead exceeded budget. Median: 39.21% (Max: 25%) | P95: 56.56% (informational)
+
+========================================
+Per-module benchmark ran: clean
+Realistic-app gate:       FAIL
+========================================
+
+Gate result: FAIL - realistic-app overhead exceeded budget.
