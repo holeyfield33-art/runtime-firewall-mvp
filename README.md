@@ -286,32 +286,32 @@ verdict model, and the current inventory of documented firewall blind spots.
 
 ## Performance
 
-The v0.3.0 performance evidence is frozen in `PERFORMANCE.md`. This repo continues to maintain a 25% median compilation overhead budget for the gate, but that budget is a target/gate threshold, not a current guarantee of release performance.
+The v0.4.0 performance evidence is frozen in `PERFORMANCE.md`. This repo maintains a 25% median compilation overhead budget for the gate (`npm run gate`).
 
-Current v0.3.0 evidence shows the primary steady-state cost is the `Module._compile` interception hook itself. The diagnostic profile in `results/benchmarks/steady-state-compile-attr-*.json` shows that `Detector.scanModuleSync` contributes negligibly to the hook cost on the 900-module steady-state workload.
+**v0.4.0 measured evidence:** a first-party run on a 4-core machine measured **17.68% median overhead**, within budget. `PERFORMANCE.md` also documents a core-count sensitivity pattern across five environments (two release cycles): every run with 4+ confirmed logical cores has passed in the 16.47–17.68% band, while lower-core/shared environments (2-core GitHub Codespaces, a shared audit sandbox) have failed in the 39–61% range on the same codebase. The gate's cold-process-spawn design is the suspected cause — baseline and agent subprocesses compete for scheduler time on constrained hardware — but this is a well-evidenced pattern, not yet a proven root cause. `npm run gate` now prints a low-core-count warning when it fails on a machine with fewer than 4 logical cores.
 
 | Metric | Recorded budget | Enforced? |
 |--------|-----------------|-----------|
-| Median module-compile overhead | 25% | **Yes** |
+| Median module-compile overhead | 25% | **Manual only — not yet wired into CI** (see `AUDIT.md` finding #4) |
 | P95 overhead | 30% (informational only) | No |
 
-The gate is a **regression guard**, not a release performance claim. If a code change causes the median to exceed 25%, the gate is doing its job by catching a regression.
+The gate is a **regression guard**, not a release performance claim. If a code change causes the median to exceed 25% *on hardware with at least 4 confirmed logical cores*, the gate is doing its job by catching a regression.
 
-### v0.3.0 performance baseline
+### v0.4.0 performance baseline
 
-- baseline: `results/benchmarks/raw/bench-*.json`
-- steady-state compile attribution: `results/benchmarks/steady-state-compile-attr-*.json`
-- probe diagnostics: `results/benchmarks/probes/probe-*.json`
+- gate output: `results/gate-v0.4.0-*.txt`
+- full test suite: `results/full-test-v0.4.0-*.txt`
+- raw benchmark artifacts: `results/benchmarks/raw/bench-*.json`
 
-These artifacts are the authoritative frozen evidence for the current investigation.
+These, plus `PERFORMANCE.md`, are the authoritative current evidence.
 
 ### What this means
 
-- `Module._compile` interception cost is the current steady-state performance limiter.
-- `Detector.scanModuleSync` is not currently the primary cost driver in the verified 900-module steady-state case.
+- `Module._compile` interception cost is the primary steady-state performance factor.
 - `FW_ENABLE_DETECTION=0` remains zero-overhead for normal runtime operation.
+- Run the gate on hardware with 4+ logical cores for a meaningful result; see `PERFORMANCE.md`'s "Core-count sensitivity" section for the full cross-environment evidence before treating a low-core FAIL as a real regression.
 
-For the latest v0.3.0 baseline and detailed methodology, see `PERFORMANCE.md`.
+For the latest baseline and detailed methodology, see `PERFORMANCE.md`.
 
 ---
 

@@ -27,25 +27,28 @@ Evidence in this freeze is split into two tiers, cited separately throughout:
 ## Core-count sensitivity — consistent pattern, not yet root-caused in code
 
 `packages/fw-control/test/bench.js` forks a fresh Node process per baseline/agent
-comparison, 60 iterations. Four environments have now reported gate results on
-(or immediately preceding) the v0.4.0 commit:
+comparison, 60 iterations. Five environments have now reported gate results on, or
+immediately preceding, the v0.4.0 commit:
 
 | Environment | Logical cores | Median overhead | Gate result | Evidence |
 |---|---|---|---|---|
 | Local Windows (Intel i7-7500U) | 4 | **17.68%** | ✅ PASS | First-party — `results/gate-v0.4.0-20260812.txt` |
 | AMD EPYC 7763 (pre-v0.4.0, 2026-06-18) | 64 (dedicated) | 16.47% / 17.31% / 17.32% (3 runs) | ✅ PASS | First-party, historical — `results/gate-3x-epyc-20260618.txt`. Predates the v0.4.0 tag; included as high-core-count context, not v0.4.0-specific proof. |
+| Sandboxed audit container (pre-v0.4.0, 2026-07-25, base commit `1d60552`) | not stated | 60.58% | ❌ FAIL (P95 79.16%) | Committed, first-party-verifiable — `AUDIT.md` "Unverified claims" section. A prior audit session's own gate run; the audit report itself attributes it to "shared/virtualized CPU noise in this container" rather than a real regression, while noting it could not rule that out with certainty at the time. |
 | GitHub Codespaces, run 1 | not confirmed | 40.08% | ❌ FAIL (P95 55.24%) | Reported, narrative summary only — `results/gate-v0.4.0-20260813-codespaces-report.txt`. No raw gate output seen. |
 | GitHub Codespaces, run 2 | **2, confirmed via `nproc`** | 39.21% | ❌ FAIL (P95 56.56%, min 20.66%, max 62.13%) | Reported, full raw transcript — `results/gate-v0.4.0-20260813-codespaces-run2.txt`. Same host CPU model as the historical EPYC row (AMD EPYC 7763), but capped to 2 visible cores by the container — i.e. this and the 64-core PASS row are, per `/proc`, the *same silicon* at two different visible-core counts. |
 
 Two independent Codespaces runs, both on 2 confirmed cores, land within 1 point of each
-other (40.08%, 39.21%) and both fail; three higher-core runs (4-core and 64-core×3) all
-pass in a tight 16.47–17.68% band. That's now a **repeatable, reasonably strong
-correlation** between visible core count and measured gate overhead on this specific
-benchmark — strong enough that a gate failure on a 1–2 core runner should not, by itself,
-be read as a real detection-path regression. It is not yet a controlled experiment
-(same machine, cores artificially capped up and down) or a profiled root cause in
-`bench.js`'s process-spawn logic, so this document still stops short of calling it fully
-closed — "consistent across four environments" is the accurate claim, not "proven."
+other (40.08%, 39.21%) and both fail; a third, older FAIL in a different shared/sandboxed
+container (60.58%, core count unrecorded) fits the same pattern; three higher-core runs
+(4-core and 64-core×3) all pass in a tight 16.47–17.68% band. That's now a **repeatable,
+reasonably strong correlation** between constrained/shared execution environments and
+measured gate overhead on this specific benchmark — strong enough that a gate failure on
+a 1–2 core or heavily shared runner should not, by itself, be read as a real
+detection-path regression. It is not yet a controlled experiment (same machine, cores
+artificially capped up and down) or a profiled root cause in `bench.js`'s process-spawn
+logic, so this document still stops short of calling it fully closed — "consistent
+across five environments across two release cycles" is the accurate claim, not "proven."
 
 **Practical takeaway: treat a gate failure on a runner with fewer than ~4 logical cores
 as expected noise from this benchmark's process-spawn design, and re-run on more
