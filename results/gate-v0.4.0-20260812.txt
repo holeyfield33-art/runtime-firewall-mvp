@@ -18,8 +18,8 @@ note: one-time per-module startup cost (scan runs once per file, then cached)
 
 ⏱️  Running Cold-Process Realistic Compilation Hook Gate (60 iterations, median-of-5 per iter for robustness)...
 
-[Setup] Temp dir: C:\Users\SUPERA~1\AppData\Local\Temp\fw-bench-6G5wGx
-[Setup] Agent: C:\Users\SuperAdmin\.vscode\runtime-firewall-mvp\packages\fw-agent\index.js
+[Setup] Temp dir: <TEMP_DIR>
+[Setup] Agent: <REDACTED>\packages\fw-agent\index.js
 [Setup] 900-module corpus generated (flat). Baseline: -r agent (no FW=1 → disabled hook); Agent: -r + FW_ENABLE_DETECTION=1 (hook+scans). Fair preload A/B. Per-iter uses median of 5 cold runs for noise resistance. Larger corpus amortizes fixed jitter.
 
 [Iter   1] Baseline: 1129.48ms | Agent: 942.54ms | Delta: -186.94ms | Overhead: -16.55% (median-of-5)
