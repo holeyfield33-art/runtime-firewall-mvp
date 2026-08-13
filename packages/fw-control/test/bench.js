@@ -297,11 +297,17 @@ try {
 console.log(`\n[Final Verification] Compilation hook performance gate evaluating...`);
 
 const LOW_CORE_THRESHOLD = 4;
-const cpuCount = os.cpus().length;
+let cpuCount = null;
+try {
+  cpuCount = os.cpus().length;
+} catch (e) {
+  // os.cpus() can throw or return an empty array in some constrained/unsupported
+  // environments; don't let a diagnostics-only check crash the gate's failure report.
+}
 
 if (median > MEDIAN_BUDGET) {
   console.error(`\n❌ BUILD FAILED: Median compilation overhead exceeded budget. Median: ${median.toFixed(2)}% (Max: ${MEDIAN_BUDGET}%) | P95: ${p95.toFixed(2)}% (informational)`);
-  if (cpuCount < LOW_CORE_THRESHOLD) {
+  if (cpuCount !== null && cpuCount > 0 && cpuCount < LOW_CORE_THRESHOLD) {
     console.error(`\n⚠️  LOW CORE COUNT WARNING: this machine reports ${cpuCount} logical core(s) (< ${LOW_CORE_THRESHOLD}).`);
     console.error(`   This benchmark spawns competing baseline/agent subprocesses per iteration; on 1-2`);
     console.error(`   vCPU environments (shared CI runners, default-size GitHub Codespaces, small cloud`);
