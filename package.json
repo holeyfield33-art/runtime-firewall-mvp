@@ -10,7 +10,8 @@
   },
   "enginesNote": "Not published, not authoritative. This is the workspace root; the real Node floors live in each package: packages/fw-agent requires >=18.0.0 (zero runtime deps), packages/fw-control requires >=20.0.0 (Fastify 5). Check both before changing this value.",
   "scripts": {
-    "test": "npm run test:unit && npm run test:adversarial && npm run test:integration && npm run test:auth",
+    "test": "npm run test:unit && npm run test:adversarial && npm run test:integration && npm run test:auth && npm run test:matrix",
+    "test:matrix": "node scripts/__tests__/execution-surface-matrix.test.js",
     "test:unit": "node packages/fw-agent/test/aho-corasick-unit-test.js && node packages/fw-agent/test/detector-unit-test.js && node packages/fw-agent/test/behavior-tracker-unit-test.js && node packages/fw-agent/test/prescreener-superset-test.js && node packages/fw-agent/test/policy-unit-test.js && node packages/fw-agent/test/quarantine-unit-test.js && node packages/fw-agent/test/policy-watcher-unit-test.js && node packages/fw-agent/test/audit-log-unit-test.js",
     "test:adversarial": "node packages/fw-control/test/adversarial/adversarial.test.js",
     "test:integration": "FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node packages/fw-control/test/detection-test.js",
