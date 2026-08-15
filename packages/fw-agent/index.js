@@ -44,6 +44,32 @@ const { getAuditLog } = require('./src/audit-log');
 // "require('./packages/fw-agent')"` puts the whole inline script (containing "fw-agent")
 // into execArgv, so the check reported "preloaded" and silently no-op'd, defeating the very
 // guarantee it exists to enforce. We now require a genuine preload flag pointing at us.
+//
+// ── Enforcement mode (P0-3) ─────────────────────────────────────────────────────────────────
+// FW_MODE=enforce      → not preloaded via --require is fatal: process.exit(1).
+// FW_MODE=dev          → not preloaded via --require warns loudly and continues.
+// FW_STRICT_PRELOAD=1  → backward-compatible alias for FW_MODE=enforce.
+// FW_MODE unset        → defaults to 'dev' (fail-OPEN, not fail-closed). This is the honest,
+//   currently-shipped guarantee — see README.md "Enforcement mode vs Development mode" before
+//   relying on this in production. To ship enforce-by-default instead, flip the single line
+//   below (DEFAULT_FW_MODE) and nothing else needs to change.
+const DEFAULT_FW_MODE = 'dev'; // ← flip to 'enforce' to make fail-closed the default
+function resolveFwMode() {
+  const raw = (process.env.FW_MODE || '').toLowerCase();
+  if (raw === 'enforce') return 'enforce';
+  if (raw === 'dev') return 'dev';
+  if (process.env.FW_STRICT_PRELOAD === '1') return 'enforce';
+  return DEFAULT_FW_MODE;
+}
+const fwMode = resolveFwMode();
+
+// P0-4 note: process.execArgv only reflects flags passed literally on the CLI — Node does NOT
+// surface NODE_OPTIONS-derived flags there (verified empirically). Since P0-4 re-injects the
+// agent into child processes via NODE_OPTIONS, a re-injected child genuinely IS preloaded (Node
+// really does --require it before running user code) but would otherwise look "not preloaded"
+// to this check and, under FW_STRICT_PRELOAD=1, would incorrectly refuse to start. So this also
+// scans NODE_OPTIONS tokens with the exact same resolvesToAgent() check — not a relaxation of
+// the guard, since a bogus/unrelated value in NODE_OPTIONS still fails to resolve to this file.
 (function verifyPreloadManifold() {
   const execArgv = process.execArgv || [];
 
@@ -62,25 +88,54 @@ const { getAuditLog } = require('./src/audit-log');
     }
   };
 
-  let isPreloaded = false;
-  for (let i = 0; i < execArgv.length; i++) {
-    const arg = execArgv[i];
-    if (arg === '--require' || arg === '-r') {
-      if (resolvesToAgent(execArgv[i + 1])) { isPreloaded = true; break; }
-    } else if (arg.startsWith('--require=') || arg.startsWith('-r=')) {
-      if (resolvesToAgent(arg.slice(arg.indexOf('=') + 1))) { isPreloaded = true; break; }
+  const argsHaveAgentRequire = (args) => {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--require' || arg === '-r') {
+        if (resolvesToAgent(args[i + 1])) return true;
+      } else if (arg.startsWith('--require=') || arg.startsWith('-r=')) {
+        if (resolvesToAgent(arg.slice(arg.indexOf('=') + 1))) return true;
+      }
     }
+    return false;
+  };
+
+  // Minimal shell-like tokenizer for NODE_OPTIONS (space-separated, double-quoted segments kept
+  // intact for paths containing spaces).
+  const tokenizeNodeOptions = (str) => {
+    const tokens = [];
+    const re = /"([^"]*)"|(\S+)/g;
+    let m;
+    while ((m = re.exec(str))) tokens.push(m[1] !== undefined ? m[1] : m[2]);
+    return tokens;
+  };
+
+  let isPreloaded = argsHaveAgentRequire(execArgv);
+  if (!isPreloaded && process.env.NODE_OPTIONS) {
+    isPreloaded = argsHaveAgentRequire(tokenizeNodeOptions(process.env.NODE_OPTIONS));
   }
 
   if (!isPreloaded) {
-    if (process.env.FW_STRICT_PRELOAD === '1') {
-      console.error('[CRITICAL] Helios was not injected via --require. Set --require=aletheia-firewall to ensure all modules are intercepted from startup. Exiting.');
+    if (fwMode === 'enforce') {
+      console.error('[CRITICAL] Helios was not injected via --require (FW_MODE=enforce / FW_STRICT_PRELOAD=1). Set --require=<path to packages/fw-agent> to ensure all modules are intercepted from startup. Exiting.');
       process.exit(1);
     } else {
-      console.warn('[Helios] Warning: agent loaded via require() rather than --require. Modules loaded before this point are not protected.');
+      // One loud, high-visibility warning — this is a security-relevant fact, not a debug log.
+      console.warn(
+        '\n[Helios] ================================================================\n' +
+        '[Helios]  WARNING: running in DEVELOPMENT mode (FW_MODE=dev, the default).\n' +
+        '[Helios]  The agent was loaded via require() rather than --require, so any\n' +
+        '[Helios]  module loaded before this point is NOT protected, and this process\n' +
+        '[Helios]  will NOT exit if preload is missing entirely.\n' +
+        '[Helios]  Set FW_MODE=enforce to fail closed instead (refuses to start unless\n' +
+        '[Helios]  genuinely preloaded via --require). See README.md: "Enforcement mode\n' +
+        '[Helios]  vs Development mode".\n' +
+        '[Helios] ================================================================\n'
+      );
     }
   }
 })();
+
 
 // ── Primitive prototype lockdown (opt-in via FW_FREEZE_PROTOTYPES=1) ───────────────────────────
 // Disabled by default: freezing built-in prototypes breaks legitimate libraries
@@ -175,10 +230,114 @@ assertProductionKeyConfig();
   }
 })();
 
+// ── P0-4: child process + worker re-injection ────────────────────────────────────────────────
+// Without this, the firewall only ever protects the process it was loaded into: a spawned
+// `node` child (child_process.spawn/exec/execFile) or a worker_threads Worker runs completely
+// unhooked, silently escaping detection even though the parent is "protected". child_process
+// .fork() is not actually part of this gap in practice — Node defaults fork()'s execArgv to
+// process.execArgv, so a forked child already inherits a --require flag the parent was launched
+// with — but spawn()/exec()/execFile() only inherit env, not execArgv, and Workers default their
+// execArgv to process.execArgv too, which is empty whenever the agent was loaded via NODE_OPTIONS
+// or require() rather than a literal --require CLI flag. Two independent mechanisms close this:
+//
+//   1. NODE_OPTIONS: any node CLI options in this env var are honored by every node process that
+//      inherits it, regardless of how it was launched (spawn/exec/execFile/fork, or even a
+//      shebang'd `node` script run directly). Appending `--require <agent>` here means "any node
+//      process descended from this one, launched any way, preloads the firewall" — for free,
+//      with no child_process patching required. Non-node children (spawn('ls'), spawn('python'))
+//      are unaffected: they never read NODE_OPTIONS.
+//   2. worker_threads: Workers never read NODE_OPTIONS (they're threads in the same process, not
+//      a fresh node invocation) and only inherit execArgv when the caller doesn't override it.
+//      We wrap the Worker constructor so every file-based Worker gets `--require <agent>`
+//      explicitly injected into execArgv, merged with (never replacing) whatever the caller
+//      passed. Eval-string workers (`new Worker(code, { eval: true })`) have no file to preload
+//      into — left UNSUPPORTED, with a one-time warning.
+//
+// Mode-aware: whether a propagation failure is a security event (audit + telemetry) or just a
+// warning is decided by fwMode (P0-3), now that both branches are merged together.
+const AGENT_ABS_PATH = __filename;
+let childReinjectionOk = true;
+let childReinjectionError = null;
+
+function requireFlagFor(agentPath) {
+  // Quote the path if it contains whitespace (spaces in usernames, "Program Files", etc.) so
+  // NODE_OPTIONS' shell-like tokenizer treats it as a single argument.
+  return /\s/.test(agentPath) ? `--require "${agentPath}"` : `--require ${agentPath}`;
+}
+
+function propagateViaNodeOptions(agentPath) {
+  const requireFlag = requireFlagFor(agentPath);
+  const existing = process.env.NODE_OPTIONS || '';
+  // De-dupe: NODE_OPTIONS is inherited across arbitrarily many generations of children. A child
+  // that already has our flag (inherited from its parent) must not stack another copy when ITS
+  // own agent bootstrap runs this same code again.
+  if (existing.includes(requireFlag)) return;
+  process.env.NODE_OPTIONS = existing ? `${existing} ${requireFlag}` : requireFlag;
+}
+
+function execArgvHasAgentRequire(execArgv, agentPath) {
+  if (!Array.isArray(execArgv)) return false;
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i];
+    if ((arg === '--require' || arg === '-r') && execArgv[i + 1] === agentPath) return true;
+    if (arg.startsWith('--require=') && arg.slice('--require='.length) === agentPath) return true;
+    if (arg.startsWith('-r=') && arg.slice('-r='.length) === agentPath) return true;
+  }
+  return false;
+}
+
+let warnedEvalWorkerUnsupported = false;
+
+// Built from the ORIGINAL Worker class captured at module load (the `Worker` binding destructured
+// at the top of this file, before any patching happens below) — this is what the constructor
+// extends, and it is also what the telemetry worker section further down still uses via that
+// same top-level `Worker` binding, so the agent's own telemetry worker is never re-preloaded
+// into itself.
+function buildReinjectingWorkerClass(OriginalWorker, agentPath) {
+  return class ReinjectingWorker extends OriginalWorker {
+    constructor(filenameOrUrl, options) {
+      const opts = options ? Object.assign({}, options) : {};
+      if (opts.eval === true) {
+        // Cannot preload the agent into an eval-string worker body — there is no file to
+        // --require into. UNSUPPORTED, not silently BYPASS: warn once so it's visible.
+        if (!warnedEvalWorkerUnsupported) {
+          warnedEvalWorkerUnsupported = true;
+          console.warn('[Helios] Warning: new Worker(code, { eval: true }) cannot be re-injected with the firewall (no file to preload into). This worker runs UNPROTECTED.');
+        }
+        super(filenameOrUrl, options);
+        return;
+      }
+      const execArgv = Array.isArray(opts.execArgv) ? opts.execArgv.slice() : (process.execArgv || []).slice();
+      if (!execArgvHasAgentRequire(execArgv, agentPath)) {
+        execArgv.push('--require', agentPath);
+      }
+      opts.execArgv = execArgv;
+      super(filenameOrUrl, opts);
+    }
+  };
+}
+
+try {
+  propagateViaNodeOptions(AGENT_ABS_PATH);
+} catch (e) {
+  childReinjectionOk = false;
+  childReinjectionError = e;
+}
+
+try {
+  const workerThreadsModule = require('worker_threads');
+  workerThreadsModule.Worker = buildReinjectingWorkerClass(workerThreadsModule.Worker, AGENT_ABS_PATH);
+} catch (e) {
+  childReinjectionOk = false;
+  childReinjectionError = childReinjectionError || e;
+}
+
 // ── Telemetry worker thread ───────────────────────────────────────────────────────────────────
 const telemetryEnabled = process.env.FW_TELEMETRY === '1';
 const telemetryWorkerPath = path.join(__dirname, 'sync-worker.js');
 const telemetryWorker = telemetryEnabled ? (() => {
+  // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
+  // telemetry worker must never be re-injected with a fresh copy of the agent.
   const w = new Worker(telemetryWorkerPath);
   w.unref();
   return w;
@@ -251,6 +410,66 @@ function packageKeyForFilename(filename) {
   return rest[0] || null;
 }
 
+// ── P0-2: canonical package identity ──────────────────────────────────────────────────────────
+// The _compile policy lookup below historically keyed ONLY on path.basename(filename) — every
+// package's index.js collapses to the same policy key "index.js", so a rule meant for one
+// package's entry point applied to every package's entry point. resolveModuleIdentity() walks up
+// from the file's directory to the nearest package.json for name+version, producing a canonical
+// "name@version:relativePath" identity that disambiguates packages sharing a basename.
+//
+// Cache keyed on directory, not per file: this runs on every _compile call, so re-reading and
+// re-parsing package.json for every file in a package would add a stat+parse per require() call
+// instead of one per package directory (path-compressed: every directory walked on the way to a
+// resolved package.json is memoized to the same result).
+const packageJsonCache = new Map(); // dir -> { name, version, pkgDir } | null
+
+function findPackageJsonInfo(startDir) {
+  const visitedDirs = [];
+  let dir = startDir;
+  let result = null;
+  for (;;) {
+    if (packageJsonCache.has(dir)) {
+      result = packageJsonCache.get(dir);
+      break;
+    }
+    visitedDirs.push(dir);
+    let pkg = null;
+    try {
+      const pkgPath = path.join(dir, 'package.json');
+      if (fs.existsSync(pkgPath)) pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    } catch (e) {
+      pkg = null;
+    }
+    if (pkg) {
+      result = {
+        name: typeof pkg.name === 'string' ? pkg.name : null,
+        version: typeof pkg.version === 'string' ? pkg.version : null,
+        pkgDir: dir,
+      };
+      break;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) { result = null; break; } // reached filesystem root without finding one
+    dir = parent;
+  }
+  for (const d of visitedDirs) packageJsonCache.set(d, result);
+  return result;
+}
+
+// Returns a canonical "name@version:relativePath" identity when a package.json is resolvable by
+// walking up from the file's directory; otherwise falls back to the normalized absolute path
+// (never throws — first-party app files with no ancestor package.json still get a sane, stable
+// identity string rather than crashing the hot path).
+function resolveModuleIdentity(filename) {
+  const info = findPackageJsonInfo(path.dirname(filename));
+  if (info && info.name) {
+    const relPath = path.relative(info.pkgDir, filename).replace(/\\/g, '/');
+    const version = info.version ? `@${info.version}` : '';
+    return `${info.name}${version}:${relPath}`;
+  }
+  return String(filename).replace(/\\/g, '/');
+}
+
 Module.prototype._compile = function (content, filename) {
   // Reset cross-module behavioral state at each new dependency-tree root so that
   // benign modules in one tree cannot poison detection in an unrelated tree.
@@ -273,23 +492,37 @@ Module.prototype._compile = function (content, filename) {
   }
 
   const requestName = path.basename(filename);
-  const configuredRule = policyMap.get(requestName) || 'OBSERVE';
+  const canonicalIdentity = resolveModuleIdentity(filename);
+  const packageKey = packageKeyForFilename(filename);
+
+  // Policy lookup precedence (first hit wins, default OBSERVE):
+  //   (a) canonical identity "name@version:relPath" — disambiguates packages sharing a basename
+  //   (b) package-key form ("@scope/name" or "name") — same rule for every file in a package
+  //   (c) bare basename — compat shim so any hand-written basename-keyed policy still resolves
+  let configuredRule = 'OBSERVE';
+  if (policyMap.has(canonicalIdentity)) {
+    configuredRule = policyMap.get(canonicalIdentity);
+  } else if (packageKey && policyMap.has(packageKey)) {
+    configuredRule = policyMap.get(packageKey);
+  } else if (policyMap.has(requestName)) {
+    configuredRule = policyMap.get(requestName);
+  }
 
   if (configuredRule === 'BLOCK') {
-    const event = { eventType: 'BLOCK', packageName: requestName, timestamp: Date.now() };
+    const event = { eventType: 'BLOCK', packageName: canonicalIdentity, timestamp: Date.now() };
     auditLog.write(event);
-    emitTelemetry('BLOCK', requestName, null);
+    emitTelemetry('BLOCK', canonicalIdentity, null);
     throw new Error(`[Firewall] Compilation denied for module: "${requestName}"`);
   }
 
   if (configuredRule === 'QUARANTINE') {
     compileMetrics.quarantined++;
-    const event = { eventType: 'QUARANTINE_ACTIVE', packageName: requestName, source: 'policy', timestamp: Date.now() };
+    const event = { eventType: 'QUARANTINE_ACTIVE', packageName: canonicalIdentity, source: 'policy', timestamp: Date.now() };
     auditLog.write(event);
-    emitTelemetry('QUARANTINE_ACTIVE', requestName, null, { source: 'policy' });
+    emitTelemetry('QUARANTINE_ACTIVE', canonicalIdentity, null, { source: 'policy' });
     quarantinedModules.add(filename);
     // Return a stub without executing the module's code
-    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, requestName, null, d) });
+    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, canonicalIdentity, null, d) });
     this.exports = stub.createProxy();
     return;
   }
@@ -301,7 +534,7 @@ Module.prototype._compile = function (content, filename) {
     }
 
     compileMetrics.filesCompiled++;
-    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKeyForFilename(filename));
+    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKey);
 
     // Split block-tier detections from WARN-only observations. WARN-tier matches (e.g.
     // https.request, buffer.from) and MEDIUM behavioral findings never reach blockDetections:
@@ -316,19 +549,19 @@ Module.prototype._compile = function (content, filename) {
     const warnDetections  = scanResult.detections.filter(d => d.warnOnly);
 
     if (warnDetections.length > 0) {
-      emitTelemetry('OBSERVE', requestName, null, { warnMatches: warnDetections.map(d => d.matched) });
+      emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map(d => d.matched) });
     }
 
     if (blockDetections.length > 0) {
       compileMetrics.lockdownsEnforced++;
       const event = {
         eventType: 'DETECTION_TRIGGERED',
-        packageName: requestName,
+        packageName: canonicalIdentity,
         detections: blockDetections,
         timestamp: Date.now(),
       };
       auditLog.write(event);
-      emitTelemetry('DETECTION_TRIGGERED', requestName, null, { detections: blockDetections });
+      emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
 
       const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map(d => d.rule || d.type).join(', ')}`;
       console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
@@ -377,7 +610,28 @@ process.on('exit', (code) => {
 // Log startup
 auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: auditLog.filePath });
 
+// Record the active enforcement mode (P0-3) so an operator can audit which guarantee a given
+// run actually had — this fires regardless of whether the not-preloaded branch above triggered,
+// since a preloaded process is *also* in one mode or the other.
+const fwModeEvent = fwMode === 'enforce' ? 'FW_MODE_ENFORCE' : 'FW_MODE_DEV';
+auditLog.write({ eventType: fwModeEvent, mode: fwMode, timestamp: Date.now() });
+emitTelemetry(fwModeEvent, null, null, { mode: fwMode });
+
+// Report the outcome of P0-4 child/worker re-injection now that auditLog + emitTelemetry exist.
+// Reuses fwMode (P0-3) rather than FW_STRICT_PRELOAD directly, now that both branches are merged
+// together — FW_MODE=enforce and FW_STRICT_PRELOAD=1 are both already folded into fwMode.
+if (!childReinjectionOk) {
+  const message = `Failed to set up child/worker re-injection (NODE_OPTIONS propagation and/or Worker patch): ${childReinjectionError && childReinjectionError.message}`;
+  if (fwMode === 'enforce') {
+    auditLog.write({ eventType: 'CHILD_REINJECTION_FAILURE', message, timestamp: Date.now() });
+    emitTelemetry('CHILD_REINJECTION_FAILURE', null, null, { message });
+    console.error(`[CRITICAL] [Helios] ${message}`);
+  } else {
+    console.warn(`[Helios] Warning: ${message}. Children/workers spawned from this process may run unprotected.`);
+  }
+}
+
 // Export via getter so consumers always see the live map after hot-reload (F-21).
-const _exports = { compileMetrics, quarantinedModules };
+const _exports = { compileMetrics, quarantinedModules, resolveModuleIdentity, packageKeyForFilename };
 Object.defineProperty(_exports, 'policyMap', { get: () => policyMap, enumerable: true });
 module.exports = _exports;

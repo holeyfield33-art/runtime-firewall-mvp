@@ -50,7 +50,8 @@ in [`red-team/README.md`](../../red-team/README.md).
 | `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. Note: several detections (credential exfiltration, dynamic-code/exec chains, base64→eval obfuscation) rely on the behavioral pass — disabling it falls back to signature-only coverage. |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
-| `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
+| `FW_MODE` | `dev` | `enforce` fails closed (`process.exit(1)`) when not preloaded via `--require`; `dev` (default) warns loudly and continues. See the root README's "Enforcement mode vs Development mode" section. |
+| `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze built-in prototypes (prototype-pollution hardening; opt-in because it breaks some polyfills and test frameworks) |
 | `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key for verifying `policy.signed.json`. **Must be set in production** — the bundled dev private key is public. |
 | `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the dev key when `FW_POLICY_PUBKEY` is unset (local/dev/CI). Agent refuses to start with a policy file present and no production key unless this flag is set. |
