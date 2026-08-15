@@ -1,0 +1,67 @@
+{
+  "generatedAt": "2026-08-15T14:49:37.376Z",
+  "target": "packages/fw-agent",
+  "metadata": {
+    "matrixVersion": "execution-surface-matrix-v1",
+    "gitSha": "6da81ac95c2f23bbc643a3f5478a22a78e9303cb",
+    "package": {
+      "name": "aletheia-firewall",
+      "version": "0.4.0"
+    },
+    "nodeVersion": "v24.14.0",
+    "platform": "linux",
+    "arch": "x64"
+  },
+  "rows": [
+    {
+      "path": "require() [control]",
+      "verdict": "INTERCEPTED",
+      "detail": "require() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
+    },
+    {
+      "path": "nested require() [control]",
+      "verdict": "INTERCEPTED",
+      "detail": "nested require() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
+    },
+    {
+      "path": "ESM static import",
+      "verdict": "BYPASS",
+      "detail": "ESM static import loaded the sentinel cleanly; Module.prototype._compile is never invoked for ESM evaluation, so the firewall hook cannot see this module."
+    },
+    {
+      "path": "dynamic import()",
+      "verdict": "BYPASS",
+      "detail": "dynamic import() loaded the ESM sentinel cleanly; Module.prototype._compile is never invoked for ESM evaluation, so the firewall hook cannot see this module."
+    },
+    {
+      "path": "worker_threads -> new Worker",
+      "verdict": "INTERCEPTED",
+      "detail": "Worker thread require() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
+    },
+    {
+      "path": "child_process.fork()",
+      "verdict": "INTERCEPTED",
+      "detail": "Forked child's require() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
+    },
+    {
+      "path": "child_process.spawn('node', ...)",
+      "verdict": "BYPASS",
+      "detail": "child_process.spawn('node', ...) ran the sentinel unhindered; spawned children do not inherit --require execArgv, only env (NODE_OPTIONS)."
+    },
+    {
+      "path": "vm.runInNewContext()",
+      "verdict": "BYPASS",
+      "detail": "vm.runInNewContext() executed the sentinel source directly via V8, never calling require()/Module.prototype._compile, so the firewall hook never runs."
+    },
+    {
+      "path": "native .node addon load",
+      "verdict": "UNSUPPORTED",
+      "detail": "No prebuilt native .node addon fixture is available in this environment (no node-gyp build performed). Architecturally, native addon loads route through Module._extensions['.node'] / process.dlopen(), which never calls Module.prototype._compile — this surface cannot be covered by the current hook regardless of whether a working addon is available to test with."
+    },
+    {
+      "path": "module loaded before firewall (pre-hook/cache)",
+      "verdict": "INTERCEPTED",
+      "detail": "Unexpectedly re-scanned on the second require() and threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
+    }
+  ]
+}
