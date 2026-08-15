@@ -44,6 +44,14 @@ const { getAuditLog } = require('./src/audit-log');
 // "require('./packages/fw-agent')"` puts the whole inline script (containing "fw-agent")
 // into execArgv, so the check reported "preloaded" and silently no-op'd, defeating the very
 // guarantee it exists to enforce. We now require a genuine preload flag pointing at us.
+//
+// P0-4 note: process.execArgv only reflects flags passed literally on the CLI — Node does NOT
+// surface NODE_OPTIONS-derived flags there (verified empirically). Since P0-4 re-injects the
+// agent into child processes via NODE_OPTIONS, a re-injected child genuinely IS preloaded (Node
+// really does --require it before running user code) but would otherwise look "not preloaded"
+// to this check and, under FW_STRICT_PRELOAD=1, would incorrectly refuse to start. So this also
+// scans NODE_OPTIONS tokens with the exact same resolvesToAgent() check — not a relaxation of
+// the guard, since a bogus/unrelated value in NODE_OPTIONS still fails to resolve to this file.
 (function verifyPreloadManifold() {
   const execArgv = process.execArgv || [];
 
@@ -62,14 +70,31 @@ const { getAuditLog } = require('./src/audit-log');
     }
   };
 
-  let isPreloaded = false;
-  for (let i = 0; i < execArgv.length; i++) {
-    const arg = execArgv[i];
-    if (arg === '--require' || arg === '-r') {
-      if (resolvesToAgent(execArgv[i + 1])) { isPreloaded = true; break; }
-    } else if (arg.startsWith('--require=') || arg.startsWith('-r=')) {
-      if (resolvesToAgent(arg.slice(arg.indexOf('=') + 1))) { isPreloaded = true; break; }
+  const argsHaveAgentRequire = (args) => {
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i];
+      if (arg === '--require' || arg === '-r') {
+        if (resolvesToAgent(args[i + 1])) return true;
+      } else if (arg.startsWith('--require=') || arg.startsWith('-r=')) {
+        if (resolvesToAgent(arg.slice(arg.indexOf('=') + 1))) return true;
+      }
     }
+    return false;
+  };
+
+  // Minimal shell-like tokenizer for NODE_OPTIONS (space-separated, double-quoted segments kept
+  // intact for paths containing spaces).
+  const tokenizeNodeOptions = (str) => {
+    const tokens = [];
+    const re = /"([^"]*)"|(\S+)/g;
+    let m;
+    while ((m = re.exec(str))) tokens.push(m[1] !== undefined ? m[1] : m[2]);
+    return tokens;
+  };
+
+  let isPreloaded = argsHaveAgentRequire(execArgv);
+  if (!isPreloaded && process.env.NODE_OPTIONS) {
+    isPreloaded = argsHaveAgentRequire(tokenizeNodeOptions(process.env.NODE_OPTIONS));
   }
 
   if (!isPreloaded) {
@@ -175,10 +200,115 @@ assertProductionKeyConfig();
   }
 })();
 
+// ── P0-4: child process + worker re-injection ────────────────────────────────────────────────
+// Without this, the firewall only ever protects the process it was loaded into: a spawned
+// `node` child (child_process.spawn/exec/execFile) or a worker_threads Worker runs completely
+// unhooked, silently escaping detection even though the parent is "protected". child_process
+// .fork() is not actually part of this gap in practice — Node defaults fork()'s execArgv to
+// process.execArgv, so a forked child already inherits a --require flag the parent was launched
+// with — but spawn()/exec()/execFile() only inherit env, not execArgv, and Workers default their
+// execArgv to process.execArgv too, which is empty whenever the agent was loaded via NODE_OPTIONS
+// or require() rather than a literal --require CLI flag. Two independent mechanisms close this:
+//
+//   1. NODE_OPTIONS: any node CLI options in this env var are honored by every node process that
+//      inherits it, regardless of how it was launched (spawn/exec/execFile/fork, or even a
+//      shebang'd `node` script run directly). Appending `--require <agent>` here means "any node
+//      process descended from this one, launched any way, preloads the firewall" — for free,
+//      with no child_process patching required. Non-node children (spawn('ls'), spawn('python'))
+//      are unaffected: they never read NODE_OPTIONS.
+//   2. worker_threads: Workers never read NODE_OPTIONS (they're threads in the same process, not
+//      a fresh node invocation) and only inherit execArgv when the caller doesn't override it.
+//      We wrap the Worker constructor so every file-based Worker gets `--require <agent>`
+//      explicitly injected into execArgv, merged with (never replacing) whatever the caller
+//      passed. Eval-string workers (`new Worker(code, { eval: true })`) have no file to preload
+//      into — left UNSUPPORTED, with a one-time warning.
+//
+// Mode-aware: this branch predates FW_MODE (P0-3 is a separate, independently revertible
+// branch), so it reuses the existing FW_STRICT_PRELOAD=1 signal as "enforce-like" for deciding
+// whether a propagation failure is a security event (audit + telemetry) or just a warning.
+const AGENT_ABS_PATH = __filename;
+let childReinjectionOk = true;
+let childReinjectionError = null;
+
+function requireFlagFor(agentPath) {
+  // Quote the path if it contains whitespace (spaces in usernames, "Program Files", etc.) so
+  // NODE_OPTIONS' shell-like tokenizer treats it as a single argument.
+  return /\s/.test(agentPath) ? `--require "${agentPath}"` : `--require ${agentPath}`;
+}
+
+function propagateViaNodeOptions(agentPath) {
+  const requireFlag = requireFlagFor(agentPath);
+  const existing = process.env.NODE_OPTIONS || '';
+  // De-dupe: NODE_OPTIONS is inherited across arbitrarily many generations of children. A child
+  // that already has our flag (inherited from its parent) must not stack another copy when ITS
+  // own agent bootstrap runs this same code again.
+  if (existing.includes(requireFlag)) return;
+  process.env.NODE_OPTIONS = existing ? `${existing} ${requireFlag}` : requireFlag;
+}
+
+function execArgvHasAgentRequire(execArgv, agentPath) {
+  if (!Array.isArray(execArgv)) return false;
+  for (let i = 0; i < execArgv.length; i++) {
+    const arg = execArgv[i];
+    if ((arg === '--require' || arg === '-r') && execArgv[i + 1] === agentPath) return true;
+    if (arg.startsWith('--require=') && arg.slice('--require='.length) === agentPath) return true;
+    if (arg.startsWith('-r=') && arg.slice('-r='.length) === agentPath) return true;
+  }
+  return false;
+}
+
+let warnedEvalWorkerUnsupported = false;
+
+// Built from the ORIGINAL Worker class captured at module load (the `Worker` binding destructured
+// at the top of this file, before any patching happens below) — this is what the constructor
+// extends, and it is also what the telemetry worker section further down still uses via that
+// same top-level `Worker` binding, so the agent's own telemetry worker is never re-preloaded
+// into itself.
+function buildReinjectingWorkerClass(OriginalWorker, agentPath) {
+  return class ReinjectingWorker extends OriginalWorker {
+    constructor(filenameOrUrl, options) {
+      const opts = options ? Object.assign({}, options) : {};
+      if (opts.eval === true) {
+        // Cannot preload the agent into an eval-string worker body — there is no file to
+        // --require into. UNSUPPORTED, not silently BYPASS: warn once so it's visible.
+        if (!warnedEvalWorkerUnsupported) {
+          warnedEvalWorkerUnsupported = true;
+          console.warn('[Helios] Warning: new Worker(code, { eval: true }) cannot be re-injected with the firewall (no file to preload into). This worker runs UNPROTECTED.');
+        }
+        super(filenameOrUrl, options);
+        return;
+      }
+      const execArgv = Array.isArray(opts.execArgv) ? opts.execArgv.slice() : (process.execArgv || []).slice();
+      if (!execArgvHasAgentRequire(execArgv, agentPath)) {
+        execArgv.push('--require', agentPath);
+      }
+      opts.execArgv = execArgv;
+      super(filenameOrUrl, opts);
+    }
+  };
+}
+
+try {
+  propagateViaNodeOptions(AGENT_ABS_PATH);
+} catch (e) {
+  childReinjectionOk = false;
+  childReinjectionError = e;
+}
+
+try {
+  const workerThreadsModule = require('worker_threads');
+  workerThreadsModule.Worker = buildReinjectingWorkerClass(workerThreadsModule.Worker, AGENT_ABS_PATH);
+} catch (e) {
+  childReinjectionOk = false;
+  childReinjectionError = childReinjectionError || e;
+}
+
 // ── Telemetry worker thread ───────────────────────────────────────────────────────────────────
 const telemetryEnabled = process.env.FW_TELEMETRY === '1';
 const telemetryWorkerPath = path.join(__dirname, 'sync-worker.js');
 const telemetryWorker = telemetryEnabled ? (() => {
+  // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
+  // telemetry worker must never be re-injected with a fresh copy of the agent.
   const w = new Worker(telemetryWorkerPath);
   w.unref();
   return w;
@@ -376,6 +506,18 @@ process.on('exit', (code) => {
 
 // Log startup
 auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: auditLog.filePath });
+
+// Report the outcome of P0-4 child/worker re-injection now that auditLog + emitTelemetry exist.
+if (!childReinjectionOk) {
+  const message = `Failed to set up child/worker re-injection (NODE_OPTIONS propagation and/or Worker patch): ${childReinjectionError && childReinjectionError.message}`;
+  if (process.env.FW_STRICT_PRELOAD === '1') {
+    auditLog.write({ eventType: 'CHILD_REINJECTION_FAILURE', message, timestamp: Date.now() });
+    emitTelemetry('CHILD_REINJECTION_FAILURE', null, null, { message });
+    console.error(`[CRITICAL] [Helios] ${message}`);
+  } else {
+    console.warn(`[Helios] Warning: ${message}. Children/workers spawned from this process may run unprotected.`);
+  }
+}
 
 // Export via getter so consumers always see the live map after hot-reload (F-21).
 const _exports = { compileMetrics, quarantinedModules };
