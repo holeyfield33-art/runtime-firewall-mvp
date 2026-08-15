@@ -251,6 +251,66 @@ function packageKeyForFilename(filename) {
   return rest[0] || null;
 }
 
+// ── P0-2: canonical package identity ──────────────────────────────────────────────────────────
+// The _compile policy lookup below historically keyed ONLY on path.basename(filename) — every
+// package's index.js collapses to the same policy key "index.js", so a rule meant for one
+// package's entry point applied to every package's entry point. resolveModuleIdentity() walks up
+// from the file's directory to the nearest package.json for name+version, producing a canonical
+// "name@version:relativePath" identity that disambiguates packages sharing a basename.
+//
+// Cache keyed on directory, not per file: this runs on every _compile call, so re-reading and
+// re-parsing package.json for every file in a package would add a stat+parse per require() call
+// instead of one per package directory (path-compressed: every directory walked on the way to a
+// resolved package.json is memoized to the same result).
+const packageJsonCache = new Map(); // dir -> { name, version, pkgDir } | null
+
+function findPackageJsonInfo(startDir) {
+  const visitedDirs = [];
+  let dir = startDir;
+  let result = null;
+  for (;;) {
+    if (packageJsonCache.has(dir)) {
+      result = packageJsonCache.get(dir);
+      break;
+    }
+    visitedDirs.push(dir);
+    let pkg = null;
+    try {
+      const pkgPath = path.join(dir, 'package.json');
+      if (fs.existsSync(pkgPath)) pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    } catch (e) {
+      pkg = null;
+    }
+    if (pkg) {
+      result = {
+        name: typeof pkg.name === 'string' ? pkg.name : null,
+        version: typeof pkg.version === 'string' ? pkg.version : null,
+        pkgDir: dir,
+      };
+      break;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) { result = null; break; } // reached filesystem root without finding one
+    dir = parent;
+  }
+  for (const d of visitedDirs) packageJsonCache.set(d, result);
+  return result;
+}
+
+// Returns a canonical "name@version:relativePath" identity when a package.json is resolvable by
+// walking up from the file's directory; otherwise falls back to the normalized absolute path
+// (never throws — first-party app files with no ancestor package.json still get a sane, stable
+// identity string rather than crashing the hot path).
+function resolveModuleIdentity(filename) {
+  const info = findPackageJsonInfo(path.dirname(filename));
+  if (info && info.name) {
+    const relPath = path.relative(info.pkgDir, filename).replace(/\\/g, '/');
+    const version = info.version ? `@${info.version}` : '';
+    return `${info.name}${version}:${relPath}`;
+  }
+  return String(filename).replace(/\\/g, '/');
+}
+
 Module.prototype._compile = function (content, filename) {
   // Reset cross-module behavioral state at each new dependency-tree root so that
   // benign modules in one tree cannot poison detection in an unrelated tree.
@@ -273,23 +333,37 @@ Module.prototype._compile = function (content, filename) {
   }
 
   const requestName = path.basename(filename);
-  const configuredRule = policyMap.get(requestName) || 'OBSERVE';
+  const canonicalIdentity = resolveModuleIdentity(filename);
+  const packageKey = packageKeyForFilename(filename);
+
+  // Policy lookup precedence (first hit wins, default OBSERVE):
+  //   (a) canonical identity "name@version:relPath" — disambiguates packages sharing a basename
+  //   (b) package-key form ("@scope/name" or "name") — same rule for every file in a package
+  //   (c) bare basename — compat shim so any hand-written basename-keyed policy still resolves
+  let configuredRule = 'OBSERVE';
+  if (policyMap.has(canonicalIdentity)) {
+    configuredRule = policyMap.get(canonicalIdentity);
+  } else if (packageKey && policyMap.has(packageKey)) {
+    configuredRule = policyMap.get(packageKey);
+  } else if (policyMap.has(requestName)) {
+    configuredRule = policyMap.get(requestName);
+  }
 
   if (configuredRule === 'BLOCK') {
-    const event = { eventType: 'BLOCK', packageName: requestName, timestamp: Date.now() };
+    const event = { eventType: 'BLOCK', packageName: canonicalIdentity, timestamp: Date.now() };
     auditLog.write(event);
-    emitTelemetry('BLOCK', requestName, null);
+    emitTelemetry('BLOCK', canonicalIdentity, null);
     throw new Error(`[Firewall] Compilation denied for module: "${requestName}"`);
   }
 
   if (configuredRule === 'QUARANTINE') {
     compileMetrics.quarantined++;
-    const event = { eventType: 'QUARANTINE_ACTIVE', packageName: requestName, source: 'policy', timestamp: Date.now() };
+    const event = { eventType: 'QUARANTINE_ACTIVE', packageName: canonicalIdentity, source: 'policy', timestamp: Date.now() };
     auditLog.write(event);
-    emitTelemetry('QUARANTINE_ACTIVE', requestName, null, { source: 'policy' });
+    emitTelemetry('QUARANTINE_ACTIVE', canonicalIdentity, null, { source: 'policy' });
     quarantinedModules.add(filename);
     // Return a stub without executing the module's code
-    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, requestName, null, d) });
+    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, canonicalIdentity, null, d) });
     this.exports = stub.createProxy();
     return;
   }
@@ -301,7 +375,7 @@ Module.prototype._compile = function (content, filename) {
     }
 
     compileMetrics.filesCompiled++;
-    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKeyForFilename(filename));
+    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKey);
 
     // Split block-tier detections from WARN-only observations. WARN-tier matches (e.g.
     // https.request, buffer.from) and MEDIUM behavioral findings never reach blockDetections:
@@ -316,19 +390,19 @@ Module.prototype._compile = function (content, filename) {
     const warnDetections  = scanResult.detections.filter(d => d.warnOnly);
 
     if (warnDetections.length > 0) {
-      emitTelemetry('OBSERVE', requestName, null, { warnMatches: warnDetections.map(d => d.matched) });
+      emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map(d => d.matched) });
     }
 
     if (blockDetections.length > 0) {
       compileMetrics.lockdownsEnforced++;
       const event = {
         eventType: 'DETECTION_TRIGGERED',
-        packageName: requestName,
+        packageName: canonicalIdentity,
         detections: blockDetections,
         timestamp: Date.now(),
       };
       auditLog.write(event);
-      emitTelemetry('DETECTION_TRIGGERED', requestName, null, { detections: blockDetections });
+      emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
 
       const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map(d => d.rule || d.type).join(', ')}`;
       console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
@@ -378,6 +452,6 @@ process.on('exit', (code) => {
 auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: auditLog.filePath });
 
 // Export via getter so consumers always see the live map after hot-reload (F-21).
-const _exports = { compileMetrics, quarantinedModules };
+const _exports = { compileMetrics, quarantinedModules, resolveModuleIdentity, packageKeyForFilename };
 Object.defineProperty(_exports, 'policyMap', { get: () => policyMap, enumerable: true });
 module.exports = _exports;
