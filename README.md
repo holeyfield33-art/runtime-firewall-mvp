@@ -173,6 +173,25 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 > your app also works but leaves modules loaded earlier unprotected (the agent
 > prints a warning). The agent is a no-op unless `FW_ENABLE_DETECTION=1` is set.
 
+### Enforcement mode vs Development mode
+
+The agent always checks whether it was genuinely preloaded via `--require` (not
+spoofable by `node -e "require('aletheia-firewall')"` — see `verifyPreloadManifold`
+in `index.js`). What happens when that check fails depends on `FW_MODE`:
+
+| `FW_MODE` | Not preloaded via `--require` |
+|-----------|--------------------------------|
+| `enforce` | **Fails closed.** Prints `[CRITICAL] ...` and calls `process.exit(1)`. Nothing runs unprotected. `FW_STRICT_PRELOAD=1` is a backward-compatible alias for this. |
+| `dev` (default, unset) | **Fails open.** Prints one high-visibility warning banner to stderr and continues. Modules loaded before the agent attached are *not* protected, and modules loaded after it in the same process still are. |
+
+**Be honest with yourself about which one you're running.** The default is
+`dev` so that programmatic loading, REPLs, and test harnesses keep working out
+of the box — but it is a fail-*open* default, not fail-closed. Production
+deployments that need a hard guarantee should set `FW_MODE=enforce` explicitly
+and preload the agent with `--require`. Both modes emit a startup audit/telemetry
+event (`FW_MODE_ENFORCE` / `FW_MODE_DEV`) recording which one was active, so a
+deployment's actual posture is auditable after the fact.
+
 ---
 
 ## Demo
@@ -225,7 +244,8 @@ and troubleshooting.
 | `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass (signature scan always runs) |
 | `FW_TELEMETRY` | `0` | Set to `1` to forward events to the control plane |
 | `FW_CONTROL_PORT` | `3000` | Control plane port |
-| `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` |
+| `FW_MODE` | `dev` | `enforce` fails closed (exits) when not preloaded via `--require`; `dev` warns and continues. See "Enforcement mode vs Development mode" above. |
+| `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze `Object/Array/Function/Promise/RegExp` prototypes on load (hardens against prototype pollution; may break libraries that extend built-ins) |
 | `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key used to verify `policy.signed.json`. **Must be set to your own key in production** — the bundled dev key's private half is public. |
 | `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the bundled dev key when `FW_POLICY_PUBKEY` is unset (local dev / CI only). The agent refuses to start with a policy file and no production key unless this flag is explicitly set. |
