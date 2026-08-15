@@ -44,6 +44,25 @@ const { getAuditLog } = require('./src/audit-log');
 // "require('./packages/fw-agent')"` puts the whole inline script (containing "fw-agent")
 // into execArgv, so the check reported "preloaded" and silently no-op'd, defeating the very
 // guarantee it exists to enforce. We now require a genuine preload flag pointing at us.
+//
+// ── Enforcement mode (P0-3) ─────────────────────────────────────────────────────────────────
+// FW_MODE=enforce      → not preloaded via --require is fatal: process.exit(1).
+// FW_MODE=dev          → not preloaded via --require warns loudly and continues.
+// FW_STRICT_PRELOAD=1  → backward-compatible alias for FW_MODE=enforce.
+// FW_MODE unset        → defaults to 'dev' (fail-OPEN, not fail-closed). This is the honest,
+//   currently-shipped guarantee — see README.md "Enforcement mode vs Development mode" before
+//   relying on this in production. To ship enforce-by-default instead, flip the single line
+//   below (DEFAULT_FW_MODE) and nothing else needs to change.
+const DEFAULT_FW_MODE = 'dev'; // ← flip to 'enforce' to make fail-closed the default
+function resolveFwMode() {
+  const raw = (process.env.FW_MODE || '').toLowerCase();
+  if (raw === 'enforce') return 'enforce';
+  if (raw === 'dev') return 'dev';
+  if (process.env.FW_STRICT_PRELOAD === '1') return 'enforce';
+  return DEFAULT_FW_MODE;
+}
+const fwMode = resolveFwMode();
+
 (function verifyPreloadManifold() {
   const execArgv = process.execArgv || [];
 
@@ -73,14 +92,26 @@ const { getAuditLog } = require('./src/audit-log');
   }
 
   if (!isPreloaded) {
-    if (process.env.FW_STRICT_PRELOAD === '1') {
-      console.error('[CRITICAL] Helios was not injected via --require. Set --require=aletheia-firewall to ensure all modules are intercepted from startup. Exiting.');
+    if (fwMode === 'enforce') {
+      console.error('[CRITICAL] Helios was not injected via --require (FW_MODE=enforce / FW_STRICT_PRELOAD=1). Set --require=<path to packages/fw-agent> to ensure all modules are intercepted from startup. Exiting.');
       process.exit(1);
     } else {
-      console.warn('[Helios] Warning: agent loaded via require() rather than --require. Modules loaded before this point are not protected.');
+      // One loud, high-visibility warning — this is a security-relevant fact, not a debug log.
+      console.warn(
+        '\n[Helios] ================================================================\n' +
+        '[Helios]  WARNING: running in DEVELOPMENT mode (FW_MODE=dev, the default).\n' +
+        '[Helios]  The agent was loaded via require() rather than --require, so any\n' +
+        '[Helios]  module loaded before this point is NOT protected, and this process\n' +
+        '[Helios]  will NOT exit if preload is missing entirely.\n' +
+        '[Helios]  Set FW_MODE=enforce to fail closed instead (refuses to start unless\n' +
+        '[Helios]  genuinely preloaded via --require). See README.md: "Enforcement mode\n' +
+        '[Helios]  vs Development mode".\n' +
+        '[Helios] ================================================================\n'
+      );
     }
   }
 })();
+
 
 // ── Primitive prototype lockdown (opt-in via FW_FREEZE_PROTOTYPES=1) ───────────────────────────
 // Disabled by default: freezing built-in prototypes breaks legitimate libraries
@@ -376,6 +407,13 @@ process.on('exit', (code) => {
 
 // Log startup
 auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: auditLog.filePath });
+
+// Record the active enforcement mode (P0-3) so an operator can audit which guarantee a given
+// run actually had — this fires regardless of whether the not-preloaded branch above triggered,
+// since a preloaded process is *also* in one mode or the other.
+const fwModeEvent = fwMode === 'enforce' ? 'FW_MODE_ENFORCE' : 'FW_MODE_DEV';
+auditLog.write({ eventType: fwModeEvent, mode: fwMode, timestamp: Date.now() });
+emitTelemetry(fwModeEvent, null, null, { mode: fwMode });
 
 // Export via getter so consumers always see the live map after hot-reload (F-21).
 const _exports = { compileMetrics, quarantinedModules };
