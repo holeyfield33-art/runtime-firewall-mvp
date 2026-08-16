@@ -17,7 +17,11 @@
     "p0_regression": false,
     "verifier_regressions_clean": true,
     "docs_receipt": {
-      "present": false
+      "present": true,
+      "status": "DRAFTED",
+      "changed_files": [
+        "CHANGELOG.md"
+      ]
     }
   },
   "sync_required": false,
@@ -29,7 +33,11 @@
     "a2-independent-rerun"
   ],
   "docs": {
-    "present": false
+    "present": true,
+    "status": "DRAFTED",
+    "changed_files": [
+      "CHANGELOG.md"
+    ]
   },
-  "timestamp": "2026-08-16T04:47:36.574Z"
+  "timestamp": "2026-08-16T04:46:53.107Z"
 }

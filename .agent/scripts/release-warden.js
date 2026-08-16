@@ -33,6 +33,17 @@ const SYNC_TRIGGER_PATTERNS = [
   /packages\/fw-agent\/index\.js$/,
 ];
 
+// Agent 4 (Docs Scribe) runs only after this script has already emitted PASS, and is bound to an
+// ALLOWLIST (not a blocklist) of documentation paths — its entire mandate is docs, so anything
+// outside this list is out of scope by definition, regardless of what its receipt claims.
+// Kept in sync with .agent/rules/security-gates.md and .agent/agents/docs-scribe.md.
+const DOC_PATH_ALLOWLIST = [
+  /(^|\/)CHANGELOG\.md$/,
+  /(^|\/)README\.md$/,
+  /(^|\/)docs\//,
+  /(^|\/)\.agent\/README\.md$/,
+];
+
 function loadJson(file) {
   if (!fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -152,6 +163,30 @@ function evaluate(runDir) {
   const syncFiles = (engineer.changed_files || []).filter((f) => SYNC_TRIGGER_PATTERNS.some((re) => re.test(f)));
   const syncRequired = syncFiles.length > 0;
 
+  // ── Optional Agent 4 (Docs Scribe) receipt ──────────────────────────────────────────────────
+  // Additive only: a missing docs-receipt.json never blocks or downgrades this PASS (Agent 4 may
+  // simply not have run yet). But if present, it is held to the exact same mechanical discipline
+  // as Agent 1 — "I only touched docs" is a claim in the receipt, not a fact, until every path in
+  // changed_files is verified against DOC_PATH_ALLOWLIST and clear of FORBIDDEN_PATH_PATTERNS.
+  let docsInfo = { present: false };
+  const docsPath = path.join(runDir, 'docs-receipt.json');
+  if (fs.existsSync(docsPath)) {
+    const docsValid = validateReceipt(path.join(CONTRACTS_DIR, 'docs-receipt.schema.json'), docsPath);
+    if (!docsValid.valid) {
+      return freeze('docs-receipt.json failed schema validation', checks, docsValid.errors.map((e) => `docs-receipt: ${e}`));
+    }
+    const docs = loadJson(docsPath);
+    const docsChangedFiles = docs.changed_files || [];
+    const docsForbidden = docsChangedFiles.filter((f) => FORBIDDEN_PATH_PATTERNS.some((re) => re.test(f)));
+    const docsOutOfScope = docsChangedFiles.filter((f) => !DOC_PATH_ALLOWLIST.some((re) => re.test(f)));
+    const docsInvalidPaths = [...new Set([...docsForbidden, ...docsOutOfScope])];
+    if (docsInvalidPaths.length > 0) {
+      return freeze(`docs-scribe touched non-documentation path(s): ${docsInvalidPaths.join(', ')}`, checks);
+    }
+    docsInfo = { present: true, status: docs.status, changed_files: docsChangedFiles };
+  }
+  checks.docs_receipt = docsInfo;
+
   return {
     status: 'PASS',
     reasons,
@@ -161,6 +196,7 @@ function evaluate(runDir) {
     sync_reason: syncRequired
       ? `changed_files touched detector-relevant source: ${syncFiles.join(', ')}`
       : 'no detector-relevant source files changed',
+    docs: docsInfo,
   };
 
   function freeze(reason, extraChecks, extraReasons) {
@@ -189,6 +225,7 @@ function writeWardenReceipt(runDir, phaseId, result) {
     reasons: result.reasons || [],
     freeze_reason: result.freeze_reason || '',
     evidence: [...((engineer && engineer.evidence) || []), ...((verifier && verifier.evidence) || [])],
+    docs: result.docs || { present: false },
     timestamp: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(runDir, 'warden-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
@@ -214,4 +251,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { evaluate, writeWardenReceipt, FORBIDDEN_PATH_PATTERNS, SYNC_TRIGGER_PATTERNS };
+module.exports = { evaluate, writeWardenReceipt, FORBIDDEN_PATH_PATTERNS, SYNC_TRIGGER_PATTERNS, DOC_PATH_ALLOWLIST };

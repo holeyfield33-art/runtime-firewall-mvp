@@ -40,9 +40,21 @@ A1 REWORK  A3 -- Release Warden   (.agent/agents/release-warden.md, .agent/scrip
               v
         RELEASE CANDIDATE
               |
-              v
-        HUMAN APPROVAL   <-- always a person, never automated by this directory
+              +-------------------------+
+              |                         |
+              v                         v
+        HUMAN APPROVAL            A4 -- Docs Scribe   (.agent/agents/docs-scribe.md)
+  <-- always a person,                  |
+      never automated                   v
+      by this directory            CHANGELOG.md / docs/*.md draft
+                                    (re-validated by release-warden.js;
+                                     out-of-scope path => FREEZE)
 ```
+
+A4 is additive, not gating: it can only run after A3 already returned `PASS`, it never blocks
+`HUMAN APPROVAL`, and its absence changes nothing. If it does run, `release-warden.js`
+re-validates its receipt on the next invocation and mechanically confines it to documentation
+paths — same trust discipline as A1, just a different allowlist.
 
 Full state machine detail: `rules/state-machine.md`. Deterministic gate conditions:
 `rules/security-gates.md`. Sync-required determination: `rules/sync-gate-rule.md`.
@@ -82,6 +94,7 @@ scripts in `scripts/` decide `PASS` / `BLOCK` / `FREEZE`.
 | A1 Boundary Engineer | `agents/boundary-engineer.md` | read/search repo, modify `packages/fw-agent` \& `packages/fw-control` src, add/run tests, branch, commit | registry/publish, push to `main`, delete/weaken tests, edit `.agent/` control plane itself, declare own work verified |
 | A2 Red-Team Verifier | `agents/red-team-verifier.md` | fresh checkout of candidate SHA, run tests + attacks, run matrix | trusting A1's claims, verifying anything other than the exact candidate SHA |
 | A3 Release Warden | `agents/release-warden.md` | run `release-warden.js`, report its output verbatim | overriding the script's verdict, deciding `sync_required` by "judgment" |
+| A4 Docs Scribe | `agents/docs-scribe.md` | run only after A3 `PASS`; append to `CHANGELOG.md`'s `[Unreleased]` section, update directly-affected `docs/*.md` \& package `README.md`s, branch, commit | running before A3 `PASS`, touching anything outside the doc allowlist, editing `.agent/` control plane, bumping version/date, claiming anything not traceable to a receipt field |
 
 ## Receipts
 
@@ -91,6 +104,10 @@ Every run directory (`runs/<run-id>/`) accumulates:
 - `verifier-receipt.json` — validates against `contracts/verifier-receipt.schema.json`
 - `warden-receipt.json` — written only by `scripts/release-warden.js`, validates against
   `contracts/warden-receipt.schema.json`
+- `docs-receipt.json` — optional, written by Agent 4 only after `warden-receipt.status ===
+  'PASS'` exists; validates against `contracts/docs-receipt.schema.json`. Re-checked by
+  `release-warden.js` on its next run: any `changed_files` entry outside the documentation
+  allowlist is a `FREEZE`.
 - `checkpoints.json` — append-only git-state log (`scripts/checkpoint.js`)
 - `evidence/` — one `{id}.json` (schema: `contracts/evidence-bundle.schema.json`) plus
   `{id}.stdout.log` / `{id}.stderr.log` per command run, and an `index.json` list of IDs

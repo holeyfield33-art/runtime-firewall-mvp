@@ -14,6 +14,8 @@ subject to model judgment. If the code and the prose here ever disagree, the cod
 | Candidate SHA changed between `a2-verify-start` and `a2-verify-end` | checkpoint comparison |
 | Forbidden file modified | path pattern match against `engineer-receipt.changed_files` |
 | Cited evidence missing from `evidence/index.json` | index lookup |
+| `docs-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/docs-receipt.schema.json` |
+| `docs-receipt.changed_files` contains a path outside the documentation allowlist, or a forbidden path | set comparison against `DOC_PATH_ALLOWLIST` / `FORBIDDEN_PATH_PATTERNS` |
 
 ## Forbidden paths (any match in `changed_files` is an automatic FREEZE)
 
@@ -30,6 +32,21 @@ policy.signed.json
 
 The last four exist so Agent 1 cannot edit the gate that judges its own work — the control plane
 must be out of scope for the very directive it is enforcing.
+
+## Documentation allowlist (Agent 4 only — any match NOT in this list is an automatic FREEZE)
+
+```
+CHANGELOG.md
+README.md                          (root, or any packages/*/README.md)
+docs/**
+.agent/README.md
+```
+
+Unlike A1's list, this is an **allowlist**, not a blocklist: Agent 4's entire mandate is
+documentation, so a `docs-receipt.changed_files` entry that matches neither this list nor the
+forbidden-path list above is still out of scope — there is no third category. This is checked
+only if `docs-receipt.json` exists in the run directory; its absence never affects `PASS`/`BLOCK`/
+`FREEZE` for the A1/A2/A3 loop.
 
 ## BLOCK conditions (verification loop must continue, not a fatal stop)
 

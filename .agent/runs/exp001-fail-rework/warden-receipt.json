@@ -15,7 +15,10 @@
     "evidence_present": true,
     "a2_pass": true,
     "p0_regression": false,
-    "verifier_regressions_clean": true
+    "verifier_regressions_clean": true,
+    "docs_receipt": {
+      "present": false
+    }
   },
   "sync_required": false,
   "sync_reason": "no detector-relevant source files changed",
@@ -26,5 +29,8 @@
     "a1-rework-fixture-run",
     "a2-rework-independent-rerun"
   ],
-  "timestamp": "2026-08-16T01:56:09.945Z"
+  "docs": {
+    "present": false
+  },
+  "timestamp": "2026-08-16T04:47:36.756Z"
 }

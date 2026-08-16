@@ -31,9 +31,18 @@ A2_VERIFY           (red-team-verifier checks out candidate_sha fresh, attacks i
                v
          RELEASE_CANDIDATE
                |
-               v
-         HUMAN_APPROVAL   (out of scope for automation — see repo root release procedure)
+               +--------------------------+
+               |                          |
+               v                          v
+         HUMAN_APPROVAL              A4_DOCS   (docs-scribe drafts CHANGELOG.md / docs/*.md;
+   (out of scope for automation --         re-validated by release-warden.js on next run;
+    see repo root release procedure)       out-of-allowlist changed_files => FREEZE)
 ```
+
+`A4_DOCS` is not on the critical path to `RELEASE_CANDIDATE` — it runs after that state is
+already reached and never gates `HUMAN_APPROVAL`. It exists so the changelog isn't hand-written
+after the fact from memory; every claim it writes must trace back to a field already present in
+`engineer-receipt.json` or `warden-receipt.json`.
 
 ## Artifacts per state
 
@@ -45,6 +54,7 @@ A2_VERIFY           (red-team-verifier checks out candidate_sha fresh, attacks i
 | `A2_VERIFY` (work) | `verifier-receipt.json`, `evidence/*.json` | (agent-authored + `scripts/collect-evidence.js`) |
 | `A2_VERIFY` (end) | `checkpoints.json` entry `label: "a2-verify-end"` | `scripts/checkpoint.js create <runDir> a2-verify-end` |
 | `A3_GATE` | `warden-receipt.json` | `scripts/release-warden.js <runDir> <phaseId>` |
+| `A4_DOCS` (optional, post-`RELEASE_CANDIDATE`) | `docs-receipt.json` | (agent-authored, schema in `contracts/docs-receipt.schema.json`; re-validated by a subsequent `scripts/release-warden.js` run) |
 
 ## Invariants enforced mechanically, not by agent honesty
 

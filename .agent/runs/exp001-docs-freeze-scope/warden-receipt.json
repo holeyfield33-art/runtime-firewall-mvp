@@ -1,7 +1,7 @@
 {
   "phase_id": "P2-EXPERIMENT-001",
   "agent": "release-warden",
-  "status": "PASS",
+  "status": "FREEZE",
   "candidate_sha": "920955327ced380c9138fb0ffb24d97fb4704be1",
   "checks": {
     "engineer_receipt_present": true,
@@ -15,15 +15,14 @@
     "evidence_present": true,
     "a2_pass": true,
     "p0_regression": false,
-    "verifier_regressions_clean": true,
-    "docs_receipt": {
-      "present": false
-    }
+    "verifier_regressions_clean": true
   },
   "sync_required": false,
-  "sync_reason": "no detector-relevant source files changed",
-  "reasons": [],
-  "freeze_reason": "",
+  "sync_reason": "not evaluated — run frozen",
+  "reasons": [
+    "docs-scribe touched non-documentation path(s): packages/fw-agent/src/index.js"
+  ],
+  "freeze_reason": "docs-scribe touched non-documentation path(s): packages/fw-agent/src/index.js",
   "evidence": [
     "a1-fixture-test",
     "a2-independent-rerun"
@@ -31,5 +30,5 @@
   "docs": {
     "present": false
   },
-  "timestamp": "2026-08-16T04:47:36.574Z"
+  "timestamp": "2026-08-16T04:46:53.331Z"
 }
