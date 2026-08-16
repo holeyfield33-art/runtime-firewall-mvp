@@ -3,5 +3,5 @@
 // orchestration graph mechanics. Not a real product test; safe to delete after the experiment.
 'use strict';
 const assert = require('assert');
-assert.strictEqual(1 + 1, 3, 'sanity check for P2-EXPERIMENT-001 PASS scenario');
+assert.strictEqual(1 + 1, 2, 'sanity check for P2-EXPERIMENT-001 PASS scenario');
 console.log('P2-EXPERIMENT-001 fixture: OK');
