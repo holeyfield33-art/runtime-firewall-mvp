@@ -167,28 +167,47 @@ trusted.
 ## `P2-01`
 
 Run for real (first non-throwaway directive through this graph) on branch
-`fix/p2-01-esm-static-import`, candidate `b10210925a3c257463edee59031b042116351d21`, run directory
-`runs/p2-01/` (gitignored like all real runs — this is a local audit trail, not checked-in proof
-evidence the way `runs/exp001-*` is). A1 implemented a `module.register()` ESM load hook
-(`packages/fw-agent/esm-loader.mjs`); A2 (a genuinely independent agent, fresh `git worktree`,
-never shown A1's reasoning) tried nine distinct evasion angles beyond A1's own tests, found one
-real bypass (split-string signature smuggling) and proved it pre-exists on the original CJS path
-too — not a new gap — and returned `PASS`; A3 (`release-warden.js`) then FROZE on a real, previously
-unexercised finding: fixing `index.js` requires regenerating `packages/fw-agent/.helios-baseline`,
-which was unconditionally forbidden. Resolved with a narrow, mechanically-verified carve-out (see
-`rules/security-gates.md`) — proven both positively (this real run, now `PASS`) and negatively
-(`runs/exp001-freeze-baseline-tamper/`, a deliberately wrong baseline that still FREEZEs). Final
-`release-warden.js` verdict: `PASS`, `sync_required: true` (touches
-`packages/fw-agent/index.js`) — awaiting human review/merge, not yet integrated into `main`.
+`fix/p2-01-esm-static-import`, run directory `runs/p2-01/` (gitignored like all real runs — a
+local audit trail, not checked-in proof evidence the way `runs/exp001-*` is). Went through two
+iterations, both recorded in the run directory (`iteration-1-*.json` preserved before iteration 2
+overwrote the active receipts):
 
-Boundary matrix after P2-01 (`results/execution-surface-matrix.json`): ESM static import and
-dynamic `import()` now both report `INTERCEPTED` (dynamic import() closing is an inherent,
-documented side effect of the same load hook — Node does not distinguish the two syntaxes at that
-hook — disclosed as out of the directive's formal scope but not hidden); `require()`, nested
-`require()`, `worker_threads`, `child_process.fork()`, `child_process.spawn('node', ...)`, and the
-pre-hook/cache path all report `INTERCEPTED`; `vm.runInNewContext()` remains `BYPASS` and native
-`.node` addon load remains `UNSUPPORTED` — both explicitly out of P2-01 scope, confirmed
-architecturally unchanged.
+- **Iteration 1** (candidate `b102109`): A1 implemented a `module.register()` ESM load hook in a
+  separate file (`esm-loader.mjs`) with its own isolated `Detector`. A2 (independent agent, fresh
+  `git worktree`, never shown A1's reasoning) tried nine evasion angles, found one real bypass
+  (split-string signature smuggling), proved it pre-exists on the original CJS path too — not a
+  new gap — and returned `PASS`. A3 then FROZE on a real, previously unexercised finding: fixing
+  `index.js` requires regenerating `packages/fw-agent/.helios-baseline`, unconditionally forbidden
+  at the time. Resolved with a narrow, mechanically-verified carve-out (see
+  `rules/security-gates.md`), proven both positively (this run, now `PASS`) and negatively
+  (`runs/exp001-freeze-baseline-tamper/`, a deliberately wrong baseline that still FREEZEs).
+- **Iteration 2** (candidate `94388bd`, the FINAL state): A1_REWORK, not triggered by a verifier
+  FAIL — triggered by discovering `module.register()` is Stability-0-Deprecated in current Node
+  docs. Replaced with `module.registerHooks()` (Stability 1.2, Node ≥22.15.0/≥23.5.0), whose `load`
+  hook runs synchronously on the MAIN thread — `esm-loader.mjs` deleted; the hook is now inline in
+  `index.js`, directly reusing the same `detector`/`policyMap`/`verifiedCompilationsCache` the CJS
+  path uses. A2 (a second independent agent, fresh worktree again) verified this wasn't just a
+  deprecation dodge: generated a real signed policy and confirmed ESM modules now get genuine
+  BLOCK/QUARANTINE policy overrides (impossible in iteration 1), confirmed same-main-thread
+  execution independently (not trusting the engineer receipt's claim), and — beyond either
+  receipt's claims — found that behavioral correlation now fires **across the CJS/ESM boundary**
+  for a split attack (credential read in one file, egress in the other, different module systems,
+  same package), with a clean control proving it's genuine correlation. Verdict `PASS`. A3:
+  `PASS`, `sync_required: true` (touches `packages/fw-agent/index.js`) — awaiting human
+  review/merge, not yet integrated into `main`.
+
+Boundary matrix after P2-01: ESM static import and dynamic `import()` both report `INTERCEPTED`
+(dynamic import() closing is an inherent, documented side effect of the same load hook — Node
+does not distinguish the two syntaxes at that hook — disclosed as out of the directive's formal
+scope, not hidden); `require()`, nested `require()`, `worker_threads`, `child_process.fork()`,
+`child_process.spawn('node', ...)`, and the pre-hook/cache path all report `INTERCEPTED`;
+`vm.runInNewContext()` remains `BYPASS` and native `.node` addon load remains `UNSUPPORTED` — both
+explicitly out of P2-01 scope, confirmed architecturally unchanged across both iterations.
+
+Version floor note: `module.registerHooks()` requires Node ≥22.15.0/≥23.5.0, narrower than
+`fw-agent`'s declared `>=18.0.0` package floor (which covers its CJS functionality). Below that
+floor, ESM protection stays an honest, logged `UNSUPPORTED` bypass — never silently claimed as
+protected.
 
 ## Readiness for MRN integration
 
