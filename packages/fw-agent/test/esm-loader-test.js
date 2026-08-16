@@ -1,8 +1,9 @@
 // packages/fw-agent/test/esm-loader-test.js
-// P2-01: direct unit coverage for the ESM Module Customization Hook (esm-loader.mjs), via real
-// child processes (spawnSync, not mocked) exercising genuine Node ESM semantics — a static
-// `import` declaration cannot be caught in-process (see esm-fixtures/static-import-sentinel.mjs
-// for why), so this asserts on the crashed child's exit code and stderr, not a caught exception.
+// P2-01: direct unit coverage for the ESM Module Customization Hook (index.js's
+// Module.registerHooks() load hook), via real child processes (spawnSync, not mocked) exercising
+// genuine Node ESM semantics — a static `import` declaration cannot be caught in-process (see
+// esm-fixtures/static-import-sentinel.mjs for why), so this asserts on the crashed child's exit
+// code and stderr, not a caught exception.
 'use strict';
 const assert = require('assert');
 const path = require('path');
@@ -68,15 +69,21 @@ check('legitimate ESM module still imports cleanly (no false positive)', () => {
   assert.ok(res.stdout.includes('BENIGN_OK:5'), 'expected the benign module to run correctly:\n' + res.stdout);
 });
 
-check('on a Node version without module.register(), the agent still starts (documented UNSUPPORTED, not a crash)', () => {
+check('on a Node version without module.registerHooks(), the agent still starts (documented UNSUPPORTED, not a crash)', () => {
   // Cannot actually swap Node versions in this test environment; instead verify the guard logic
-  // directly: a normal preloaded start (module.register() IS available on this Node) must not
-  // throw or print the ESM_HOOK_UNAVAILABLE warning, proving the availability branch is live and
-  // was exercised (not dead code) rather than only asserting the unreachable branch never fires.
+  // directly: a normal preloaded start (registerHooks() IS available on this Node) must not throw
+  // or print the ESM_HOOK_UNAVAILABLE warning, proving the availability branch is live and was
+  // exercised (not dead code) rather than only asserting the unreachable branch never fires.
   const res = spawnFixture('benign.mjs');
-  assert.strictEqual(res.status, 0, 'agent must start cleanly when module.register() is available: ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.strictEqual(res.status, 0, 'agent must start cleanly when registerHooks() is available: ' + res.status + '\nstderr:\n' + res.stderr);
   assert.ok(!res.stderr.includes('ESM_HOOK_UNAVAILABLE') && !res.stderr.includes('ESM static/dynamic import interception not active'),
-    'must not warn about a missing ESM hook when module.register() is actually available:\n' + res.stderr);
+    'must not warn about a missing ESM hook when registerHooks() is actually available:\n' + res.stderr);
+});
+
+check('no DeprecationWarning is emitted (confirms registerHooks(), not the deprecated register(), is in use)', () => {
+  const res = spawnFixture('benign.mjs');
+  assert.strictEqual(res.status, 0, 'expected exit 0: ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.ok(!/DeprecationWarning/.test(res.stderr), 'must not trigger a deprecation warning:\n' + res.stderr);
 });
 
 console.log(`\n${passed} ESM loader checks passed.`);
