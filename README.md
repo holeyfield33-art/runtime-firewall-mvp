@@ -5,7 +5,7 @@
 
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
-**What this intercepts:** `require()`-time module compilation (signature + behavioral scan), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), and AST-obfuscated eval techniques (documented below as known bypasses).
+**What this intercepts:** `require()`-time module compilation (signature + behavioral scan), ESM `import`/`import()` on Node ≥22.15.0/≥23.5.0 (see below), the host project's own npm lifecycle scripts, and changes to the runtime policy file. **What this does NOT intercept:** dependency `postinstall` hooks in `node_modules` (the npm installer runs those before the firewall loads), Bun/Deno (detection exits if preload is absent, but coverage is limited), ESM on older Node versions (see the version-floor note below), and AST-obfuscated eval techniques (documented below as known bypasses).
 
 > **See it in 30 seconds:** clone the repo, run `npm install`, then `bash demo/demo.sh`. It loads a crypto-miner and a credential stealer with the firewall off (they run) and on (both blocked), plus a normal analytics module that is correctly allowed. See [Demo](#demo) below.
 
@@ -13,18 +13,29 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 ## Coverage & Limitations
 
-Aletheia hooks `Module.prototype._compile`, Node's CommonJS compilation step. This means:
+Aletheia hooks `Module.prototype._compile` (Node's CommonJS compilation step) and, on a
+supported Node version, `module.registerHooks()` (Node's synchronous ESM Customization Hooks
+API) for the ES module loader. This means:
 
 | Load path | Covered |
 |---|---|
 | `require()` of `.js` / `.cjs` | ✅ |
-| `import` / `import()` (ESM, `.mjs`) | ❌ separate Node loader, not hooked |
+| `import` / `import()` (ESM, `.mjs`, or `.js` under `"type": "module"`) | ✅ on Node ≥22.15.0 / ≥23.5.0 — ❌ below that floor (see note) |
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
 | Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
 
+**ESM version floor:** `module.registerHooks()` — the non-deprecated, synchronous ESM hook API —
+requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`>=18.0.0`) covers
+its CommonJS functionality; below the ESM-specific floor, `import`/`import()` runs
+**unprotected**, with a loud, logged warning (`FW_MODE=enforce` treats it as a hard failure) —
+never silently claimed as covered. ESM policy `QUARANTINE` also has no equivalent to CJS's live
+export-stub substitution (there's no module object to swap mid-evaluation from inside a load
+hook) and degrades to `BLOCK` instead — the module still never runs, it just isn't handed a
+fake, inert replacement export the way CJS `QUARANTINE` is.
+
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
-already in your CommonJS require graph, after `npm install` has finished. It is not an
+already in your require/import graph, after `npm install` has finished. It is not an
 install-time scanner and does not intercept package installation.
 
 Detection is signature + behavioral, not AST-based, so payloads can evade static matching

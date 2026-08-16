@@ -1,8 +1,12 @@
 # `.agent/` — Aletheia Firewall Phase 2 Orchestration Prototype
 
-**Status:** prototype, proven on `P2-EXPERIMENT-001`. Proof-run evidence is checked in under
-`runs/exp001-*/` as of commit `f17a069` on branch `agent/p2-orchestration-proof` (base:
-`0793227`, current `main` at authoring time).
+**Status:** prototype, proven on `P2-EXPERIMENT-001` and on `P2-01` (the first real,
+non-throwaway directive run through this graph — see the `P2-01` section below).
+
+**Operating this graph:** see [`RUNBOOK.md`](RUNBOOK.md) — how to start a run, how each role
+actually gets played (human / subagent / local model), how to switch out roles and prompts, how
+the rework loop works, and how to read a `FREEZE`. This document (`README.md`) is the what/why;
+`RUNBOOK.md` is the how.
 
 **Scope of this directory:** a local three-agent development-loop contract for the
 `runtime-firewall-mvp` repository (package name on npm: `aletheia-firewall`). This is an

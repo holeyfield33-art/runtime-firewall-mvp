@@ -58,6 +58,7 @@ CHANGELOG.md
 README.md                          (root, or any packages/*/README.md)
 docs/**
 .agent/README.md
+.agent/RUNBOOK.md
 ```
 
 Unlike A1's list, this is an **allowlist**, not a blocklist: Agent 4's entire mandate is

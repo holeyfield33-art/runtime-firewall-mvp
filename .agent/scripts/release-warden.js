@@ -103,6 +103,7 @@ const DOC_PATH_ALLOWLIST = [
   /(^|\/)README\.md$/,
   /(^|\/)docs\//,
   /(^|\/)\.agent\/README\.md$/,
+  /(^|\/)\.agent\/RUNBOOK\.md$/,
 ];
 
 function loadJson(file) {
