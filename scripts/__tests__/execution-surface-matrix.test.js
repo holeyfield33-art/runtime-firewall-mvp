@@ -60,6 +60,27 @@ check('coordinator writes results/execution-surface-matrix.json in the required 
   assert.ok(nestedRequire, 'nested require() [control] row not found');
   assert.strictEqual(require_.verdict, 'INTERCEPTED', 'require() [control] row must be INTERCEPTED');
   assert.strictEqual(nestedRequire.verdict, 'INTERCEPTED', 'nested require() [control] row must be INTERCEPTED');
+
+  // P2-01: ESM static import interception (the directive's actual target). module.register()'s
+  // load hook applies to both static `import` and dynamic import() alike — Node's ESM loader does
+  // not distinguish the two syntaxes at this level — so fixing the directive's target row also
+  // closes the dynamic-import row as an inherent, documented side effect (not an unrelated change;
+  // see P2-01 engineer-receipt known_limitations). Both are asserted here.
+  const esmStatic = data.rows.find(r => r.path.toLowerCase().includes('esm static import'));
+  const dynamicImport = data.rows.find(r => r.path.toLowerCase().includes('dynamic import'));
+  assert.ok(esmStatic, 'ESM static import row not found');
+  assert.ok(dynamicImport, 'dynamic import() row not found');
+  assert.strictEqual(esmStatic.verdict, 'INTERCEPTED', 'ESM static import row must be INTERCEPTED after P2-01');
+  assert.strictEqual(dynamicImport.verdict, 'INTERCEPTED', 'dynamic import() row must be INTERCEPTED as a side effect of the same load hook');
+
+  // Explicitly out of scope for P2-01 (per the directive) and must remain UNCHANGED — these are
+  // architecturally different execution paths the ESM loader hook cannot and should not affect.
+  const vmContext = data.rows.find(r => r.path.toLowerCase().includes('vm.runinnewcontext'));
+  const nativeAddon = data.rows.find(r => r.path.toLowerCase().includes('native .node addon'));
+  assert.ok(vmContext, 'vm.runInNewContext() row not found');
+  assert.ok(nativeAddon, 'native .node addon row not found');
+  assert.strictEqual(vmContext.verdict, 'BYPASS', 'vm.runInNewContext() must remain BYPASS — out of P2-01 scope, unrelated mechanism');
+  assert.notStrictEqual(nativeAddon.verdict, 'INTERCEPTED', 'native .node addon must not have silently flipped to INTERCEPTED — out of P2-01 scope, unrelated mechanism');
 });
 
 check('coordinator exits 0 when both control rows are INTERCEPTED', () => {

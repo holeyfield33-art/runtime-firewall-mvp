@@ -332,6 +332,28 @@ try {
   childReinjectionError = childReinjectionError || e;
 }
 
+// ── P2-01: ESM static/dynamic import interception ────────────────────────────────────────────
+// Module.prototype._compile (hooked below) is never invoked for ES module evaluation — Node's
+// ESM loader is an entirely separate pipeline. module.register() (Module Customization Hooks,
+// stable since Node 18.19.0 / 20.6.0) intercepts ESM source before evaluation via a `load` hook
+// defined in esm-loader.mjs (see that file's header for why it's a separate module and what it
+// does and doesn't share with this process's detection state). On Node versions without
+// module.register(), ESM stays an architecturally UNSUPPORTED bypass — not silently claimed as
+// protected.
+let esmHookOk = true;
+let esmHookError = null;
+if (typeof Module.register === 'function') {
+  try {
+    Module.register('./esm-loader.mjs', require('url').pathToFileURL(__filename));
+  } catch (e) {
+    esmHookOk = false;
+    esmHookError = e;
+  }
+} else {
+  esmHookOk = false;
+  esmHookError = new Error(`module.register() unavailable on Node ${process.version} (requires >=18.19.0 or >=20.6.0)`);
+}
+
 // ── Telemetry worker thread ───────────────────────────────────────────────────────────────────
 const telemetryEnabled = process.env.FW_TELEMETRY === '1';
 const telemetryWorkerPath = path.join(__dirname, 'sync-worker.js');
@@ -628,6 +650,20 @@ if (!childReinjectionOk) {
     console.error(`[CRITICAL] [Helios] ${message}`);
   } else {
     console.warn(`[Helios] Warning: ${message}. Children/workers spawned from this process may run unprotected.`);
+  }
+}
+
+// Report the outcome of P2-01 ESM hook registration, same enforce/dev split as P0-4 above: on an
+// unsupported Node version or a registration failure, ESM stays an honest, documented bypass
+// rather than a silently-broken guarantee.
+if (!esmHookOk) {
+  const message = `ESM static/dynamic import interception not active: ${esmHookError && esmHookError.message}`;
+  if (fwMode === 'enforce') {
+    auditLog.write({ eventType: 'ESM_HOOK_UNAVAILABLE', message, timestamp: Date.now() });
+    emitTelemetry('ESM_HOOK_UNAVAILABLE', null, null, { message });
+    console.error(`[CRITICAL] [Helios] ${message}`);
+  } else {
+    console.warn(`[Helios] Warning: ${message}. ESM modules loaded via import/import() in this process run unprotected.`);
   }
 }
 
