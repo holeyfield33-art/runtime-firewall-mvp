@@ -16,7 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20, 22]
+        # Node 18/20/22: full suite green; ESM interception checks skip (registerHooks() floor is >=22.15.0).
+        # Node 24: hard-asserts full ESM static + dynamic interception via Module.registerHooks().
+        node-version: [18, 20, 22, 24]
 
     steps:
       - name: Checkout

@@ -1,8 +1,8 @@
 # Security Gates
 
-These are the deterministic conditions `scripts/release-warden.js` evaluates. None of them are
+These are the deterministic conditions `.agent/scripts/release-warden.js` evaluates. None of them are
 subject to model judgment. If the code and the prose here ever disagree, the code in
-`scripts/release-warden.js` is authoritative — this file documents intent, the script enforces it.
+`.agent/scripts/release-warden.js` is authoritative — this file documents intent, the script enforces it.
 
 ## FREEZE conditions (stop everything, no auto-recovery)
 
@@ -12,10 +12,10 @@ subject to model judgment. If the code and the prose here ever disagree, the cod
 | Receipt fails schema validation | `validate-receipt.js` against `contracts/*.schema.json` |
 | Candidate SHA mismatch across engineer receipt / verifier receipt / checkpoints | set comparison |
 | Candidate SHA changed between `a2-verify-start` and `a2-verify-end` | checkpoint comparison |
-| Forbidden file modified | path pattern match against `engineer-receipt.changed_files` |
+| Forbidden file modified | git-derived path list (`.agent/scripts/release-warden.js` runs `git diff --name-only base..candidate`) |
 | Cited evidence missing from `evidence/index.json` | index lookup |
 | `docs-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/docs-receipt.schema.json` |
-| `docs-receipt.changed_files` contains a path outside the documentation allowlist, or a forbidden path | set comparison against `DOC_PATH_ALLOWLIST` / `FORBIDDEN_PATH_PATTERNS` |
+| `docs-receipt.changed_files` contains a path outside the documentation allowlist, or a forbidden path | set comparison against `DOC_PATH_ALLOWLIST` / `FORBIDDEN_PATH_PATTERNS` in `.agent/scripts/release-warden.js` |
 
 ## Forbidden paths (any match in `changed_files` is an automatic FREEZE)
 

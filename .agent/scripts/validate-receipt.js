@@ -5,7 +5,7 @@
 // this repo) so the .agent/ contracts remain independently valid and cannot silently break if
 // an unrelated package's dependency tree changes.
 //
-// Supports: type, enum, required, properties, items, minLength, maxLength, additionalProperties.
+// Supports: type, enum, required, properties, items, minLength, maxLength.
 // This is intentionally a subset of draft-07 — enough to gate receipts, not a general validator.
 'use strict';
 

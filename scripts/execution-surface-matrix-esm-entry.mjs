@@ -4,12 +4,12 @@
 // declaration must live in a real ES module file, at the top level, unconditional, and outside
 // any try/catch — that is what distinguishes it from dynamic import() (exercised separately by
 // the CJS child under row "dynamic-import"). Static import bindings are resolved during module
-// linking, BEFORE this file's own body runs, so if the target throws (P2-01's esm-loader.mjs
-// blocking it), this file's body below never executes at all — the whole process crashes with an
-// uncaught exception instead. That crash, with a "[Firewall]" message on stderr, IS the positive
-// interception signal for this row; see execution-surface-matrix.js's runRow() for how the
-// coordinator classifies it (this file cannot write MATRIX_OUTFILE in that case — it never gets
-// the chance to run).
+// linking, BEFORE this file's own body runs, so if the target throws (the agent's ESM load hook
+// in packages/fw-agent/index.js via Module.registerHooks() blocking it), this file's body below
+// never executes at all — the whole process crashes with an uncaught exception instead. That crash,
+// with a "[Firewall]" message on stderr, IS the positive interception signal for this row; see
+// execution-surface-matrix.js's runRow() for how the coordinator classifies it (this file cannot
+// write MATRIX_OUTFILE in that case — it never gets the chance to run).
 import fs from 'node:fs';
 import sentinel from '../red-team/corpus/fixtures/sentinel-block.mjs';
 

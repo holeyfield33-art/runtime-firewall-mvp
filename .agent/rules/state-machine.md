@@ -49,12 +49,12 @@ after the fact from memory; every claim it writes must trace back to a field alr
 | State | Artifact written | Script |
 |---|---|---|
 | `A1_WRITE` | `engineer-receipt.json` | (agent-authored, schema in `contracts/engineer-receipt.schema.json`) |
-| `CHECKPOINT` (post-A1) | `checkpoints.json` entry `label: "a1-candidate"` | `scripts/checkpoint.js create <runDir> a1-candidate` |
-| `A2_VERIFY` (start) | `checkpoints.json` entry `label: "a2-verify-start"` | `scripts/checkpoint.js create <runDir> a2-verify-start` |
-| `A2_VERIFY` (work) | `verifier-receipt.json`, `evidence/*.json` | (agent-authored + `scripts/collect-evidence.js`) |
-| `A2_VERIFY` (end) | `checkpoints.json` entry `label: "a2-verify-end"` | `scripts/checkpoint.js create <runDir> a2-verify-end` |
-| `A3_GATE` | `warden-receipt.json` | `scripts/release-warden.js <runDir> <phaseId>` |
-| `A4_DOCS` (optional, post-`RELEASE_CANDIDATE`) | `docs-receipt.json` | (agent-authored, schema in `contracts/docs-receipt.schema.json`; re-validated by a subsequent `scripts/release-warden.js` run) |
+| `CHECKPOINT` (post-A1) | `checkpoints.json` entry `label: "a1-candidate"` | `.agent/scripts/checkpoint.js create <runDir> a1-candidate` |
+| `A2_VERIFY` (start) | `checkpoints.json` entry `label: "a2-verify-start"` | `.agent/scripts/checkpoint.js create <runDir> a2-verify-start` |
+| `A2_VERIFY` (work) | `verifier-receipt.json`, `evidence/*.json` | (agent-authored + `.agent/scripts/collect-evidence.js`) |
+| `A2_VERIFY` (end) | `checkpoints.json` entry `label: "a2-verify-end"` | `.agent/scripts/checkpoint.js create <runDir> a2-verify-end` |
+| `A3_GATE` | `warden-receipt.json` | `.agent/scripts/release-warden.js <runDir> <phaseId>` |
+| `A4_DOCS` (optional, post-`RELEASE_CANDIDATE`) | `docs-receipt.json` | (agent-authored, schema in `contracts/docs-receipt.schema.json`; re-validated by a subsequent `.agent/scripts/release-warden.js` run) |
 
 ## Invariants enforced mechanically, not by agent honesty
 

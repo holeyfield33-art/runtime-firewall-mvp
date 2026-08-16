@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-08-15T14:49:37.376Z",
+  "generatedAt": "2026-08-16T07:31:37.210Z",
   "target": "packages/fw-agent",
   "metadata": {
     "matrixVersion": "execution-surface-matrix-v1",
-    "gitSha": "6da81ac95c2f23bbc643a3f5478a22a78e9303cb",
+    "gitSha": "dcb7f81fe670ba28a5d0f584c8ed080e50f6a8c5",
     "package": {
       "name": "aletheia-firewall",
       "version": "0.4.0"
     },
-    "nodeVersion": "v24.14.0",
-    "platform": "linux",
+    "nodeVersion": "v24.18.0",
+    "platform": "win32",
     "arch": "x64"
   },
   "rows": [
@@ -25,13 +25,13 @@
     },
     {
       "path": "ESM static import",
-      "verdict": "BYPASS",
-      "detail": "ESM static import loaded the sentinel cleanly; Module.prototype._compile is never invoked for ESM evaluation, so the firewall hook cannot see this module."
+      "verdict": "INTERCEPTED",
+      "detail": "Child crashed (exit=1) before it could self-report a verdict, but stderr shows a firewall block: [COMPILATION LOCKDOWN] Threat detected in \"sentinel-block.mjs\"\nC:\\Users\\SuperAdmin\\.vscode\\runtime-firewall-mvp\\packages\\fw-agent\\index.js:671\r\n          throw new Error(msg);\r\n                ^\r\n\r\nError: [Firewall] Detection in \"sentinel-block.mjs\": crypto-miner\r\n    at load (C:\\Users\\SuperAdmin\\.v"
     },
     {
       "path": "dynamic import()",
-      "verdict": "BYPASS",
-      "detail": "dynamic import() loaded the ESM sentinel cleanly; Module.prototype._compile is never invoked for ESM evaluation, so the firewall hook cannot see this module."
+      "verdict": "INTERCEPTED",
+      "detail": "dynamic import() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.mjs\": crypto-miner"
     },
     {
       "path": "worker_threads -> new Worker",
@@ -45,8 +45,8 @@
     },
     {
       "path": "child_process.spawn('node', ...)",
-      "verdict": "BYPASS",
-      "detail": "child_process.spawn('node', ...) ran the sentinel unhindered; spawned children do not inherit --require execArgv, only env (NODE_OPTIONS)."
+      "verdict": "INTERCEPTED",
+      "detail": "Spawned child's require() threw a [Firewall] error: [Firewall] Detection in \"sentinel-block.js\": crypto-miner"
     },
     {
       "path": "vm.runInNewContext()",
