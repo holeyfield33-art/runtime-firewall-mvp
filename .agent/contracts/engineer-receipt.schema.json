@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "engineer-receipt.schema.json",
+  "title": "Boundary Engineer Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "base_sha",
+    "candidate_sha",
+    "changed_files",
+    "tests_added",
+    "tests_run",
+    "security_invariant",
+    "known_limitations",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["boundary-engineer"] },
+    "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "base_sha": { "type": "string", "minLength": 7 },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "tests_added": { "type": "array", "items": { "type": "string" } },
+    "tests_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "exit_code"],
+        "properties": {
+          "command": { "type": "string" },
+          "exit_code": { "type": "number" }
+        }
+      }
+    },
+    "security_invariant": { "type": "string", "minLength": 1 },
+    "known_limitations": { "type": "array", "items": { "type": "string" } },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "forbidden_files_touched": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

@@ -23,3 +23,9 @@ fw-agent-slowest.json
 demo-attack.js
 results/
 .soak-samples/
+
+# .agent/ run artifacts are reproducible evidence dumps, not source — keep the directory
+# structure but not individual run outputs.
+.agent/runs/*
+!.agent/runs/.gitkeep
+
