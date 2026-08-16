@@ -1,0 +1,24 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "red-team-verifier",
+  "status": "PASS",
+  "candidate_sha": "a5b755d1744877ff04a1b81db54b981d0ae8a187",
+  "clean_checkout": false,
+  "commands": [
+    {
+      "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js",
+      "exit_code": 0,
+      "observed_behavior": "printed 'P2-EXPERIMENT-001 fixture: OK' and exited 0"
+    }
+  ],
+  "controls": [
+    { "name": "independent re-run of the fixture Agent 1 declared as tests_added", "result": "PASS" }
+  ],
+  "attacks": [],
+  "regressions": [],
+  "matrix_result": {},
+  "escape_probes": [],
+  "evidence": ["a2-rework-independent-rerun"],
+  "notes": "Rework iteration 2 of P2-EXPERIMENT-001's FAIL/REWORK proof: candidate a5b755d1744877ff04a1b81db54b981d0ae8a187 (A1_REWORK after the FAIL recorded in iteration-1-verifier-receipt.json) independently re-verified and passes. Demonstrates A2_FAIL -> A1_REWORK -> CHECKPOINT -> A2_VERIFY loop completing.",
+  "timestamp": "2026-08-16T01:55:40.000Z"
+}

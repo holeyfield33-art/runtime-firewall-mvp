@@ -1,0 +1,30 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "release-warden",
+  "status": "PASS",
+  "candidate_sha": "a5b755d1744877ff04a1b81db54b981d0ae8a187",
+  "checks": {
+    "engineer_receipt_present": true,
+    "verifier_receipt_present": true,
+    "engineer_receipt_valid": true,
+    "verifier_receipt_valid": true,
+    "candidate_sha_consistent": true,
+    "candidate_sha_immutable_during_verification": true,
+    "forbidden_files_touched": [],
+    "registry_modified_prematurely": false,
+    "evidence_present": true,
+    "a2_pass": true,
+    "p0_regression": false,
+    "verifier_regressions_clean": true
+  },
+  "sync_required": false,
+  "sync_reason": "no detector-relevant source files changed",
+  "reasons": [],
+  "freeze_reason": "",
+  "evidence": [
+    "a1-smoke-check",
+    "a1-rework-fixture-run",
+    "a2-rework-independent-rerun"
+  ],
+  "timestamp": "2026-08-16T01:56:09.945Z"
+}
