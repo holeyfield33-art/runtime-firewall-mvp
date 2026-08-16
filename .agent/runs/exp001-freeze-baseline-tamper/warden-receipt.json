@@ -13,7 +13,6 @@
     "changed_files_git_derived": [
       "packages/fw-agent/.helios-baseline"
     ],
-    "changed_files_receipt_matches_git": true,
     "forbidden_files_touched": [
       "packages/fw-agent/.helios-baseline"
     ],
@@ -35,5 +34,5 @@
   "docs": {
     "present": false
   },
-  "timestamp": "2026-08-16T07:32:23.373Z"
+  "timestamp": "2026-08-16T08:12:51.426Z"
 }

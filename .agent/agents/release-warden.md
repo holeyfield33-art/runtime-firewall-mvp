@@ -15,7 +15,8 @@ node .agent/scripts/release-warden.js <runDir> <phase_id>
 - Both receipts present and schema-valid.
 - Candidate SHA identical across engineer receipt, verifier receipt, and checkpoints.
 - Candidate SHA did not move between `a2-verify-start` and `a2-verify-end`.
-- No forbidden file in `engineer-receipt.changed_files`.
+- No forbidden file in the git-derived changed-file list (`git diff base_sha..candidate_sha`). The
+  self-reported `engineer-receipt.changed_files` is compared for honesty; any mismatch FREEZEs.
 - All evidence IDs cited by either receipt actually exist in `evidence/index.json`.
 - `verifier-receipt.status === 'PASS'`.
 - No nonzero exit code in `engineer-receipt.tests_run`.

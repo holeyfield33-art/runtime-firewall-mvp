@@ -31,10 +31,7 @@ function collect({ runDir, phaseId, evidenceId, command, cwd, timeoutMs }) {
   fs.mkdirSync(evidenceDir, { recursive: true });
 
   const startedAt = new Date().toISOString();
-  // shell:true delegates to the platform native shell (cmd.exe on Windows, /bin/sh on Unix)
-  // so the same command string works across environments without a hard-coded 'bash' dependency.
-  const result = spawnSync(command, {
-    shell: true,
+  const result = spawnSync('bash', ['-lc', command], {
     cwd,
     encoding: 'utf8',
     timeout: timeoutMs || 10 * 60 * 1000,
