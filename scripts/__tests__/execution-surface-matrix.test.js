@@ -61,11 +61,10 @@ check('coordinator writes results/execution-surface-matrix.json in the required 
   assert.strictEqual(require_.verdict, 'INTERCEPTED', 'require() [control] row must be INTERCEPTED');
   assert.strictEqual(nestedRequire.verdict, 'INTERCEPTED', 'nested require() [control] row must be INTERCEPTED');
 
-  // P2-01: ESM static import interception (the directive's actual target). module.register()'s
-  // load hook applies to both static `import` and dynamic import() alike — Node's ESM loader does
-  // not distinguish the two syntaxes at this level — so fixing the directive's target row also
-  // closes the dynamic-import row as an inherent, documented side effect (not an unrelated change;
-  // see P2-01 engineer-receipt known_limitations). Both are asserted here.
+  // P2-01: ESM static import interception (the directive's actual target). Module.registerHooks()'s
+  // `load` hook applies to both static `import` and dynamic import() — Node's ESM loader does not
+  // distinguish the two syntaxes at this interception point — so fixing the target row also closes
+  // the dynamic-import row as an inherent, documented side effect. Both are asserted here.
   const esmStatic = data.rows.find(r => r.path.toLowerCase().includes('esm static import'));
   const dynamicImport = data.rows.find(r => r.path.toLowerCase().includes('dynamic import'));
   assert.ok(esmStatic, 'ESM static import row not found');
