@@ -4,6 +4,12 @@
 // genuine Node ESM semantics — a static `import` declaration cannot be caught in-process (see
 // esm-fixtures/static-import-sentinel.mjs for why), so this asserts on the crashed child's exit
 // code and stderr, not a caught exception.
+//
+// module.registerHooks() requires Node >=22.15.0/>=23.5.0 (see index.js's own comment at the
+// registration site). CI runs this on Node 18/20/22/24 (.github/workflows/ci.yml) — below the
+// floor, ESM interception is an honest, documented UNSUPPORTED bypass, not a bug, so the checks
+// that assert interception must condition on whether the hook is actually available on the Node
+// running this test, not hard-assert a single outcome regardless of version.
 'use strict';
 const assert = require('assert');
 const path = require('path');
@@ -13,6 +19,7 @@ const { spawnSync } = require('child_process');
 const AGENT_PATH = path.join(__dirname, '..', 'index.js');
 const REPO_ROOT = path.join(__dirname, '..', '..', '..');
 const FIXTURES_DIR = path.join(__dirname, 'esm-fixtures');
+const REGISTER_HOOKS_AVAILABLE = typeof require('module').registerHooks === 'function';
 
 let passed = 0;
 function check(name, fn) {
@@ -39,18 +46,31 @@ function spawnFixture(fixture) {
   );
 }
 
-check('static `import` of malicious sentinel crashes the process with a [Firewall] error (no way to catch it in-process)', () => {
+check(REGISTER_HOOKS_AVAILABLE
+  ? 'static `import` of malicious sentinel crashes the process with a [Firewall] error (no way to catch it in-process)'
+  : `static \`import\` of malicious sentinel completes uncaught (honest BYPASS — registerHooks() unavailable on ${process.version})`, () => {
   const res = spawnFixture('static-import-sentinel.mjs');
-  assert.notStrictEqual(res.status, 0, 'expected non-zero exit, got ' + res.status);
-  assert.ok(res.stderr.includes('[Firewall]'), 'expected a [Firewall] message on stderr:\n' + res.stderr);
-  assert.ok(!res.stdout.includes('STATIC_IMPORT_COMPLETED'), 'the fixture body must never have run:\n' + res.stdout);
+  if (REGISTER_HOOKS_AVAILABLE) {
+    assert.notStrictEqual(res.status, 0, 'expected non-zero exit, got ' + res.status);
+    assert.ok(res.stderr.includes('[Firewall]'), 'expected a [Firewall] message on stderr:\n' + res.stderr);
+    assert.ok(!res.stdout.includes('STATIC_IMPORT_COMPLETED'), 'the fixture body must never have run:\n' + res.stdout);
+  } else {
+    assert.strictEqual(res.status, 0, 'below the registerHooks() floor the import is not intercepted at all, so the fixture body runs and exits 0: ' + res.status + '\nstderr:\n' + res.stderr);
+    assert.ok(res.stdout.includes('STATIC_IMPORT_COMPLETED'), 'expected the fixture body to have run (honest, disclosed bypass):\n' + res.stdout);
+  }
 });
 
-check('dynamic import() of malicious sentinel throws a catchable [Firewall] error', () => {
+check(REGISTER_HOOKS_AVAILABLE
+  ? 'dynamic import() of malicious sentinel throws a catchable [Firewall] error'
+  : `dynamic import() of malicious sentinel resolves uncaught (honest BYPASS — registerHooks() unavailable on ${process.version})`, () => {
   const res = spawnFixture('dynamic-import-sentinel.mjs');
-  assert.strictEqual(res.status, 0, 'fixture itself should exit 0 (it catches the import rejection): ' + res.status + '\nstderr:\n' + res.stderr);
-  assert.ok(res.stdout.includes('DYNAMIC_IMPORT_THREW'), 'expected the fixture to report a caught throw:\n' + res.stdout);
-  assert.ok(res.stdout.includes('[Firewall]'), 'expected the caught error message to contain [Firewall]:\n' + res.stdout);
+  assert.strictEqual(res.status, 0, 'fixture itself always exits 0 (it catches the import rejection when one occurs): ' + res.status + '\nstderr:\n' + res.stderr);
+  if (REGISTER_HOOKS_AVAILABLE) {
+    assert.ok(res.stdout.includes('DYNAMIC_IMPORT_THREW'), 'expected the fixture to report a caught throw:\n' + res.stdout);
+    assert.ok(res.stdout.includes('[Firewall]'), 'expected the caught error message to contain [Firewall]:\n' + res.stdout);
+  } else {
+    assert.ok(res.stdout.includes('DYNAMIC_IMPORT_COMPLETED'), 'expected the import to resolve cleanly (honest, disclosed bypass):\n' + res.stdout);
+  }
 });
 
 check('legitimate ESM module still imports cleanly (no false positive)', () => {
@@ -69,15 +89,17 @@ check('legitimate ESM module still imports cleanly (no false positive)', () => {
   assert.ok(res.stdout.includes('BENIGN_OK:5'), 'expected the benign module to run correctly:\n' + res.stdout);
 });
 
-check('on a Node version without module.registerHooks(), the agent still starts (documented UNSUPPORTED, not a crash)', () => {
-  // Cannot actually swap Node versions in this test environment; instead verify the guard logic
-  // directly: a normal preloaded start (registerHooks() IS available on this Node) must not throw
-  // or print the ESM_HOOK_UNAVAILABLE warning, proving the availability branch is live and was
-  // exercised (not dead code) rather than only asserting the unreachable branch never fires.
+check(REGISTER_HOOKS_AVAILABLE
+  ? 'when Module.registerHooks() is available, the agent starts without ESM_HOOK_UNAVAILABLE warnings'
+  : `when Module.registerHooks() is unavailable (Node ${process.version}), the agent still starts cleanly and discloses the gap (documented UNSUPPORTED, not a crash)`, () => {
   const res = spawnFixture('benign.mjs');
-  assert.strictEqual(res.status, 0, 'agent must start cleanly when registerHooks() is available: ' + res.status + '\nstderr:\n' + res.stderr);
-  assert.ok(!res.stderr.includes('ESM_HOOK_UNAVAILABLE') && !res.stderr.includes('ESM static/dynamic import interception not active'),
-    'must not warn about a missing ESM hook when registerHooks() is actually available:\n' + res.stderr);
+  assert.strictEqual(res.status, 0, 'agent must start cleanly either way: ' + res.status + '\nstderr:\n' + res.stderr);
+  const warnedAboutEsm = res.stderr.includes('ESM_HOOK_UNAVAILABLE') || res.stderr.includes('ESM static/dynamic import interception not active');
+  if (REGISTER_HOOKS_AVAILABLE) {
+    assert.ok(!warnedAboutEsm, 'must not warn about a missing ESM hook when registerHooks() is actually available:\n' + res.stderr);
+  } else {
+    assert.ok(warnedAboutEsm, 'must honestly disclose that ESM interception is unavailable below the registerHooks() floor, not silently claim coverage:\n' + res.stderr);
+  }
 });
 
 check('no DeprecationWarning is emitted (confirms registerHooks(), not the deprecated register(), is in use)', () => {

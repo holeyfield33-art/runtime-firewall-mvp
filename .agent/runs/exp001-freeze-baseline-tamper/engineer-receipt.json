@@ -3,6 +3,7 @@
   "agent": "boundary-engineer",
   "status": "PASS",
   "base_sha": "9562f9f0d26941d70b8a3ade40346564b21f9eec",
+  "base_sha_note": "Deviation from directives/P2-EXPERIMENT-001.json's stated base_sha (0793227) is expected and disclosed here: this negative-test fixture was built on agent/p2-orchestration-proof's tip for the same tooling-availability reason recorded in the real P2-01 receipts (the .agent/ control-plane scripts this fixture exercises only exist on that branch).",
   "candidate_sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
   "changed_files": [
     "packages/fw-agent/.helios-baseline"

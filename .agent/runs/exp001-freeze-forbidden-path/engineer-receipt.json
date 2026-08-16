@@ -5,18 +5,15 @@
   "base_sha": "0793227",
   "candidate_sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
   "changed_files": [
-    "packages/fw-agent/test/__agent-experiment-001-fixture.js",
     ".agent/scripts/release-warden.js"
   ],
-  "tests_added": [
-    "packages/fw-agent/test/__agent-experiment-001-fixture.js"
-  ],
+  "tests_added": [],
   "tests_run": [
     { "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js", "exit_code": 0 }
   ],
   "security_invariant": "No firewall enforcement source under packages/fw-agent/src or packages/fw-control/src was touched.",
   "known_limitations": [
-    "Deliberate FREEZE-proof scenario: this receipt (falsely, for the purpose of the test) declares that Agent 1 also modified .agent/scripts/release-warden.js, a forbidden path per .agent/agents/boundary-engineer.md and .agent/rules/security-gates.md."
+    "Deliberate FREEZE-proof scenario, reusing a real historical commit (3e91bd4, an actual bugfix to release-warden.js itself) as the candidate specifically because it genuinely touches a forbidden path — changed_files here accurately matches that commit's real git diff (git diff --name-only 3e91bd4^..3e91bd4), so this proves the forbidden-path FREEZE fires on honestly-reported, real data, not just on a receipt/git mismatch."
   ],
   "evidence": ["a1-claimed-test"],
   "timestamp": "2026-08-16T01:56:30.000Z"

@@ -42,6 +42,17 @@ that it's checked, not that it looks clean), and expect `release-warden.js` to v
 regeneration is exactly correct (see `rules/security-gates.md`'s `.helios-baseline` carve-out)
 rather than trusting your receipt's claim.
 
+## `changed_files` and `base_sha` are mechanically checked, not taken on trust
+
+`release-warden.js` never trusts your self-reported `changed_files` — it independently derives
+the real list via `git diff candidate_sha^..candidate_sha` (your candidate commit's own diff
+against its immediate parent) and FREEZEs on any mismatch. Report exactly what your own commit
+changed — nothing more, nothing less; do not carry over files from earlier, already-separately-
+committed work on the same branch. `base_sha` is checked too: it must be a genuine git ancestor
+of `candidate_sha` (never equal to it), and it should match the directive's own stated `base_sha`
+— if yours legitimately differs (e.g. tooling on your branch requires building on a later commit
+than the directive names), disclose it in a `base_sha_note` field, or the mismatch alone FREEZEs.
+
 ## Procedure
 
 1. Read the directive JSON. Confirm `base_sha` is still accurate against current `main`

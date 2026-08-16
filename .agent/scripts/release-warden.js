@@ -111,7 +111,7 @@ function loadJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
-function evaluate(runDir) {
+function evaluate(runDir, phaseId) {
   const reasons = [];
   const checks = {};
   let freezeReason = null;
@@ -188,15 +188,78 @@ function evaluate(runDir) {
   const candidateSha = pickCandidateSha();
   const baseSha = engineer.base_sha || null;
 
+  // ── base_sha honesty: it's still self-reported, and the whole point of deriving changed_files
+  // from `git diff base..candidate` is worthless if `base_sha` itself can be picked to make that
+  // diff appear artificially small or empty (e.g. base_sha === candidate_sha hides everything).
+  // Two independent checks, neither trusting the receipt's prose:
+  //   1. base_sha must be a genuine git ancestor of candidate_sha, and not equal to it — rules out
+  //      the degenerate "same commit" case and any unrelated/future SHA.
+  //   2. if a directive file for this phase_id exists, its OWN base_sha is the authoritative
+  //      reference; a receipt's base_sha may legitimately differ (branch topology reasons, as
+  //      actually happened on P2-01), but only with a non-empty base_sha_note disclosing why —
+  //      an undisclosed silent deviation from the directive is exactly the kind of scope-widening
+  //      this check exists to catch.
+  if (baseSha && candidateSha) {
+    if (baseSha === candidateSha) {
+      return freeze('base_sha equals candidate_sha (no possible diff — cannot derive changed_files honestly)', checks);
+    }
+    let isAncestor = false;
+    try {
+      execFileSync('git', ['merge-base', '--is-ancestor', baseSha, candidateSha], { encoding: 'utf8' });
+      isAncestor = true;
+    } catch (e) {
+      isAncestor = false;
+    }
+    checks.base_sha_is_ancestor = isAncestor;
+    if (!isAncestor) {
+      return freeze(`base_sha (${baseSha}) is not a git ancestor of candidate_sha (${candidateSha})`, checks);
+    }
+
+    const directiveMatch = (() => {
+      if (!phaseId) return null;
+      try {
+        const directivesDir = path.join(__dirname, '..', 'directives');
+        const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
+        return files.length > 0 ? path.join(directivesDir, files[0]) : null;
+      } catch (e) {
+        return null;
+      }
+    })();
+    if (directiveMatch) {
+      const directive = loadJson(directiveMatch);
+      const directiveBaseSha = directive && directive.base_sha;
+      if (directiveBaseSha && directiveBaseSha !== baseSha) {
+        const note = (engineer.base_sha_note || '').trim();
+        checks.base_sha_matches_directive = false;
+        checks.base_sha_deviation_disclosed = note.length > 0;
+        if (note.length === 0) {
+          return freeze(`engineer receipt's base_sha (${baseSha}) differs from directive's base_sha (${directiveBaseSha}) with no base_sha_note explaining the deviation`, checks);
+        }
+      } else {
+        checks.base_sha_matches_directive = true;
+      }
+    }
+  }
+
   function normalizePath(p) {
     return p.replace(/\\/g, '/').replace(/^\.\//, '');
   }
 
+  // ── Diff scope: candidate's own commit against its immediate parent, NOT base_sha..candidate.
+  // `base_sha` is the DIRECTIVE's original starting point (often several already-reviewed commits
+  // upstream on a shared branch — e.g. the whole .agent/ scaffold in this repo's actual history);
+  // diffing all the way back to it conflates "everything on this branch since the directive
+  // began" with "what THIS specific candidate changed," and floods forbidden-path/sync detection
+  // with unrelated, already-committed files. `changed_files` has always meant the latter in every
+  // real receipt this graph has produced — `<candidateSha>^..<candidateSha>` is what actually
+  // matches that meaning. (Assumes one commit per candidate/rework-iteration, the convention
+  // every real run here has followed; a multi-commit candidate between checkpoints is not
+  // correctly captured by this and should be squashed before checkpointing.)
   let gitChanged = [];
   let gitChangedOk = true;
   try {
-    if (!baseSha || !candidateSha) throw new Error('missing base or candidate SHA');
-    const out = execFileSync('git', ['diff', '--name-only', `${baseSha}..${candidateSha}`], { encoding: 'utf8' });
+    if (!candidateSha) throw new Error('missing candidate SHA');
+    const out = execFileSync('git', ['diff', '--name-only', `${candidateSha}^..${candidateSha}`], { encoding: 'utf8' });
     gitChanged = out
       .split(/\r?\n/)
       .map((s) => s.trim())
@@ -208,9 +271,8 @@ function evaluate(runDir) {
 
   checks.changed_files_git_derived = gitChanged;
   if (!gitChangedOk) {
-    return freeze('could not derive changed files from git (base..candidate)', {
+    return freeze('could not derive changed files from git (candidate^..candidate)', {
       changed_files_git_derived_ok: false,
-      base_sha_present: !!baseSha,
       candidate_sha_present: !!candidateSha,
     });
   }
@@ -370,7 +432,7 @@ function main() {
     console.error('Usage: release-warden.js <runDir> [phaseId]');
     process.exit(2);
   }
-  const result = evaluate(runDir);
+  const result = evaluate(runDir, phaseId);
   const receipt = writeWardenReceipt(runDir, phaseId || 'UNKNOWN', result);
   console.log(JSON.stringify(receipt, null, 2));
 

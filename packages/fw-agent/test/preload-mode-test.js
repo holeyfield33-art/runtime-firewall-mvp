@@ -93,7 +93,15 @@ check('genuine --require preload under FW_MODE=enforce continues normally (no fa
   const res = spawnRealPreload({ FW_MODE: 'enforce' });
   assert.strictEqual(res.status, 0, 'expected exit 0 for a real preload, got ' + res.status + '\nstderr:\n' + res.stderr);
   assert.ok(res.stdout.includes('preloaded-ok'), 'expected child script to have run:\n' + res.stdout);
-  assert.ok(!/CRITICAL/.test(res.stderr), 'must not print the not-preloaded CRITICAL message:\n' + res.stderr);
+  // Match the SPECIFIC not-preloaded message, not a bare /CRITICAL/ substring: this process is
+  // genuinely preloaded, so P0-3's not-preloaded guard must stay silent -- but a bare substring
+  // check would also (correctly) trip on an UNRELATED [CRITICAL] this same process may log for a
+  // different reason entirely (e.g. P2-01's ESM_HOOK_UNAVAILABLE on a Node version without
+  // module.registerHooks() -- expected and correct on Node <22.15/<23.5, nothing to do with
+  // whether preload happened). Conflating the two here was a real, unrelated-message false
+  // failure on the Node 18/20 CI legs once P2-01 landed.
+  assert.ok(!/\[CRITICAL\] Helios was not injected via --require/.test(res.stderr),
+    'must not print the not-preloaded CRITICAL message:\n' + res.stderr);
 });
 
 console.log(`\n${passed} preload-mode checks passed.`);

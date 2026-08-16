@@ -4,14 +4,18 @@
 // declaration must live in a real ES module file, at the top level, unconditional, and outside
 // any try/catch — that is what distinguishes it from dynamic import() (exercised separately by
 // the CJS child under row "dynamic-import"). Static import bindings are resolved during module
-// linking, BEFORE this file's own body runs, so if the target throws (P2-01's esm-loader.mjs
-// blocking it), this file's body below never executes at all — the whole process crashes with an
-// uncaught exception instead. That crash, with a "[Firewall]" message on stderr, IS the positive
-// interception signal for this row; see execution-surface-matrix.js's runRow() for how the
-// coordinator classifies it (this file cannot write MATRIX_OUTFILE in that case — it never gets
-// the chance to run).
+// linking, BEFORE this file's own body runs, so if the target throws (the agent's ESM load hook
+// in packages/fw-agent/index.js via Module.registerHooks() blocking it), this file's body below
+// never executes at all — the whole process crashes with an uncaught exception instead. That crash,
+// with a "[Firewall]" message on stderr, IS the positive interception signal for this row; see
+// execution-surface-matrix.js's runRow() for how the coordinator classifies it (this file cannot
+// write MATRIX_OUTFILE in that case — it never gets the chance to run).
 import fs from 'node:fs';
-import sentinel from '../red-team/corpus/fixtures/sentinel-block.mjs';
+// Named import, not default — sentinel-block.mjs has no default export. A default import here
+// was a latent bug: when the hook blocks it, the throw happens before Node checks the binding
+// exists, masking the mismatch; without the hook (older Node, honest bypass), Node itself would
+// throw an unrelated SyntaxError for the missing binding instead of reaching the report() below.
+import { ran } from '../red-team/corpus/fixtures/sentinel-block.mjs';
 
 const rowId = process.argv[2] || 'esm-static-import';
 const outFile = process.env.MATRIX_OUTFILE;
@@ -27,7 +31,7 @@ function report(verdict, detail) {
 
 // Reaching this line at all means the static import above completed without the loader hook
 // throwing — the malicious module ran.
-if (sentinel && sentinel.ran && globalThis.__SENTINEL_RAN__) {
+if (ran && globalThis.__SENTINEL_RAN__) {
   report('BYPASS', 'ESM static import of the sentinel completed and evaluated cleanly — not intercepted.');
 } else {
   report('UNSUPPORTED', 'ESM static import completed but sentinel marker was not observed.');

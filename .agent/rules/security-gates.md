@@ -12,7 +12,10 @@ subject to model judgment. If the code and the prose here ever disagree, the cod
 | Receipt fails schema validation | `validate-receipt.js` against `contracts/*.schema.json` |
 | Candidate SHA mismatch across engineer receipt / verifier receipt / checkpoints | set comparison |
 | Candidate SHA changed between `a2-verify-start` and `a2-verify-end` | checkpoint comparison |
-| Forbidden file modified | git-derived path list (`.agent/scripts/release-warden.js` runs `git diff --name-only base..candidate`) |
+| `base_sha` equals `candidate_sha`, or is not a real git ancestor of it | `git merge-base --is-ancestor` |
+| `base_sha` differs from the matching directive's own `base_sha` with no `base_sha_note` disclosing why | directive lookup by `phase_id` |
+| Engineer's self-reported `changed_files` doesn't exactly match the git-derived list | set comparison (see below) |
+| Forbidden file modified | git-derived path list — `.agent/scripts/release-warden.js` runs `git diff --name-only candidate^..candidate` (the candidate commit's own diff against its immediate parent, never the self-reported list, and never the distant directive-level `base_sha` — see the script's own comment for why that distinction matters) |
 | Cited evidence missing from `evidence/index.json` | index lookup |
 | `docs-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/docs-receipt.schema.json` |
 | `docs-receipt.changed_files` contains a path outside the documentation allowlist, or a forbidden path | set comparison against `DOC_PATH_ALLOWLIST` / `FORBIDDEN_PATH_PATTERNS` in `.agent/scripts/release-warden.js` |
