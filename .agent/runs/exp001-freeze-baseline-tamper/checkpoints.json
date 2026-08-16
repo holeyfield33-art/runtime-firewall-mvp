@@ -1,0 +1,26 @@
+[
+  {
+    "label": "a1-candidate",
+    "timestamp": "2026-08-16T05:49:07.021Z",
+    "sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+    "branch": "tmp-baseline-tamper-test",
+    "dirty": true,
+    "status": "M .agent/scripts/release-warden.js"
+  },
+  {
+    "label": "a2-verify-start",
+    "timestamp": "2026-08-16T05:49:35.821Z",
+    "sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+    "branch": "tmp-baseline-tamper-test",
+    "dirty": true,
+    "status": "M .agent/scripts/release-warden.js\n?? .agent/runs/exp001-freeze-baseline-tamper/"
+  },
+  {
+    "label": "a2-verify-end",
+    "timestamp": "2026-08-16T05:49:36.705Z",
+    "sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+    "branch": "tmp-baseline-tamper-test",
+    "dirty": true,
+    "status": "M .agent/scripts/release-warden.js\n?? .agent/runs/exp001-freeze-baseline-tamper/"
+  }
+]

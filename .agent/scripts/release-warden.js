@@ -8,6 +8,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const { validateReceipt } = require('./validate-receipt');
 const { readCheckpoints } = require('./checkpoint');
 
@@ -22,6 +24,65 @@ const FORBIDDEN_PATH_PATTERNS = [
   /(^|\/)policy\.signed\.json$/,
   /(^|\/)\.agent\/(contracts|scripts|rules|agents)\//,
 ];
+
+// P2-01 finding: any legitimate change to a self-integrity-checked file (packages/fw-agent's
+// verifySelfIntegrity() in index.js) requires regenerating packages/fw-agent/.helios-baseline —
+// which is unconditionally on FORBIDDEN_PATH_PATTERNS above, so every such change would FREEZE
+// even when the code change itself is correct and fully verified. The narrow carve-out below
+// mirrors index.js's OWN computeSelfHash() exactly (same file list/order, same \r\n->\n
+// normalization, same sha256/hex digest) and reads every input via `git show <sha>:<path>` — i.e.
+// it recomputes the hash itself from the candidate's own committed content, it never trusts
+// Agent 1's regenerated file byte-for-byte. A .helios-baseline change is excused from FREEZE ONLY
+// if it is mathematically forced to be exactly what the candidate's own selfFiles hash to; any
+// mismatch is treated as a STRONGER signal than a bare forbidden-path hit (baseline present but
+// doesn't match the code it claims to protect), not a pass. Every other forbidden path is
+// unaffected — this carve-out is scoped to exactly one filename.
+const HELIOS_BASELINE_PATH = 'packages/fw-agent/.helios-baseline';
+const HELIOS_SELF_INTEGRITY_FILES = [
+  'index.js',
+  'src/detector.js',
+  'src/behavior-tracker.js',
+  'src/policy-watcher.js',
+  'src/quarantine.js',
+  'src/audit-log.js',
+  'src/policy.js',
+].map((f) => `packages/fw-agent/${f}`);
+
+function gitShowAtSha(sha, relPath) {
+  try {
+    return execFileSync('git', ['show', `${sha}:${relPath}`], { encoding: 'utf8' });
+  } catch (e) {
+    return null;
+  }
+}
+
+function computeExpectedHeliosBaseline(sha) {
+  const hash = crypto.createHash('sha256');
+  for (const relPath of HELIOS_SELF_INTEGRITY_FILES) {
+    const content = gitShowAtSha(sha, relPath);
+    if (content === null) continue; // mirrors index.js's try/catch-and-skip on read failure
+    hash.update(content.replace(/\r\n/g, '\n'), 'utf8');
+  }
+  return hash.digest('hex');
+}
+
+// Returns { ok: true } only if the baseline at `sha` is exactly what recomputing index.js's own
+// hash algorithm over the candidate's own committed selfFiles produces.
+function verifyHeliosBaselineRegeneration(sha) {
+  const actualRaw = gitShowAtSha(sha, HELIOS_BASELINE_PATH);
+  if (actualRaw === null) {
+    return { ok: false, reason: `could not read ${HELIOS_BASELINE_PATH} at ${sha} via git show` };
+  }
+  const expected = computeExpectedHeliosBaseline(sha);
+  const actual = actualRaw.trim();
+  if (actual !== expected) {
+    return {
+      ok: false,
+      reason: `${HELIOS_BASELINE_PATH} at ${sha} does NOT match the independently recomputed hash of its own selfFiles (expected ${expected}, found ${actual})`,
+    };
+  }
+  return { ok: true, verifiedHash: expected };
+}
 
 // Files whose modification means a P0-registry-relevant sync would be needed before an eventual
 // npm publish. Kept in sync with .agent/rules/sync-gate-rule.md.
@@ -114,12 +175,28 @@ function evaluate(runDir) {
   }
 
   // ── Forbidden file modification ─────────────────────────────────────────────────────────────
-  const forbiddenTouched = (engineer.changed_files || []).filter((f) =>
+  let forbiddenTouched = (engineer.changed_files || []).filter((f) =>
     FORBIDDEN_PATH_PATTERNS.some((re) => re.test(f))
   );
+
+  // Narrow carve-out (see HELIOS_SELF_INTEGRITY_FILES comment above): excuse a .helios-baseline
+  // hit ONLY if independently recomputing its hash from the candidate's own committed selfFiles
+  // matches exactly. A mismatch is NOT excused — it stays in forbiddenTouched and freezes, same as
+  // any other forbidden path, but with a stronger, more specific reason attached below.
+  let heliosBaselineCheck = null;
+  if (forbiddenTouched.includes(HELIOS_BASELINE_PATH)) {
+    heliosBaselineCheck = verifyHeliosBaselineRegeneration(engineer.candidate_sha);
+    if (heliosBaselineCheck.ok) {
+      forbiddenTouched = forbiddenTouched.filter((f) => f !== HELIOS_BASELINE_PATH);
+    }
+  }
   checks.forbidden_files_touched = forbiddenTouched;
+  checks.helios_baseline_regeneration = heliosBaselineCheck;
   if (forbiddenTouched.length > 0) {
-    return freeze(`forbidden file(s) modified: ${forbiddenTouched.join(', ')}`, checks);
+    const baselineNote = forbiddenTouched.includes(HELIOS_BASELINE_PATH) && heliosBaselineCheck && !heliosBaselineCheck.ok
+      ? ` (baseline recomputation: ${heliosBaselineCheck.reason})`
+      : '';
+    return freeze(`forbidden file(s) modified: ${forbiddenTouched.join(', ')}${baselineNote}`, checks);
   }
 
   // ── Registry / publish artifacts touched prematurely (before any human approval step) ──────

@@ -1,0 +1,20 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "red-team-verifier",
+  "status": "PASS",
+  "candidate_sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+  "clean_checkout": false,
+  "commands": [
+    { "command": "node -e \"console.log('ok')\"", "exit_code": 0, "observed_behavior": "printed 'ok' and exited 0" }
+  ],
+  "controls": [
+    { "name": "trivial check re-run independently", "result": "PASS" }
+  ],
+  "attacks": [],
+  "regressions": [],
+  "matrix_result": {},
+  "escape_probes": [],
+  "evidence": ["a2-independent-check"],
+  "notes": "Throwaway negative-test fixture (see engineer-receipt.security_invariant): verifier status PASS here is deliberately irrelevant to the point of this scenario, which is release-warden.js's forbidden-path/baseline-recomputation check catching a genuinely mismatched .helios-baseline regardless of what the receipts otherwise claim.",
+  "timestamp": "2026-08-16T05:49:40.000Z"
+}
