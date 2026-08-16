@@ -10,6 +10,10 @@
     "verifier_receipt_valid": true,
     "candidate_sha_consistent": true,
     "candidate_sha_immutable_during_verification": true,
+    "changed_files_git_derived": [
+      "packages/fw-agent/.helios-baseline"
+    ],
+    "changed_files_receipt_matches_git": true,
     "forbidden_files_touched": [
       "packages/fw-agent/.helios-baseline"
     ],
@@ -31,5 +35,5 @@
   "docs": {
     "present": false
   },
-  "timestamp": "2026-08-16T05:51:28.871Z"
+  "timestamp": "2026-08-16T07:32:23.373Z"
 }

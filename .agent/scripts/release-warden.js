@@ -84,6 +84,30 @@ function verifyHeliosBaselineRegeneration(sha) {
   return { ok: true, verifiedHash: expected };
 }
 
+// Normalises a file path to posix with no leading ./  — used for set equality comparison
+// between git-derived and receipt-declared changed-file lists.
+function normalizePath(p) {
+  return p.replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+// Runs `git diff --name-only baseSHA..candidateSHA` and returns the normalised file list.
+// Returns { ok: true, files: [...] } on success, { ok: false, reason: '...' } on any failure.
+// candidateSHA is already checkpoint-verified before this is called; baseSHA comes from the
+// engineer receipt (advisory: a spoofed baseSHA either exposes more forbidden files or produces
+// a mismatch that triggers FREEZE, so the engineer cannot gain by lying about it).
+function gitDerivedChangedFiles(baseSHA, candidateSHA) {
+  if (!baseSHA || !candidateSHA) {
+    return { ok: false, reason: `baseSHA or candidateSHA missing (baseSHA=${baseSHA}, candidateSHA=${candidateSHA})` };
+  }
+  try {
+    const raw = execFileSync('git', ['diff', '--name-only', `${baseSHA}..${candidateSHA}`], { encoding: 'utf8' });
+    const files = raw.split('\n').map((f) => f.trim()).filter(Boolean).map(normalizePath);
+    return { ok: true, files };
+  } catch (e) {
+    return { ok: false, reason: `git diff --name-only ${baseSHA}..${candidateSHA} failed: ${(e.stderr || e.message || String(e)).slice(0, 500)}` };
+  }
+}
+
 // Files whose modification means a P0-registry-relevant sync would be needed before an eventual
 // npm publish. Kept in sync with .agent/rules/sync-gate-rule.md.
 const SYNC_TRIGGER_PATTERNS = [
@@ -175,8 +199,41 @@ function evaluate(runDir) {
     return freeze('candidate SHA changed during verification', checks);
   }
 
+  // ── Authoritative changed-file list derived from git (trust boundary — not self-reported) ──
+  // engineer.changed_files is advisory only; the gate derives the authoritative list from git so
+  // a malicious or buggy receipt cannot omit paths to bypass the forbidden-path or sync checks.
+  // candidateSHA is the checkpoint-verified value above; baseSHA comes from engineer.base_sha
+  // (advisory: a spoofed baseSHA either exposes more forbidden files or causes a mismatch FREEZE).
+  // FREEZE if: (1) git cannot compute the diff, or (2) engineer.changed_files is present but does
+  // not match the git-derived list under set equality (posix-normalised, no leading ./).
+  const candidateSHA = engineer.candidate_sha; // already checkpoint-verified above
+  const baseSHA = engineer.base_sha;
+  const gitDiff = gitDerivedChangedFiles(baseSHA, candidateSHA);
+  if (!gitDiff.ok) {
+    return freeze(`cannot compute git-derived changed-file list: ${gitDiff.reason}`, checks);
+  }
+  const changedFiles = gitDiff.files; // authoritative from here on
+  checks.changed_files_git_derived = changedFiles;
+
+  if (engineer.changed_files !== undefined) {
+    const receiptSet = new Set(engineer.changed_files.map(normalizePath));
+    const gitSet = new Set(changedFiles);
+    const missing = [...gitSet].filter((f) => !receiptSet.has(f)); // in git, absent from receipt
+    const extra = [...receiptSet].filter((f) => !gitSet.has(f));   // in receipt, absent from git
+    if (missing.length > 0 || extra.length > 0) {
+      return freeze(
+        `engineer receipt changed_files mismatch with git-derived list` +
+        (missing.length > 0 ? ` — receipt omits: ${missing.join(', ')}` : '') +
+        (extra.length > 0 ? ` — receipt has extra (not in git diff): ${extra.join(', ')}` : ''),
+        checks,
+      );
+    }
+  }
+  checks.changed_files_receipt_matches_git = true;
+
   // ── Forbidden file modification ─────────────────────────────────────────────────────────────
-  let forbiddenTouched = (engineer.changed_files || []).filter((f) =>
+  // Uses the git-derived changedFiles list — not engineer.changed_files — as the authoritative source.
+  let forbiddenTouched = changedFiles.filter((f) =>
     FORBIDDEN_PATH_PATTERNS.some((re) => re.test(f))
   );
 
@@ -238,7 +295,8 @@ function evaluate(runDir) {
   }
 
   // ── Sync gate (deterministic, not model-decided) ────────────────────────────────────────────
-  const syncFiles = (engineer.changed_files || []).filter((f) => SYNC_TRIGGER_PATTERNS.some((re) => re.test(f)));
+  // Uses the git-derived changedFiles list — not engineer.changed_files.
+  const syncFiles = changedFiles.filter((f) => SYNC_TRIGGER_PATTERNS.some((re) => re.test(f)));
   const syncRequired = syncFiles.length > 0;
 
   // ── Optional Agent 4 (Docs Scribe) receipt ──────────────────────────────────────────────────
@@ -272,7 +330,7 @@ function evaluate(runDir) {
     freeze_reason: null,
     sync_required: syncRequired,
     sync_reason: syncRequired
-      ? `changed_files touched detector-relevant source: ${syncFiles.join(', ')}`
+      ? `git-derived changed files include detector-relevant source: ${syncFiles.join(', ')}`
       : 'no detector-relevant source files changed',
     docs: docsInfo,
   };

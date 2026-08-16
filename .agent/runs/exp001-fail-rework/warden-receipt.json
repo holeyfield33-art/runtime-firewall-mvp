@@ -1,7 +1,7 @@
 {
   "phase_id": "P2-EXPERIMENT-001",
   "agent": "release-warden",
-  "status": "PASS",
+  "status": "FREEZE",
   "candidate_sha": "a5b755d1744877ff04a1b81db54b981d0ae8a187",
   "checks": {
     "engineer_receipt_present": true,
@@ -10,20 +10,36 @@
     "verifier_receipt_valid": true,
     "candidate_sha_consistent": true,
     "candidate_sha_immutable_during_verification": true,
-    "forbidden_files_touched": [],
-    "registry_modified_prematurely": false,
-    "evidence_present": true,
-    "a2_pass": true,
-    "p0_regression": false,
-    "verifier_regressions_clean": true,
-    "docs_receipt": {
-      "present": false
-    }
+    "changed_files_git_derived": [
+      ".agent/README.md",
+      ".agent/agents/boundary-engineer.md",
+      ".agent/agents/red-team-verifier.md",
+      ".agent/agents/release-warden.md",
+      ".agent/contracts/engineer-receipt.schema.json",
+      ".agent/contracts/evidence-bundle.schema.json",
+      ".agent/contracts/verifier-receipt.schema.json",
+      ".agent/contracts/warden-receipt.schema.json",
+      ".agent/directives/P2-01-esm-static-import.json",
+      ".agent/directives/P2-EXPERIMENT-001.json",
+      ".agent/rules/security-gates.md",
+      ".agent/rules/state-machine.md",
+      ".agent/rules/sync-gate-rule.md",
+      ".agent/runs/.gitkeep",
+      ".agent/scripts/checkpoint.js",
+      ".agent/scripts/collect-evidence.js",
+      ".agent/scripts/model-runner.js",
+      ".agent/scripts/release-warden.js",
+      ".agent/scripts/validate-receipt.js",
+      ".gitignore",
+      "packages/fw-agent/test/__agent-experiment-001-fixture.js"
+    ]
   },
   "sync_required": false,
-  "sync_reason": "no detector-relevant source files changed",
-  "reasons": [],
-  "freeze_reason": "",
+  "sync_reason": "not evaluated — run frozen",
+  "reasons": [
+    "engineer receipt changed_files mismatch with git-derived list — receipt omits: .agent/README.md, .agent/agents/boundary-engineer.md, .agent/agents/red-team-verifier.md, .agent/agents/release-warden.md, .agent/contracts/engineer-receipt.schema.json, .agent/contracts/evidence-bundle.schema.json, .agent/contracts/verifier-receipt.schema.json, .agent/contracts/warden-receipt.schema.json, .agent/directives/P2-01-esm-static-import.json, .agent/directives/P2-EXPERIMENT-001.json, .agent/rules/security-gates.md, .agent/rules/state-machine.md, .agent/rules/sync-gate-rule.md, .agent/runs/.gitkeep, .agent/scripts/checkpoint.js, .agent/scripts/collect-evidence.js, .agent/scripts/model-runner.js, .agent/scripts/release-warden.js, .agent/scripts/validate-receipt.js, .gitignore"
+  ],
+  "freeze_reason": "engineer receipt changed_files mismatch with git-derived list — receipt omits: .agent/README.md, .agent/agents/boundary-engineer.md, .agent/agents/red-team-verifier.md, .agent/agents/release-warden.md, .agent/contracts/engineer-receipt.schema.json, .agent/contracts/evidence-bundle.schema.json, .agent/contracts/verifier-receipt.schema.json, .agent/contracts/warden-receipt.schema.json, .agent/directives/P2-01-esm-static-import.json, .agent/directives/P2-EXPERIMENT-001.json, .agent/rules/security-gates.md, .agent/rules/state-machine.md, .agent/rules/sync-gate-rule.md, .agent/runs/.gitkeep, .agent/scripts/checkpoint.js, .agent/scripts/collect-evidence.js, .agent/scripts/model-runner.js, .agent/scripts/release-warden.js, .agent/scripts/validate-receipt.js, .gitignore",
   "evidence": [
     "a1-smoke-check",
     "a1-rework-fixture-run",
@@ -32,5 +48,5 @@
   "docs": {
     "present": false
   },
-  "timestamp": "2026-08-16T04:47:36.756Z"
+  "timestamp": "2026-08-16T07:33:09.606Z"
 }

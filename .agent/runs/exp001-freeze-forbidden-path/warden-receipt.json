@@ -10,16 +10,36 @@
     "verifier_receipt_valid": true,
     "candidate_sha_consistent": true,
     "candidate_sha_immutable_during_verification": true,
-    "forbidden_files_touched": [
-      ".agent/scripts/release-warden.js"
+    "changed_files_git_derived": [
+      ".agent/README.md",
+      ".agent/agents/boundary-engineer.md",
+      ".agent/agents/red-team-verifier.md",
+      ".agent/agents/release-warden.md",
+      ".agent/contracts/engineer-receipt.schema.json",
+      ".agent/contracts/evidence-bundle.schema.json",
+      ".agent/contracts/verifier-receipt.schema.json",
+      ".agent/contracts/warden-receipt.schema.json",
+      ".agent/directives/P2-01-esm-static-import.json",
+      ".agent/directives/P2-EXPERIMENT-001.json",
+      ".agent/rules/security-gates.md",
+      ".agent/rules/state-machine.md",
+      ".agent/rules/sync-gate-rule.md",
+      ".agent/runs/.gitkeep",
+      ".agent/scripts/checkpoint.js",
+      ".agent/scripts/collect-evidence.js",
+      ".agent/scripts/model-runner.js",
+      ".agent/scripts/release-warden.js",
+      ".agent/scripts/validate-receipt.js",
+      ".gitignore",
+      "packages/fw-agent/test/__agent-experiment-001-fixture.js"
     ]
   },
   "sync_required": false,
   "sync_reason": "not evaluated — run frozen",
   "reasons": [
-    "forbidden file(s) modified: .agent/scripts/release-warden.js"
+    "engineer receipt changed_files mismatch with git-derived list — receipt omits: .agent/README.md, .agent/agents/boundary-engineer.md, .agent/agents/red-team-verifier.md, .agent/agents/release-warden.md, .agent/contracts/engineer-receipt.schema.json, .agent/contracts/evidence-bundle.schema.json, .agent/contracts/verifier-receipt.schema.json, .agent/contracts/warden-receipt.schema.json, .agent/directives/P2-01-esm-static-import.json, .agent/directives/P2-EXPERIMENT-001.json, .agent/rules/security-gates.md, .agent/rules/state-machine.md, .agent/rules/sync-gate-rule.md, .agent/runs/.gitkeep, .agent/scripts/checkpoint.js, .agent/scripts/collect-evidence.js, .agent/scripts/model-runner.js, .agent/scripts/validate-receipt.js, .gitignore"
   ],
-  "freeze_reason": "forbidden file(s) modified: .agent/scripts/release-warden.js",
+  "freeze_reason": "engineer receipt changed_files mismatch with git-derived list — receipt omits: .agent/README.md, .agent/agents/boundary-engineer.md, .agent/agents/red-team-verifier.md, .agent/agents/release-warden.md, .agent/contracts/engineer-receipt.schema.json, .agent/contracts/evidence-bundle.schema.json, .agent/contracts/verifier-receipt.schema.json, .agent/contracts/warden-receipt.schema.json, .agent/directives/P2-01-esm-static-import.json, .agent/directives/P2-EXPERIMENT-001.json, .agent/rules/security-gates.md, .agent/rules/state-machine.md, .agent/rules/sync-gate-rule.md, .agent/runs/.gitkeep, .agent/scripts/checkpoint.js, .agent/scripts/collect-evidence.js, .agent/scripts/model-runner.js, .agent/scripts/validate-receipt.js, .gitignore",
   "evidence": [
     "a1-claimed-test",
     "a2-rerun"
@@ -27,5 +47,5 @@
   "docs": {
     "present": false
   },
-  "timestamp": "2026-08-16T04:47:36.904Z"
+  "timestamp": "2026-08-16T07:32:20.111Z"
 }
