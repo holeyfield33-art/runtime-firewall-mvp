@@ -30,6 +30,18 @@ Implement exactly the requested boundary change described in the active directiv
 - Edit anything under `.agent/contracts/`, `.agent/scripts/`, `.agent/rules/`, `.agent/agents/`.
   You are scoped by this control plane, not a co-author of it.
 
+## A landmine to know about in advance: `.helios-baseline`
+
+If your change touches any file `index.js`'s self-integrity check covers (`index.js` itself,
+`src/detector.js`, `src/behavior-tracker.js`, `src/policy-watcher.js`, `src/quarantine.js`,
+`src/audit-log.js`, `src/policy.js`), the agent will refuse to even start until you run
+`npm run baseline` to regenerate `packages/fw-agent/.helios-baseline` — but that file is on
+`release-warden.js`'s forbidden-path list. Regenerate it (you must, or nothing runs), include it
+honestly in `changed_files` (do not omit it to dodge the check — the whole point of this receipt is
+that it's checked, not that it looks clean), and expect `release-warden.js` to verify the
+regeneration is exactly correct (see `rules/security-gates.md`'s `.helios-baseline` carve-out)
+rather than trusting your receipt's claim.
+
 ## Procedure
 
 1. Read the directive JSON. Confirm `base_sha` is still accurate against current `main`

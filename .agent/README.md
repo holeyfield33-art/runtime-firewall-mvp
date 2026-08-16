@@ -166,18 +166,29 @@ trusted.
 
 ## `P2-01`
 
-Directive prepared at `directives/P2-01-esm-static-import.json`, `base_sha` verified against
-`main` at authoring time. Per the directive, `P2-01` does not start until `P2-EXPERIMENT-001` has
-demonstrated all three behaviors above — see the session report for whether A1 was actually
-invoked against it in this pass, and if so, its outcome.
+Run for real (first non-throwaway directive through this graph) on branch
+`fix/p2-01-esm-static-import`, candidate `b10210925a3c257463edee59031b042116351d21`, run directory
+`runs/p2-01/` (gitignored like all real runs — this is a local audit trail, not checked-in proof
+evidence the way `runs/exp001-*` is). A1 implemented a `module.register()` ESM load hook
+(`packages/fw-agent/esm-loader.mjs`); A2 (a genuinely independent agent, fresh `git worktree`,
+never shown A1's reasoning) tried nine distinct evasion angles beyond A1's own tests, found one
+real bypass (split-string signature smuggling) and proved it pre-exists on the original CJS path
+too — not a new gap — and returned `PASS`; A3 (`release-warden.js`) then FROZE on a real, previously
+unexercised finding: fixing `index.js` requires regenerating `packages/fw-agent/.helios-baseline`,
+which was unconditionally forbidden. Resolved with a narrow, mechanically-verified carve-out (see
+`rules/security-gates.md`) — proven both positively (this real run, now `PASS`) and negatively
+(`runs/exp001-freeze-baseline-tamper/`, a deliberately wrong baseline that still FREEZEs). Final
+`release-warden.js` verdict: `PASS`, `sync_required: true` (touches
+`packages/fw-agent/index.js`) — awaiting human review/merge, not yet integrated into `main`.
 
-Known relevant baseline (from `results/execution-surface-matrix.json`, prior run): ESM static
-import and dynamic `import()` both report `BYPASS` because `Module.prototype._compile` is never
-invoked for ESM evaluation; `require()`, nested `require()`, `worker_threads`,
-`child_process.fork()`, and the pre-hook/cache path all report `INTERCEPTED`;
-`child_process.spawn('node', ...)` and `vm.runInNewContext()` report `BYPASS` (out of scope for
-`P2-01`); native `.node` addon load reports `UNSUPPORTED` (no fixture available, and
-architecturally unreachable by the current hook regardless).
+Boundary matrix after P2-01 (`results/execution-surface-matrix.json`): ESM static import and
+dynamic `import()` now both report `INTERCEPTED` (dynamic import() closing is an inherent,
+documented side effect of the same load hook — Node does not distinguish the two syntaxes at that
+hook — disclosed as out of the directive's formal scope but not hidden); `require()`, nested
+`require()`, `worker_threads`, `child_process.fork()`, `child_process.spawn('node', ...)`, and the
+pre-hook/cache path all report `INTERCEPTED`; `vm.runInNewContext()` remains `BYPASS` and native
+`.node` addon load remains `UNSUPPORTED` — both explicitly out of P2-01 scope, confirmed
+architecturally unchanged.
 
 ## Readiness for MRN integration
 

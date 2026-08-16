@@ -33,6 +33,24 @@ policy.signed.json
 The last four exist so Agent 1 cannot edit the gate that judges its own work — the control plane
 must be out of scope for the very directive it is enforcing.
 
+## `.helios-baseline` carve-out (narrow, mechanically-verified — not a blanket exception)
+
+`packages/fw-agent/.helios-baseline` is on the forbidden list above, but any legitimate change to
+a self-integrity-checked file (`index.js`, `src/detector.js`, `src/behavior-tracker.js`,
+`src/policy-watcher.js`, `src/quarantine.js`, `src/audit-log.js`, `src/policy.js`) mechanically
+requires regenerating that baseline or the agent refuses to start at all — discovered running
+P2-01 (the first real, non-throwaway directive to touch `index.js`).
+
+`release-warden.js` excuses a `.helios-baseline` hit from `FREEZE` **only if** it independently
+recomputes the exact same SHA-256 algorithm `index.js`'s own `computeSelfHash()` uses (same file
+list/order, same `\r\n`→`\n` normalization) by reading every input via `git show <candidate_sha>:
+<path>`, and the result matches the committed baseline exactly. This never trusts Agent 1's
+regenerated file byte-for-byte — it is forced to be correct by the candidate's own committed code,
+or the FREEZE stands with a more specific reason (a mismatch is treated as a *stronger* signal of
+tampering than a bare forbidden-path hit, not a pass). Every other forbidden path is unaffected —
+proven with `runs/exp001-freeze-baseline-tamper/` (a deliberately wrong baseline that still
+FREEZEs) alongside the real P2-01 run (a correctly-regenerated baseline that PASSes).
+
 ## Documentation allowlist (Agent 4 only — any match NOT in this list is an automatic FREEZE)
 
 ```
