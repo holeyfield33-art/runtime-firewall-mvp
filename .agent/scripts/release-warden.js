@@ -74,16 +74,28 @@ function evaluate(runDir) {
   }
 
   // ── Candidate SHA consistency: engineer, verifier, and checkpoints must all agree. ─────────
+  // Rework loops reuse the same run directory and accumulate checkpoints across iterations, so
+  // only the MOST RECENT checkpoint per role matters — a stale checkpoint from an earlier,
+  // superseded candidate must not be compared against the current receipts.
   const checkpoints = readCheckpoints(runDir);
-  const candidateChecks = checkpoints.filter((c) => c.label === 'a1-candidate' || c.label === 'a2-verify-start' || c.label === 'a2-verify-end');
+  const latestByPredicate = (pred) => {
+    for (let i = checkpoints.length - 1; i >= 0; i--) {
+      if (pred(checkpoints[i])) return checkpoints[i];
+    }
+    return null;
+  };
+  const latestA1 = latestByPredicate((c) => c.label === 'a1-candidate' || c.label.startsWith('a1-rework-candidate'));
+  const latestVerifyStart = latestByPredicate((c) => c.label === 'a2-verify-start');
+  const latestVerifyEnd = latestByPredicate((c) => c.label === 'a2-verify-end');
+  const candidateChecks = [latestA1, latestVerifyStart, latestVerifyEnd].filter(Boolean);
   const shas = new Set([engineer.candidate_sha, verifier.candidate_sha, ...candidateChecks.map((c) => c.sha)]);
   checks.candidate_sha_consistent = shas.size <= 1;
   if (!checks.candidate_sha_consistent) {
     return freeze(`candidate SHA mismatch across artifacts: ${[...shas].join(', ')}`, checks);
   }
 
-  const verifyStart = checkpoints.find((c) => c.label === 'a2-verify-start');
-  const verifyEnd = checkpoints.find((c) => c.label === 'a2-verify-end');
+  const verifyStart = latestVerifyStart;
+  const verifyEnd = latestVerifyEnd;
   checks.candidate_sha_immutable_during_verification =
     !verifyStart || !verifyEnd || verifyStart.sha === verifyEnd.sha;
   if (!checks.candidate_sha_immutable_during_verification) {
