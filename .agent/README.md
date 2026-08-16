@@ -1,7 +1,8 @@
 # `.agent/` — Aletheia Firewall Phase 2 Orchestration Prototype
 
-**Status:** prototype, proven on `P2-EXPERIMENT-001` (see `runs/` for the recorded evidence of
-this workspace's proof run — regenerate locally if `runs/` has been cleaned).
+**Status:** prototype, proven on `P2-EXPERIMENT-001`. Proof-run evidence is checked in under
+`runs/exp001-*/` as of commit `f17a069` on branch `agent/p2-orchestration-proof` (base:
+`0793227`, current `main` at authoring time).
 
 **Scope of this directory:** a local three-agent development-loop contract for the
 `runtime-firewall-mvp` repository (package name on npm: `aletheia-firewall`). This is an
@@ -123,8 +124,9 @@ stop, human required.
 Purpose: prove the graph mechanics on a trivial, non-functional throwaway task before pointing
 it at any real firewall code. Directive: `directives/P2-EXPERIMENT-001.json`.
 
-Three behaviors were demonstrated in this workspace's proof run (see `runs/` for the artifacts,
-if not cleaned, and the coding-agent's session report for the exact commands/exit codes):
+Three behaviors were demonstrated in this workspace's proof run — see `runs/exp001-pass/`,
+`runs/exp001-fail-rework/`, `runs/exp001-freeze-forbidden-path/`, and
+`runs/exp001-freeze-sha-mismatch/` for the exact receipts, checkpoints, and evidence:
 
 1. **A1 -> A2 -> A3, PASS.** A trivial passing candidate produced an engineer receipt, a verifier
    receipt with `status: PASS`, and `release-warden.js` exited `0` with `status: PASS`.
