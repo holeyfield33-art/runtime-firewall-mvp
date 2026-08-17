@@ -7,6 +7,6 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "fastify": "^5.11.2"
+    "fastify": "^5.12.0"
   }
 }
