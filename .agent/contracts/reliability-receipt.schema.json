@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "reliability-receipt.schema.json",
+  "title": "Reliability Reviewer Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "clean_checkout",
+    "dimensions",
+    "findings",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["reliability-reviewer"] },
+    "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "clean_checkout": { "type": "boolean" },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "result"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "correctness",
+              "reliability",
+              "maintainability",
+              "tests",
+              "api_behavior",
+              "error_handling",
+              "state",
+              "performance",
+              "documentation"
+            ]
+          },
+          "result": { "type": "string", "enum": ["PASS", "FAIL", "N/A"] },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dimension", "severity", "summary", "evidence_id"],
+        "properties": {
+          "dimension": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "summary": { "type": "string" },
+          "evidence_id": { "type": "string" }
+        }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "fail_reasons": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

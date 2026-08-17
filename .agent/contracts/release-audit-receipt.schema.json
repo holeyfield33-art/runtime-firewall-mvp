@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "release-audit-receipt.schema.json",
+  "title": "Release Auditor Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "clean_checkout",
+    "package_name",
+    "npm_pack_dry_run_evidence_id",
+    "packaged_files",
+    "checks",
+    "findings",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["release-auditor"] },
+    "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "clean_checkout": { "type": "boolean" },
+    "package_name": { "type": "string", "minLength": 1 },
+    "npm_pack_dry_run_evidence_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Evidence ID for the actual `npm pack --dry-run --json` (or equivalent) command run. packaged_files below must be derived FROM this evidence's output, not asserted independently -- release-warden.js does not re-run npm pack itself, so this is the one place that command's real output is captured for the mechanical packaged_files deny-list check to work from."
+    },
+    "packaged_files": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "The exact file list npm pack --dry-run reported would be published, verbatim. release-warden.js mechanically checks this list against PACKAGE_DENY_PATTERNS regardless of this receipt's own status field -- 'what accidentally got packaged' is meant to be a script decision, not this role's prose judgment."
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "result"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "package_contents",
+              "package_json",
+              "version",
+              "files_field",
+              "exports_field",
+              "readme",
+              "license",
+              "npmignore",
+              "publish_config",
+              "dependencies"
+            ]
+          },
+          "result": { "type": "string", "enum": ["PASS", "FAIL", "N/A"] },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check", "severity", "summary", "evidence_id"],
+        "properties": {
+          "check": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "summary": { "type": "string" },
+          "evidence_id": { "type": "string" }
+        }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "fail_reasons": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

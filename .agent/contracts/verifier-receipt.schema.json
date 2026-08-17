@@ -21,7 +21,7 @@
   "additionalProperties": true,
   "properties": {
     "phase_id": { "type": "string", "minLength": 1 },
-    "agent": { "type": "string", "enum": ["red-team-verifier"] },
+    "agent": { "type": "string", "enum": ["red-team-verifier", "pentester"] },
     "status": { "type": "string", "enum": ["PASS", "FAIL"] },
     "candidate_sha": { "type": "string", "minLength": 7 },
     "clean_checkout": { "type": "boolean" },
