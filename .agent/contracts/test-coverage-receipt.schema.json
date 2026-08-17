@@ -1,0 +1,80 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "test-coverage-receipt.schema.json",
+  "title": "Test Engineer Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "clean_checkout",
+    "dimensions",
+    "findings",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["test-engineer"] },
+    "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "clean_checkout": { "type": "boolean" },
+    "dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "result"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": [
+              "unit_tests",
+              "integration_tests",
+              "negative_tests",
+              "boundary_tests",
+              "regression_tests",
+              "failure_tests",
+              "coverage_gaps",
+              "flaky_tests",
+              "missing_assertions",
+              "false_positive_tests"
+            ]
+          },
+          "result": { "type": "string", "enum": ["PASS", "FAIL", "N/A"] },
+          "detail": { "type": "string" }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["dimension", "severity", "summary", "evidence_id"],
+        "properties": {
+          "dimension": { "type": "string" },
+          "severity": { "type": "string", "enum": ["blocking", "advisory"] },
+          "summary": { "type": "string" },
+          "evidence_id": { "type": "string" }
+        }
+      }
+    },
+    "false_positive_tests_found": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["test_name", "test_file", "why_false_positive", "evidence_id"],
+        "properties": {
+          "test_name": { "type": "string" },
+          "test_file": { "type": "string" },
+          "why_false_positive": { "type": "string" },
+          "evidence_id": { "type": "string" }
+        }
+      }
+    },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "fail_reasons": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

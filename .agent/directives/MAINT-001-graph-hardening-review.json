@@ -1,0 +1,25 @@
+{
+  "phase_id": "MAINT-001",
+  "title": "Edge-case/reliability review of the PR #58 post-PASS hardening commits",
+  "target": "aletheia-firewall",
+  "objective": "P2-01's final candidate (94388bd) already went through the full A1/A2/A3 graph and PASSed. Several further commits landed on top of it: some are .agent/ control-plane hardening (out of scope for A1/A2/A3 by the graph's own forbidden-path rule -- .agent/scripts, .agent/rules etc. are never a legitimate engineer-receipt candidate), and one is a genuine product/infra bugfix that IS in scope and has never been through independent review: commit 300b86f, fixing a latent cross-platform hash-algorithm mismatch between index.js's computeSelfHash(), release-warden.js's .helios-baseline carve-out, and ci.yml's inline self-integrity step. This directive scopes exactly that single commit for review under Team Configuration 1 (Implementer / Failure Hunter / Reliability Reviewer / Warden) -- introducing the Reliability Reviewer role (A2b) for its first real, non-throwaway run.",
+  "base_sha": "867131c03b239ca5f1d2753db90fed9f079ff952",
+  "base_sha_note": "Immediate parent of candidate 300b86f -- single-commit candidate, matching the graph's one-commit-per-candidate convention so changed_files (candidate^..candidate) exactly matches this directive's stated scope.",
+  "scope": [
+    "commit 300b86f only: .github/workflows/ci.yml self-integrity check fix"
+  ],
+  "out_of_scope": [
+    "re-reviewing P2-01's original ESM interception work (already PASSed, out of scope for this slice)",
+    "the .agent/ control-plane hardening commits on this branch (a3f3a28, e309767, 664b7da, 99106a1, 197fdae) -- those touch .agent/scripts and .agent/rules, which are forbidden paths for any A1/A2/A3 candidate by this graph's own rule; they were reviewed by direct human/orchestrator work, not this graph, same precedent as the .agent/ scaffold itself",
+    "new feature work -- this is a review-only pass of an already-committed fix"
+  ],
+  "success_criteria": [
+    "engineer receipt honestly documents the real, already-committed diff and a real test run",
+    "Failure Hunter (A2) finds no unreconciled bypass in the reviewed diff",
+    "Reliability Reviewer (A2b) finds no blocking correctness/reliability defect in the reviewed diff",
+    "no P0 regression",
+    "candidate SHA remains immutable during verification"
+  ],
+  "require_reliability_review": true,
+  "status": "NOT STARTED"
+}

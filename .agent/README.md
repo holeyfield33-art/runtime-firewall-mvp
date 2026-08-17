@@ -34,15 +34,20 @@ A1 -- Boundary Engineer        (.agent/agents/boundary-engineer.md)
 CHECKPOINT                     (.agent/scripts/checkpoint.js)
       |
       v
-A2 -- Red-Team Verifier        (.agent/agents/red-team-verifier.md)
+A2 -- Red-Team Verifier        (.agent/agents/red-team-verifier.md, "Failure Hunter")
       |
   +---+---+
  FAIL     PASS
   |         |
-A1 REWORK  A3 -- Release Warden   (.agent/agents/release-warden.md, .agent/scripts/release-warden.js)
+A1 REWORK  A2b -- Reliability Reviewer   (.agent/agents/reliability-reviewer.md, opt-in per directive)
               |
-              v
-        RELEASE CANDIDATE
+          +---+---+
+         FAIL     PASS (or not required)
+          |         |
+      A1 REWORK  A3 -- Release Warden   (.agent/agents/release-warden.md, .agent/scripts/release-warden.js)
+                      |
+                      v
+                RELEASE CANDIDATE
               |
               +-------------------------+
               |                         |
@@ -91,14 +96,85 @@ trusted layer is exclusively:
 Any of A1/A2/A3's prose ("this works", "looks good", "verified") has zero authority. Only the
 scripts in `scripts/` decide `PASS` / `BLOCK` / `FREEZE`.
 
+Every independent reviewer role (everyone except A1) also follows `rules/sandbox-boundaries.md`:
+its own isolated `git worktree`, never the shared main repository working directory. Written after
+a real incident (see that file) where a reviewer reverted real enforcement code in the shared tree
+while doing exactly the kind of "revert the fix, confirm the test fails" check several roles here
+legitimately need to do — the fix isn't "don't do that check," it's "do it somewhere isolated."
+
 ## Agent roles
 
 | Agent | File | Allowed | Forbidden (highlights) |
 |---|---|---|---|
 | A1 Boundary Engineer | `agents/boundary-engineer.md` | read/search repo, modify `packages/fw-agent` \& `packages/fw-control` src, add/run tests, branch, commit | registry/publish, push to `main`, delete/weaken tests, edit `.agent/` control plane itself, declare own work verified |
-| A2 Red-Team Verifier | `agents/red-team-verifier.md` | fresh checkout of candidate SHA, run tests + attacks, run matrix | trusting A1's claims, verifying anything other than the exact candidate SHA |
+| A2 Red-Team Verifier ("Failure Hunter") | `agents/red-team-verifier.md` | fresh checkout of candidate SHA, run tests + attacks + the general edge-case checklist, run matrix | trusting A1's claims, verifying anything other than the exact candidate SHA, inventing findings not backed by evidence |
+| A2b Reliability Reviewer | `agents/reliability-reviewer.md` | fresh checkout of candidate SHA, independently review correctness/reliability/maintainability/tests/API behavior/error handling/state/performance/documentation | duplicating A2's attack matrix, treating stylistic preference as a blocking finding, skipping the "revert the fix, confirm tests fail" check |
+| A2c Code Quality Reviewer | `agents/quality-reviewer.md` | fresh checkout of candidate SHA, review exactly the fourteen dimensions listed in its role file | judging whether the feature/change itself was a good idea, findings that don't trace to one of the fourteen dimensions |
+| A2t Test Engineer | `agents/test-engineer.md` | fresh checkout of candidate SHA, revert-and-rerun relied-on tests to catch false positives, identify concrete coverage gaps | reporting a coverage gap or false positive without having demonstrated it, treating "looks untested" as a finding |
+| A2v Compatibility Reviewer | `agents/compatibility-reviewer.md` | fresh checkout of candidate SHA, review exactly the eight compatibility dimensions listed in its role file | general code-quality or security findings outside those eight dimensions |
+| A2r Release Auditor | `agents/release-auditor.md` | fresh checkout of candidate SHA, run real `npm pack --dry-run --json`, audit the actual package it produces | pre-filtering `packaged_files` to only what looks safe, asserting package contents without having run the real command |
 | A3 Release Warden | `agents/release-warden.md` | run `release-warden.js`, report its output verbatim | overriding the script's verdict, deciding `sync_required` by "judgment" |
 | A4 Docs Scribe | `agents/docs-scribe.md` | run only after A3 `PASS`; append to `CHANGELOG.md`'s `[Unreleased]` section, update directly-affected `docs/*.md` \& package `README.md`s, branch, commit | running before A3 `PASS`, touching anything outside the doc allowlist, editing `.agent/` control plane, bumping version/date, claiming anything not traceable to a receipt field |
+
+A2b is **opt-in per directive** (`require_reliability_review: true`) — see `rules/security-gates.md`.
+Every directive written before this role existed is unaffected: its absence has always meant "not
+evaluated," never "passed by default." When a `reliability-receipt.json` exists in a run directory
+regardless of opt-in, `release-warden.js` still validates and honors it — a stricter run is never
+downgraded.
+
+## Pentest track ("Team Configuration 2")
+
+A second, differently-tempered path through the same graph, for authorized offensive testing
+rather than diff review: A1 Boundary Engineer plays **Security Target Builder** (see the addendum
+in `agents/boundary-engineer.md` — usually zero new code, just declaring an already-implemented
+candidate as the authorized target), then **A1b Threat Modeler** (`agents/threat-modeler.md`) maps
+assets/trust boundaries/attack surface/etc. before anything is attacked, then **A2p Pentester**
+(`agents/pentester.md`) — assumes the implementation is vulnerable and tries to prove it, governed
+for this repo specifically by "what execution path allows code to execute without passing through
+the intended enforcement boundary?" A2p writes the *same* `verifier-receipt.json` file the Failure
+Hunter writes (`contracts/verifier-receipt.schema.json`'s `agent` enum accepts both
+`"red-team-verifier"` and `"pentester"`) — same graph slot, different personality, swappable per
+directive. A1b is opt-in via `require_threat_model: true` on the directive, same backward-
+compatible construction as A2b: FREEZE (not BLOCK) if required and missing/invalid/incomplete,
+since attacking off an admittedly incomplete map is a process failure, not a verdict to send back
+for rework. **A3 Release Warden's role is unchanged and is the whole point of this track**: the
+Pentester's own `"PASS"` means only "I tried to break this and couldn't" — it is explicitly not a
+release verdict (see `agents/pentester.md`'s closing section) and never overrides
+`release-warden.js`'s computed status, exactly as A2's verdict never has.
+
+## Code quality track ("Team Configuration 3")
+
+A third path, less adversarial and more engineering-focused than either of the above: same A1
+Implementer, plus two new independent peer reviewers that can both run alongside the diff-review
+track's A2 (or standalone) — **Code Quality Reviewer** (A2c, `agents/quality-reviewer.md`),
+scoped to exactly fourteen dimensions (complexity, duplication, dead code, naming, module
+boundaries, API consistency, error handling, testability, unnecessary dependencies, backwards
+compatibility, maintainability, type safety, async behavior, resource cleanup) and explicitly
+forbidden from becoming a feature reviewer, and **Test Engineer** (A2t,
+`agents/test-engineer.md`), whose core question is "what behavior does this candidate rely on that
+the test suite doesn't actually prove" — it revert-and-reruns a representative sample of relied-on
+tests to catch false positives, not just inspect them. Both are opt-in per directive
+(`require_quality_review` / `require_test_review`), same backward-compatible construction as A2b
+and A1b: FREEZE if required-but-missing/invalid, BLOCK if present and `status !== 'PASS'`. All
+three optional peer-reviewer receipts (reliability, quality, test-coverage) now share one gating
+function, `evaluateOptionalVerdictReceipt()` in `scripts/release-warden.js` — added specifically
+because hand-copying this pattern a third time was a worse risk than writing it once.
+
+## Release track ("Team Configuration 4")
+
+For actually publishing a package, not just merging a change: A1 Builder prepares the release
+(see the addendum in `agents/boundary-engineer.md`), then **Compatibility Reviewer** (A2v,
+`agents/compatibility-reviewer.md` — Node versions, API compatibility, ESM/CJS, package exports,
+dependency/lockfile changes, CLI behavior, backwards compatibility) and **Release Auditor** (A2r,
+`agents/release-auditor.md` — audits the actual package `npm pack --dry-run` would publish, not
+the source tree) both review, opt-in via `require_compatibility_review` /
+`require_release_audit` same as every other optional receipt. Release Auditor is the one role in
+the whole graph where `release-warden.js` doesn't stop at trusting the role's own `status`: its
+`packaged_files` (the real, verbatim `npm pack --dry-run` output) is mechanically scanned against
+`PACKAGE_DENY_PATTERNS` (test dirs, `.git`, `node_modules`, `.env*`, private keys, this repo's own
+`.agent/`/`red-team/`) and FREEZEs on a match regardless of what the receipt claims — "what
+accidentally got packaged" made an actual script decision, per the directive that introduced this
+track, not left as prose alone.
 
 ## Receipts
 
@@ -106,6 +182,26 @@ Every run directory (`runs/<run-id>/`) accumulates:
 
 - `engineer-receipt.json` — validates against `contracts/engineer-receipt.schema.json`
 - `verifier-receipt.json` — validates against `contracts/verifier-receipt.schema.json`
+- `reliability-receipt.json` — optional (required only if the directive sets
+  `require_reliability_review: true`), written by Agent 2b, validates against
+  `contracts/reliability-receipt.schema.json`
+- `threat-model.json` — optional (required only if the directive sets
+  `require_threat_model: true`), written by Agent 1b, validates against
+  `contracts/threat-model.schema.json`
+- `quality-receipt.json` — optional (required only if the directive sets
+  `require_quality_review: true`), written by Agent 2c, validates against
+  `contracts/quality-receipt.schema.json`
+- `test-coverage-receipt.json` — optional (required only if the directive sets
+  `require_test_review: true`), written by Agent 2t, validates against
+  `contracts/test-coverage-receipt.schema.json`
+- `compatibility-receipt.json` — optional (required only if the directive sets
+  `require_compatibility_review: true`), written by Agent 2v, validates against
+  `contracts/compatibility-receipt.schema.json`
+- `release-audit-receipt.json` — optional (required only if the directive sets
+  `require_release_audit: true`), written by Agent 2r, validates against
+  `contracts/release-audit-receipt.schema.json`. Its `packaged_files` field is mechanically
+  scanned by `release-warden.js` against `PACKAGE_DENY_PATTERNS` whenever this receipt exists —
+  the one receipt type in the graph whose own `status` field isn't the final word.
 - `warden-receipt.json` — written only by `scripts/release-warden.js`, validates against
   `contracts/warden-receipt.schema.json`
 - `docs-receipt.json` — optional, written by Agent 4 only after `warden-receipt.status ===

@@ -1,0 +1,57 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "threat-model.schema.json",
+  "title": "Threat Modeler Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "assets",
+    "trust_boundaries",
+    "inputs",
+    "outputs",
+    "privileges",
+    "attack_surface",
+    "dependencies",
+    "secrets",
+    "network_boundaries",
+    "filesystem_boundaries",
+    "likely_attack_classes",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["threat-modeler"] },
+    "status": { "type": "string", "enum": ["COMPLETE", "INCOMPLETE"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "assets": { "type": "array", "items": { "type": "object" } },
+    "trust_boundaries": { "type": "array", "items": { "type": "object" } },
+    "inputs": { "type": "array", "items": { "type": "object" } },
+    "outputs": { "type": "array", "items": { "type": "object" } },
+    "privileges": { "type": "array", "items": { "type": "object" } },
+    "attack_surface": { "type": "array", "items": { "type": "object" } },
+    "dependencies": { "type": "array", "items": { "type": "object" } },
+    "secrets": { "type": "array", "items": { "type": "object" } },
+    "network_boundaries": { "type": "array", "items": { "type": "object" } },
+    "filesystem_boundaries": { "type": "array", "items": { "type": "object" } },
+    "likely_attack_classes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["class", "rationale", "priority"],
+        "properties": {
+          "class": { "type": "string" },
+          "rationale": { "type": "string" },
+          "priority": { "type": "string", "enum": ["high", "medium", "low"] }
+        }
+      }
+    },
+    "incomplete_reason": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

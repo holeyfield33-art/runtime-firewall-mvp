@@ -94,6 +94,30 @@ const SYNC_TRIGGER_PATTERNS = [
   /packages\/fw-agent\/index\.js$/,
 ];
 
+// Files that must never appear in a published package's file list, regardless of what the Release
+// Auditor's (Agent 2r) own `status` says — "what accidentally got packaged" is meant to be a
+// mechanical decision, not a trust call on prose. Checked against release-audit-receipt.json's
+// `packaged_files` (the real, verbatim `npm pack --dry-run` output) whenever that receipt exists,
+// independent of any release-track opt-in flag. Kept in sync with .agent/agents/release-auditor.md.
+const PACKAGE_DENY_PATTERNS = [
+  /(^|\/)test\//i,
+  /(^|\/)tests\//i,
+  /(^|\/)__tests__\//i,
+  /\.test\.[cm]?js$/i,
+  /\.spec\.[cm]?js$/i,
+  /(^|\/)\.git\//,
+  /(^|\/)\.github\//,
+  /(^|\/)node_modules\//,
+  /(^|\/)\.env(\.|$)/,
+  /(^|\/).*-key\.pem$/i,
+  /(^|\/)dev-private-key\.pem$/i,
+  /(^|\/)\.agent\//,
+  /(^|\/)red-team\//i,
+  /(^|\/)coverage\//i,
+  /(^|\/)\.nyc_output\//,
+  /\.log$/i,
+];
+
 // Agent 4 (Docs Scribe) runs only after this script has already emitted PASS, and is bound to an
 // ALLOWLIST (not a blocklist) of documentation paths — its entire mandate is docs, so anything
 // outside this list is out of scope by definition, regardless of what its receipt claims.
@@ -109,6 +133,73 @@ const DOC_PATH_ALLOWLIST = [
 function loadJson(file) {
   if (!fs.existsSync(file)) return null;
   return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+// Reused by the reliability-receipt gate below. Independent of the base_sha directive lookup
+// earlier in evaluate() (that one is scoped inside the base_sha/candidateSha guard) — this one
+// must run unconditionally, since require_reliability_review has to be checked even when base_sha
+// is absent.
+function loadDirectiveForPhase(phaseId) {
+  if (!phaseId) return null;
+  try {
+    const directivesDir = path.join(__dirname, '..', 'directives');
+    const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
+    return files.length > 0 ? loadJson(path.join(directivesDir, files[0])) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Shared by every optional PASS/FAIL "verdict" receipt beyond the mandatory engineer/verifier
+// pair (reliability, quality, test-coverage, and any future one): FREEZE if required-but-missing,
+// invalid, wrong candidate SHA, or citing evidence that doesn't exist (provenance broke); BLOCK if
+// present and status !== 'PASS' (send back to rework, not fatal); otherwise present-and-fine or
+// simply absent-and-not-required. Pulled into one function specifically because copy-pasting this
+// per receipt type already produced one real bug (the threat-model precondition check originally
+// sat AFTER the a2_pass early-return and so never ran on FAIL runs — see PENTEST-001's history) —
+// consolidating it here means every future receipt type gets that fix for free instead of risking
+// the same class of drift again. Pure: returns a descriptor, never calls freeze()/mutates `checks`
+// itself, so the caller (which owns those closures) decides what to do with the outcome.
+function evaluateOptionalVerdictReceipt({ runDir, candidateSha, evidenceIndex, filename, schemaName, required, roleLabel }) {
+  const filePath = path.join(runDir, filename);
+  const exists = fs.existsSync(filePath);
+  if (required && !exists) {
+    return { outcome: 'freeze', reason: `${filename} required by directive but missing`, info: { present: false, required } };
+  }
+  if (!exists) {
+    return { outcome: 'ok', info: { present: false, required } };
+  }
+  const valid = validateReceipt(path.join(CONTRACTS_DIR, schemaName), filePath);
+  if (!valid.valid) {
+    return {
+      outcome: 'freeze',
+      reason: `${filename} failed schema validation`,
+      extraReasons: valid.errors.map((e) => `${filename}: ${e}`),
+      info: { present: false, required },
+    };
+  }
+  const receipt = loadJson(filePath);
+  if (receipt.candidate_sha !== candidateSha) {
+    return {
+      outcome: 'freeze',
+      reason: `${filename} candidate_sha (${receipt.candidate_sha}) does not match candidate_sha (${candidateSha})`,
+      info: { present: false, required },
+    };
+  }
+  const cited = receipt.evidence || [];
+  const missing = cited.filter((id) => !evidenceIndex.includes(id));
+  if (missing.length > 0) {
+    return {
+      outcome: 'freeze',
+      reason: `${filename} cites evidence missing from evidence/index.json: ${missing.join(', ')}`,
+      info: { present: false, required },
+    };
+  }
+  const info = { present: true, required, status: receipt.status };
+  if (receipt.status !== 'PASS') {
+    return { outcome: 'block', reason: `${roleLabel} reported ${receipt.status}`, info, receipt };
+  }
+  return { outcome: 'ok', info, receipt };
 }
 
 function evaluate(runDir, phaseId) {
@@ -330,27 +421,215 @@ function evaluate(runDir, phaseId) {
     return freeze(`cited evidence missing from evidence/index.json: ${missingEvidence.join(', ') || '(no evidence cited)'}`, checks);
   }
 
+  // ── Threat Modeler (Agent 1b) — opt-in per directive (require_threat_model: true), same
+  // backward-compatible construction as the reliability-receipt gate below: a directive that
+  // predates this field is unaffected. Unlike reliability/verifier receipts this one has no
+  // PASS/FAIL verdict to BLOCK on — it is a recon precondition, not a judgment — so the only two
+  // outcomes are "present, COMPLETE, evidence checks out" (fine) or FREEZE (missing, invalid,
+  // wrong candidate, missing evidence, or explicitly INCOMPLETE — attacking off an admittedly
+  // incomplete map is exactly the discipline this gate exists to prevent). Evaluated BEFORE the
+  // a2_pass check below, deliberately: whether the pentester's attack PASSed or FAILed, a required
+  // threat model that's missing/invalid/incomplete is a process failure that must surface either
+  // way, not something an early BLOCK return on a2_pass can silently skip past.
+  const threatModelDirective = loadDirectiveForPhase(phaseId);
+  const threatModelRequired = !!(threatModelDirective && threatModelDirective.require_threat_model);
+  const threatModelPath = path.join(runDir, 'threat-model.json');
+  const threatModelExists = fs.existsSync(threatModelPath);
+  let threatModelInfo = { present: false, required: threatModelRequired };
+  if (threatModelRequired && !threatModelExists) {
+    return freeze('threat-model.json required by directive but missing', checks);
+  }
+  if (threatModelExists) {
+    const tmValid = validateReceipt(path.join(CONTRACTS_DIR, 'threat-model.schema.json'), threatModelPath);
+    if (!tmValid.valid) {
+      return freeze('threat-model.json failed schema validation', checks, tmValid.errors.map((e) => `threat-model: ${e}`));
+    }
+    const threatModel = loadJson(threatModelPath);
+    if (threatModel.candidate_sha !== candidateSha) {
+      return freeze(`threat-model candidate_sha (${threatModel.candidate_sha}) does not match candidate_sha (${candidateSha})`, checks);
+    }
+    const tmEvidence = threatModel.evidence || [];
+    const missingTmEvidence = tmEvidence.filter((id) => !evidenceIndex.includes(id));
+    if (missingTmEvidence.length > 0) {
+      return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks);
+    }
+    if (threatModelRequired && threatModel.status !== 'COMPLETE') {
+      return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks);
+    }
+    threatModelInfo = { present: true, required: threatModelRequired, status: threatModel.status, attack_classes_identified: (threatModel.likely_attack_classes || []).length };
+  }
+  checks.threat_model = threatModelInfo;
+
   // ── A2 verdict is authoritative and cannot be overridden ────────────────────────────────────
   checks.a2_pass = verifier.status === 'PASS';
   if (engineer.status !== 'PASS') {
     reasons.push('engineer receipt status is not PASS');
   }
   if (!checks.a2_pass) {
-    return { status: 'BLOCK', reasons: [...reasons, 'red-team-verifier reported FAIL'], checks, freeze_reason: null };
+    return { status: 'BLOCK', reasons: [...reasons, `${verifier.agent || 'verifier'} reported FAIL`], checks, freeze_reason: null, threat_model: threatModelInfo };
   }
 
   // ── P0 regression: engineer's own recorded test runs must all be exit 0 ─────────────────────
   const failingTests = (engineer.tests_run || []).filter((t) => t.exit_code !== 0);
   checks.p0_regression = failingTests.length > 0;
   if (checks.p0_regression) {
-    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null };
+    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null, threat_model: threatModelInfo };
   }
 
   // ── Regressions flagged explicitly by the verifier ──────────────────────────────────────────
   const verifierRegressions = (verifier.regressions || []).filter((r) => r && r.status && r.status !== 'OK' && r.status !== 'PASS');
   checks.verifier_regressions_clean = verifierRegressions.length === 0;
   if (!checks.verifier_regressions_clean) {
-    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null };
+    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null, threat_model: threatModelInfo };
+  }
+
+  // ── Optional peer-reviewer verdict receipts (Reliability, Code Quality, Test Engineer) ────────
+  // Each is opt-in per directive (require_reliability_review / require_quality_review /
+  // require_test_review), backward compatible by construction: a directive predating a given flag
+  // behaves exactly as before that receipt type existed. If present even without opting in, it is
+  // still validated and honored — a stricter run than required is never penalized, only a
+  // required-but-missing one is. All three share evaluateOptionalVerdictReceipt() (see its comment
+  // for why this is one function instead of three copy-pasted blocks).
+  const directiveForVerdicts = loadDirectiveForPhase(phaseId);
+
+  const reliabilityResult = evaluateOptionalVerdictReceipt({
+    runDir,
+    candidateSha,
+    evidenceIndex,
+    filename: 'reliability-receipt.json',
+    schemaName: 'reliability-receipt.schema.json',
+    required: !!(directiveForVerdicts && directiveForVerdicts.require_reliability_review),
+    roleLabel: 'reliability-reviewer',
+  });
+  if (reliabilityResult.outcome === 'freeze') {
+    return freeze(reliabilityResult.reason, checks, reliabilityResult.extraReasons);
+  }
+  let reliabilityInfo = reliabilityResult.info;
+  if (reliabilityResult.receipt) {
+    reliabilityInfo = {
+      ...reliabilityInfo,
+      blocking_findings: (reliabilityResult.receipt.findings || []).filter((f) => f.severity === 'blocking').length,
+      advisory_findings: (reliabilityResult.receipt.findings || []).filter((f) => f.severity === 'advisory').length,
+    };
+  }
+  checks.reliability_receipt = reliabilityInfo;
+  if (reliabilityResult.outcome === 'block') {
+    return { status: 'BLOCK', reasons: [...reasons, reliabilityResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo };
+  }
+
+  const qualityResult = evaluateOptionalVerdictReceipt({
+    runDir,
+    candidateSha,
+    evidenceIndex,
+    filename: 'quality-receipt.json',
+    schemaName: 'quality-receipt.schema.json',
+    required: !!(directiveForVerdicts && directiveForVerdicts.require_quality_review),
+    roleLabel: 'quality-reviewer',
+  });
+  if (qualityResult.outcome === 'freeze') {
+    return freeze(qualityResult.reason, checks, qualityResult.extraReasons);
+  }
+  let qualityInfo = qualityResult.info;
+  if (qualityResult.receipt) {
+    qualityInfo = {
+      ...qualityInfo,
+      blocking_findings: (qualityResult.receipt.findings || []).filter((f) => f.severity === 'blocking').length,
+      advisory_findings: (qualityResult.receipt.findings || []).filter((f) => f.severity === 'advisory').length,
+    };
+  }
+  checks.quality_receipt = qualityInfo;
+  if (qualityResult.outcome === 'block') {
+    return { status: 'BLOCK', reasons: [...reasons, qualityResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo };
+  }
+
+  const testReviewResult = evaluateOptionalVerdictReceipt({
+    runDir,
+    candidateSha,
+    evidenceIndex,
+    filename: 'test-coverage-receipt.json',
+    schemaName: 'test-coverage-receipt.schema.json',
+    required: !!(directiveForVerdicts && directiveForVerdicts.require_test_review),
+    roleLabel: 'test-engineer',
+  });
+  if (testReviewResult.outcome === 'freeze') {
+    return freeze(testReviewResult.reason, checks, testReviewResult.extraReasons);
+  }
+  let testReviewInfo = testReviewResult.info;
+  if (testReviewResult.receipt) {
+    testReviewInfo = {
+      ...testReviewInfo,
+      blocking_findings: (testReviewResult.receipt.findings || []).filter((f) => f.severity === 'blocking').length,
+      advisory_findings: (testReviewResult.receipt.findings || []).filter((f) => f.severity === 'advisory').length,
+      false_positive_tests_found: (testReviewResult.receipt.false_positive_tests_found || []).length,
+    };
+  }
+  checks.test_coverage_receipt = testReviewInfo;
+  if (testReviewResult.outcome === 'block') {
+    return { status: 'BLOCK', reasons: [...reasons, testReviewResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo };
+  }
+
+  const compatibilityResult = evaluateOptionalVerdictReceipt({
+    runDir,
+    candidateSha,
+    evidenceIndex,
+    filename: 'compatibility-receipt.json',
+    schemaName: 'compatibility-receipt.schema.json',
+    required: !!(directiveForVerdicts && directiveForVerdicts.require_compatibility_review),
+    roleLabel: 'compatibility-reviewer',
+  });
+  if (compatibilityResult.outcome === 'freeze') {
+    return freeze(compatibilityResult.reason, checks, compatibilityResult.extraReasons);
+  }
+  let compatibilityInfo = compatibilityResult.info;
+  if (compatibilityResult.receipt) {
+    compatibilityInfo = {
+      ...compatibilityInfo,
+      blocking_findings: (compatibilityResult.receipt.findings || []).filter((f) => f.severity === 'blocking').length,
+      advisory_findings: (compatibilityResult.receipt.findings || []).filter((f) => f.severity === 'advisory').length,
+    };
+  }
+  checks.compatibility_receipt = compatibilityInfo;
+  if (compatibilityResult.outcome === 'block') {
+    return { status: 'BLOCK', reasons: [...reasons, compatibilityResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo };
+  }
+
+  // ── Release Auditor (Agent 2r) — same opt-in verdict gate as the others, PLUS a mechanical
+  // deny-list check on packaged_files that runs whenever the receipt exists, independent of the
+  // opt-in flag and independent of the receipt's own `status`. "What accidentally got packaged" is
+  // meant to be a script decision (see release-auditor.md and PACKAGE_DENY_PATTERNS above), not a
+  // trust call on this role's prose — a Release Auditor that reports PASS while packaged_files
+  // still contains a forbidden path is exactly the failure mode this check exists to catch.
+  const releaseAuditResult = evaluateOptionalVerdictReceipt({
+    runDir,
+    candidateSha,
+    evidenceIndex,
+    filename: 'release-audit-receipt.json',
+    schemaName: 'release-audit-receipt.schema.json',
+    required: !!(directiveForVerdicts && directiveForVerdicts.require_release_audit),
+    roleLabel: 'release-auditor',
+  });
+  if (releaseAuditResult.outcome === 'freeze') {
+    return freeze(releaseAuditResult.reason, checks, releaseAuditResult.extraReasons);
+  }
+  let releaseAuditInfo = releaseAuditResult.info;
+  if (releaseAuditResult.receipt) {
+    const packagedFiles = (releaseAuditResult.receipt.packaged_files || []).map(normalizePath);
+    const deniedPackagedFiles = packagedFiles.filter((f) => PACKAGE_DENY_PATTERNS.some((re) => re.test(f)));
+    releaseAuditInfo = {
+      ...releaseAuditInfo,
+      blocking_findings: (releaseAuditResult.receipt.findings || []).filter((f) => f.severity === 'blocking').length,
+      advisory_findings: (releaseAuditResult.receipt.findings || []).filter((f) => f.severity === 'advisory').length,
+      packaged_files_count: packagedFiles.length,
+      denied_packaged_files: deniedPackagedFiles,
+    };
+    checks.release_audit_receipt = releaseAuditInfo;
+    if (deniedPackagedFiles.length > 0) {
+      return freeze(`release-audit packaged_files contains forbidden path(s): ${deniedPackagedFiles.join(', ')}`, checks);
+    }
+  }
+  checks.release_audit_receipt = releaseAuditInfo;
+  if (releaseAuditResult.outcome === 'block') {
+    return { status: 'BLOCK', reasons: [...reasons, releaseAuditResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo };
   }
 
   // ── Sync gate (deterministic, not model-decided) ────────────────────────────────────────────
@@ -391,6 +670,12 @@ function evaluate(runDir, phaseId) {
       ? `changed_files touched detector-relevant source: ${syncFiles.join(', ')}`
       : 'no detector-relevant source files changed',
     docs: docsInfo,
+    reliability: reliabilityInfo,
+    threat_model: threatModelInfo,
+    quality: qualityInfo,
+    test_coverage: testReviewInfo,
+    compatibility: compatibilityInfo,
+    release_audit: releaseAuditInfo,
   };
 
   function freeze(reason, extraChecks, extraReasons) {
@@ -420,6 +705,12 @@ function writeWardenReceipt(runDir, phaseId, result) {
     freeze_reason: result.freeze_reason || '',
     evidence: [...((engineer && engineer.evidence) || []), ...((verifier && verifier.evidence) || [])],
     docs: result.docs || { present: false },
+    reliability: result.reliability || { present: false, required: false },
+    threat_model: result.threat_model || { present: false, required: false },
+    quality: result.quality || { present: false, required: false },
+    test_coverage: result.test_coverage || { present: false, required: false },
+    compatibility: result.compatibility || { present: false, required: false },
+    release_audit: result.release_audit || { present: false, required: false },
     timestamp: new Date().toISOString(),
   };
   fs.writeFileSync(path.join(runDir, 'warden-receipt.json'), JSON.stringify(receipt, null, 2) + '\n');

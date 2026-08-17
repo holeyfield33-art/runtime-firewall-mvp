@@ -19,6 +19,32 @@ subject to model judgment. If the code and the prose here ever disagree, the cod
 | Cited evidence missing from `evidence/index.json` | index lookup |
 | `docs-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/docs-receipt.schema.json` |
 | `docs-receipt.changed_files` contains a path outside the documentation allowlist, or a forbidden path | set comparison against `DOC_PATH_ALLOWLIST` / `FORBIDDEN_PATH_PATTERNS` in `.agent/scripts/release-warden.js` |
+| Directive sets `require_reliability_review: true` but `reliability-receipt.json` is missing | file existence check, directive lookup by `phase_id` |
+| `reliability-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/reliability-receipt.schema.json` |
+| `reliability-receipt.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `reliability-receipt` cites evidence missing from `evidence/index.json` | index lookup |
+| Directive sets `require_threat_model: true` but `threat-model.json` is missing | file existence check, directive lookup by `phase_id` |
+| `threat-model.json` present but fails schema validation | `validate-receipt.js` against `contracts/threat-model.schema.json` |
+| `threat-model.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `threat-model` cites evidence missing from `evidence/index.json` | index lookup |
+| Directive requires a threat model and `threat-model.status !== 'COMPLETE'` | field check — attacking off an admittedly incomplete map is refused |
+| Directive sets `require_quality_review: true` but `quality-receipt.json` is missing | file existence check, directive lookup by `phase_id` |
+| `quality-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/quality-receipt.schema.json` |
+| `quality-receipt.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `quality-receipt` cites evidence missing from `evidence/index.json` | index lookup |
+| Directive sets `require_test_review: true` but `test-coverage-receipt.json` is missing | file existence check, directive lookup by `phase_id` |
+| `test-coverage-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/test-coverage-receipt.schema.json` |
+| `test-coverage-receipt.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `test-coverage-receipt` cites evidence missing from `evidence/index.json` | index lookup |
+| Directive sets `require_compatibility_review: true` but `compatibility-receipt.json` is missing | file existence check, directive lookup by `phase_id` |
+| `compatibility-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/compatibility-receipt.schema.json` |
+| `compatibility-receipt.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `compatibility-receipt` cites evidence missing from `evidence/index.json` | index lookup |
+| Directive sets `require_release_audit: true` but `release-audit-receipt.json` is missing | file existence check, directive lookup by `phase_id` |
+| `release-audit-receipt.json` present but fails schema validation | `validate-receipt.js` against `contracts/release-audit-receipt.schema.json` |
+| `release-audit-receipt.candidate_sha` does not match the resolved `candidate_sha` | set comparison |
+| `release-audit-receipt` cites evidence missing from `evidence/index.json` | index lookup |
+| `release-audit-receipt.packaged_files` contains any path matching `PACKAGE_DENY_PATTERNS` | mechanical scan — runs whenever the receipt exists, regardless of its own `status` field or the `require_release_audit` opt-in |
 
 ## Forbidden paths (any match in `changed_files` is an automatic FREEZE)
 
@@ -35,6 +61,28 @@ policy.signed.json
 
 The last four exist so Agent 1 cannot edit the gate that judges its own work — the control plane
 must be out of scope for the very directive it is enforcing.
+
+## Package deny patterns (any match in a Release Auditor's `packaged_files` is an automatic FREEZE)
+
+```
+test/, tests/, __tests__/    (anywhere in the path)
+*.test.js, *.spec.js
+.git/, .github/
+node_modules/
+.env, .env.*
+*-key.pem, dev-private-key.pem
+.agent/
+red-team/
+coverage/, .nyc_output/
+*.log
+```
+
+Unlike the forbidden-path list above (which governs what Agent 1 may *change*), this governs what
+a Release Auditor's real `npm pack --dry-run` output may *contain* — checked mechanically by
+`release-warden.js` whenever `release-audit-receipt.json` exists, independent of that receipt's
+own `status` field and independent of whether `require_release_audit` was even set. See
+`.agent/agents/release-auditor.md` for why this one check deliberately doesn't trust the role's
+own prose verdict.
 
 ## `.helios-baseline` carve-out (narrow, mechanically-verified — not a blanket exception)
 
@@ -70,13 +118,26 @@ forbidden-path list above is still out of scope — there is no third category. 
 only if `docs-receipt.json` exists in the run directory; its absence never affects `PASS`/`BLOCK`/
 `FREEZE` for the A1/A2/A3 loop.
 
+## Reliability Reviewer opt-in (Agent 2b, `.agent/agents/reliability-reviewer.md`)
+
+`reliability-receipt.json` is optional per run: `release-warden.js` only requires it (missing =>
+FREEZE) when the run's directive sets `"require_reliability_review": true`. Every directive that
+predates this field is unaffected — its absence has always meant "not evaluated," never "passed by
+default." If the receipt is present anyway, even without an opt-in directive, it is still validated
+and can still BLOCK on a reported `FAIL` — a stricter run than required is honored, never ignored.
+
 ## BLOCK conditions (verification loop must continue, not a fatal stop)
 
 | Condition | Detection |
 |---|---|
-| `red-team-verifier` reported `FAIL` | `verifier-receipt.status !== 'PASS'` |
+| `red-team-verifier` (or `pentester`) reported `FAIL` | `verifier-receipt.status !== 'PASS'` |
 | Any `engineer-receipt.tests_run[*].exit_code !== 0` | P0 regression signal |
 | `verifier-receipt.regressions[*]` contains a non-OK entry | explicit regression report |
+| `reliability-receipt.status !== 'PASS'` (only evaluated if the receipt exists) | reliability-reviewer reported a blocking finding |
+| `quality-receipt.status !== 'PASS'` (only evaluated if the receipt exists) | quality-reviewer reported a blocking finding |
+| `test-coverage-receipt.status !== 'PASS'` (only evaluated if the receipt exists) | test-engineer reported a blocking finding (most often a confirmed false-positive test) |
+| `compatibility-receipt.status !== 'PASS'` (only evaluated if the receipt exists) | compatibility-reviewer reported a blocking finding |
+| `release-audit-receipt.status !== 'PASS'` (only evaluated if the receipt exists) | release-auditor reported a blocking finding |
 
 BLOCK differs from FREEZE: BLOCK means "this candidate isn't good enough yet, send it back to
 `A1_REWORK`." FREEZE means "something about the process/provenance itself broke — a human must
