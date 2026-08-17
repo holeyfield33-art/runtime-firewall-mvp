@@ -1,0 +1,24 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "red-team-verifier",
+  "status": "PASS",
+  "candidate_sha": "a5b755d1744877ff04a1b81db54b981d0ae8a187",
+  "clean_checkout": false,
+  "commands": [
+    {
+      "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js",
+      "exit_code": 0,
+      "observed_behavior": "printed 'P2-EXPERIMENT-001 fixture: OK' and exited 0"
+    }
+  ],
+  "controls": [
+    { "name": "independent re-run", "result": "PASS" }
+  ],
+  "attacks": [],
+  "regressions": [],
+  "matrix_result": {},
+  "escape_probes": [],
+  "evidence": ["a1-test"],
+  "notes": "Deliberate FREEZE-proof scenario: this receipt intentionally cites candidate_sha a5b755d1744877ff04a1b81db54b981d0ae8a187, a different commit than engineer-receipt.json's 3e91bd42c4c8eda385275f354d705894ee1ca759, to prove the Release Warden FREEZEs on provenance mismatch rather than trusting either agent's self-reported SHA.",
+  "timestamp": "2026-08-16T01:57:20.000Z"
+}

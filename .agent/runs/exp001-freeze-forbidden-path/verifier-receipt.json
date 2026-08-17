@@ -1,0 +1,24 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "red-team-verifier",
+  "status": "PASS",
+  "candidate_sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+  "clean_checkout": false,
+  "commands": [
+    {
+      "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js",
+      "exit_code": 0,
+      "observed_behavior": "printed 'P2-EXPERIMENT-001 fixture: OK' and exited 0"
+    }
+  ],
+  "controls": [
+    { "name": "independent re-run", "result": "PASS" }
+  ],
+  "attacks": [],
+  "regressions": [],
+  "matrix_result": {},
+  "escape_probes": [],
+  "evidence": ["a2-rerun"],
+  "notes": "Deliberate FREEZE-proof scenario: verifier legitimately PASSes the functional test, but the engineer receipt declares a forbidden path was touched. This proves the Release Warden FREEZEs on scope violation even when A2 itself reports PASS — a security/provenance gate that a passing functional test cannot override.",
+  "timestamp": "2026-08-16T01:56:50.000Z"
+}

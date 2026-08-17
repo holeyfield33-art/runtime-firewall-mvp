@@ -1,0 +1,26 @@
+[
+  {
+    "label": "a1-candidate",
+    "timestamp": "2026-08-16T01:56:25.882Z",
+    "sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+    "branch": "agent/p2-orchestration-proof",
+    "dirty": false,
+    "status": ""
+  },
+  {
+    "label": "a2-verify-start",
+    "timestamp": "2026-08-16T01:56:42.735Z",
+    "sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+    "branch": "agent/p2-orchestration-proof",
+    "dirty": false,
+    "status": ""
+  },
+  {
+    "label": "a2-verify-end",
+    "timestamp": "2026-08-16T01:56:43.043Z",
+    "sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+    "branch": "agent/p2-orchestration-proof",
+    "dirty": false,
+    "status": ""
+  }
+]

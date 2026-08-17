@@ -1,0 +1,21 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "boundary-engineer",
+  "status": "PASS",
+  "base_sha": "9562f9f0d26941d70b8a3ade40346564b21f9eec",
+  "base_sha_note": "Deviation from directives/P2-EXPERIMENT-001.json's stated base_sha (0793227) is expected and disclosed here: this negative-test fixture was built on agent/p2-orchestration-proof's tip for the same tooling-availability reason recorded in the real P2-01 receipts (the .agent/ control-plane scripts this fixture exercises only exist on that branch).",
+  "candidate_sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+  "changed_files": [
+    "packages/fw-agent/.helios-baseline"
+  ],
+  "tests_added": [],
+  "tests_run": [
+    { "command": "node -e \"console.log('ok')\"", "exit_code": 0 }
+  ],
+  "security_invariant": "NEGATIVE-TEST FIXTURE ONLY: this candidate deliberately writes a WRONG, non-recomputable .helios-baseline (a literal placeholder hash, not derived from index.js's actual content) to prove release-warden.js's baseline carve-out rejects a mismatch rather than blanket-trusting any .helios-baseline change.",
+  "known_limitations": [
+    "Throwaway proof fixture for the P2-01 baseline-carve-out negative test. Not a real security fix."
+  ],
+  "evidence": ["a1-trivial-check"],
+  "timestamp": "2026-08-16T05:49:30.000Z"
+}

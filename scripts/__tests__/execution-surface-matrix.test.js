@@ -60,6 +60,38 @@ check('coordinator writes results/execution-surface-matrix.json in the required 
   assert.ok(nestedRequire, 'nested require() [control] row not found');
   assert.strictEqual(require_.verdict, 'INTERCEPTED', 'require() [control] row must be INTERCEPTED');
   assert.strictEqual(nestedRequire.verdict, 'INTERCEPTED', 'nested require() [control] row must be INTERCEPTED');
+
+  // ESM interception requires Module.registerHooks() (Node >=22.15.0 / >=23.5.0, Stability 1.2).
+  // Below that floor the hook is not registered and ESM is a documented UNSUPPORTED bypass —
+  // correctly reported as BYPASS by the matrix rows, never falsely claimed as INTERCEPTED.
+  // Must check require('module').registerHooks, not the bare CJS `module` wrapper object.
+  // Note: The same load hook covers both static `import` and dynamic import().
+  const supportsRegisterHooks = typeof require('module').registerHooks === 'function';
+  const esmStatic = data.rows.find(r => r.path.toLowerCase().includes('esm static import'));
+  const dynamicImport = data.rows.find(r => r.path.toLowerCase().includes('dynamic import'));
+  assert.ok(esmStatic, 'ESM static import row not found');
+  assert.ok(dynamicImport, 'dynamic import() row not found');
+  if (supportsRegisterHooks) {
+    // Hard-assert full interception on Node >=22.15 / >=23.5 where the hook is active.
+    assert.strictEqual(esmStatic.verdict, 'INTERCEPTED', 'ESM static import row must be INTERCEPTED on Node with registerHooks()');
+    assert.strictEqual(dynamicImport.verdict, 'INTERCEPTED', 'dynamic import() row must be INTERCEPTED as a side effect of the same load hook');
+  } else {
+    // On older Node: assert the matrix is honest — ESM is BYPASS (not falsely INTERCEPTED).
+    assert.notStrictEqual(esmStatic.verdict, 'INTERCEPTED',
+      `ESM static import must not claim INTERCEPTED when registerHooks() is unavailable (Node ${process.version}): ${esmStatic.detail}`);
+    assert.notStrictEqual(dynamicImport.verdict, 'INTERCEPTED',
+      `dynamic import() must not claim INTERCEPTED when registerHooks() is unavailable (Node ${process.version}): ${dynamicImport.detail}`);
+    console.log(`  (note) ESM rows on Node ${process.version}: esmStatic=${esmStatic.verdict}, dynamicImport=${dynamicImport.verdict} — registerHooks() floor not met, UNSUPPORTED bypass correctly reported`);
+  }
+
+  // Explicitly out of scope for P2-01 (per the directive) and must remain UNCHANGED — these are
+  // architecturally different execution paths the ESM loader hook cannot and should not affect.
+  const vmContext = data.rows.find(r => r.path.toLowerCase().includes('vm.runinnewcontext'));
+  const nativeAddon = data.rows.find(r => r.path.toLowerCase().includes('native .node addon'));
+  assert.ok(vmContext, 'vm.runInNewContext() row not found');
+  assert.ok(nativeAddon, 'native .node addon row not found');
+  assert.strictEqual(vmContext.verdict, 'BYPASS', 'vm.runInNewContext() must remain BYPASS — out of P2-01 scope, unrelated mechanism');
+  assert.notStrictEqual(nativeAddon.verdict, 'INTERCEPTED', 'native .node addon must not have silently flipped to INTERCEPTED — out of P2-01 scope, unrelated mechanism');
 });
 
 check('coordinator exits 0 when both control rows are INTERCEPTED', () => {

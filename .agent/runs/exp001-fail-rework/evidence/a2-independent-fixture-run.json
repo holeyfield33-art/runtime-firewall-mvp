@@ -1,0 +1,17 @@
+{
+  "id": "a2-independent-fixture-run",
+  "run_id": "exp001-fail-rework",
+  "phase_id": "P2-EXPERIMENT-001",
+  "type": "command",
+  "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js",
+  "exit_code": 1,
+  "started_at": "2026-08-16T01:39:27.519Z",
+  "ended_at": "2026-08-16T01:39:27.706Z",
+  "cwd": "/workspaces/runtime-firewall-mvp",
+  "git_sha": "994466000640c99cec6f28a21b25c2e5faecde35",
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stderr_sha256": "2f87326a11f1c21bf1e7cf972c4491f3bd7c8752cea93d9cfc39f88a6c08eb57",
+  "stdout_excerpt": "",
+  "stderr_excerpt": "node:assert:152\n  throw new AssertionError(obj);\n  ^\n\nAssertionError [ERR_ASSERTION]: sanity check for P2-EXPERIMENT-001 PASS scenario\n\n2 !== 3\n\n    at Object.<anonymous> (/workspaces/runtime-firewall-mvp/packages/fw-agent/test/__agent-experiment-001-fixture.js:6:8)\n    at Module._compile (node:internal/modules/cjs/loader:1812:14)\n    at Object..js (node:internal/modules/cjs/loader:1943:10)\n    at Module.load (node:internal/modules/cjs/loader:1533:32)\n    at Module._load (node:internal/modules/cjs/loader:1335:12)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:255:19)\n    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)\n    at node:internal/main/run_main_module:33:47 {\n  generatedMessage: false,\n  code: 'ERR_ASSERTION',\n  actual: 2,\n  expected: 3,\n  operator: 'strictEqual',\n  diff: 'simple'\n}\n\nNode.js v24.14.0\n",
+  "timed_out": false
+}

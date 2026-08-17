@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "verifier-receipt.schema.json",
+  "title": "Red-Team Verifier Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "clean_checkout",
+    "commands",
+    "controls",
+    "attacks",
+    "regressions",
+    "matrix_result",
+    "escape_probes",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["red-team-verifier"] },
+    "status": { "type": "string", "enum": ["PASS", "FAIL"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "clean_checkout": { "type": "boolean" },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["command", "exit_code"],
+        "properties": {
+          "command": { "type": "string" },
+          "exit_code": { "type": "number" },
+          "observed_behavior": { "type": "string" }
+        }
+      }
+    },
+    "controls": { "type": "array", "items": { "type": "object" } },
+    "attacks": { "type": "array", "items": { "type": "object" } },
+    "regressions": { "type": "array", "items": { "type": "object" } },
+    "matrix_result": { "type": "object" },
+    "escape_probes": { "type": "array", "items": { "type": "object" } },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "fail_reasons": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

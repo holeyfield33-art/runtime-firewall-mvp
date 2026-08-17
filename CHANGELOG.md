@@ -8,6 +8,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ESM `import` / `import()` interception (P2-01)**: closes the gap where ES modules bypassed
+  the firewall entirely (`Module.prototype._compile` is never invoked for ESM evaluation).
+  `packages/fw-agent/index.js` now also registers a `module.registerHooks()` load hook — the
+  synchronous, main-thread ESM Customization Hooks API (Node ≥22.15.0/≥23.5.0) — that reuses the
+  same `detector`, `policyMap`, and content-hash cache the CommonJS path already uses. Practical
+  effect: ESM modules now get real per-module `BLOCK`/`QUARANTINE` policy overrides (not just
+  signature/behavioral scanning), and cross-file behavioral correlation (e.g.
+  `CREDENTIAL_EXFILTRATION_CROSS_FILE`) now fires **across the CommonJS/ESM boundary** for a
+  split attack spanning both module systems in the same package — independently verified, not
+  just claimed. Dynamic `import()` is intercepted by the same mechanism as an inherent
+  consequence (Node does not distinguish static vs. dynamic import at this hook).
+  Below the Node ≥22.15.0/≥23.5.0 floor, ESM stays an honest, logged `UNSUPPORTED` bypass — never
+  silently claimed as protected. `vm.runInNewContext()` and native `.node` addon loads remain
+  out of scope (architecturally unreachable by any `_compile`/`registerHooks()`-based approach).
+  See [`README.md`](README.md#coverage--limitations) and
+  [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md#execution-surface-coverage-which-code-paths-reach-the-detector-at-all)
+  for the full breakdown, and `scripts/execution-surface-matrix.js` (`npm run test:matrix`) for
+  the reproducible, per-path verdict.
+
+- **`.agent/` — a 4-agent development-loop control plane (prototype)**: an orchestration
+  contract (Boundary Engineer / Red-Team Verifier / Release Warden / Docs Scribe) for running
+  future firewall changes through a deterministic, independently-verified gate before any
+  registry sync or human release approval — no agent can promote its own work, no model output
+  overrides the gate's `PASS`/`BLOCK`/`FREEZE` verdict. Proven on a throwaway task across all
+  required states before being pointed at real code, then proven on this ESM fix as the first
+  real (non-throwaway) run — including a genuine `FREEZE` on a previously-unexercised interaction
+  between the self-integrity baseline and the gate's forbidden-path check, resolved with a
+  narrow, mechanically-verified carve-out rather than a policy loosening. Not part of the
+  package's runtime surface (dev-tooling only, gitignored per-run evidence). See `.agent/README.md`.
+
+### Fixed
+
+- **Execution-surface matrix "ESM static import" row now tests a genuine static `import`
+  declaration**: it previously used `await import()` inside the test fixture — dynamic-import
+  syntax, not a real static declaration, despite the row's name. A real static import failure is
+  uncatchable in-process (the whole module fails to evaluate), so the matrix coordinator's
+  crash-classification logic was generalized to recognize a `[Firewall]`-tagged crash as
+  `INTERCEPTED` rather than misreporting it as `UNSUPPORTED`.
+
 ## [0.4.0] - 2026-08-11
 
 ### Added

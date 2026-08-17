@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "warden-receipt.schema.json",
+  "title": "Release Warden Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "checks",
+    "sync_required",
+    "reasons",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["release-warden"] },
+    "status": { "type": "string", "enum": ["PASS", "BLOCK", "FREEZE"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "checks": { "type": "object" },
+    "sync_required": { "type": "boolean" },
+    "sync_reason": { "type": "string" },
+    "reasons": { "type": "array", "items": { "type": "string" } },
+    "freeze_reason": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}

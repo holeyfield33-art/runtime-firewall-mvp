@@ -62,8 +62,23 @@ function runRow(row) {
     return { verdict: parsed.verdict, detail: parsed.detail || '' };
   }
 
-  // Child crashed, timed out, or wrote something unparseable before reporting a verdict — never
-  // surface UNKNOWN; attribute UNSUPPORTED with the observed failure so the row is still reported.
+  // No parseable verdict from the child (crash, timeout, or malformed output). If the crash was
+  // caused by our OWN firewall's block (stderr contains the "[Firewall] ..." message every block
+  // path in this agent uses), that crash IS the interception signal — some execution paths (a
+  // genuine top-level ESM static `import` declaration whose target throws during module linking,
+  // P2-01) have no way to catch their own failure and self-report; a [Firewall] message on stderr
+  // is the only observable signal such a row can ever produce. Misclassifying that as UNSUPPORTED
+  // would hide a working control behind the very crash that proves it worked.
+  const stderrText = res.stderr || '';
+  if (res.status !== 0 && stderrText.includes('[Firewall]')) {
+    return {
+      verdict: 'INTERCEPTED',
+      detail: `Child crashed (exit=${res.status}) before it could self-report a verdict, but stderr shows a firewall block: ${stderrText.trim().slice(0, 300)}`,
+    };
+  }
+
+  // Otherwise: genuinely no parseable verdict and no firewall block signal — never surface
+  // UNKNOWN; attribute UNSUPPORTED with the observed failure so the row is still reported.
   const detail = `Child produced no parseable verdict. exit=${res.status} signal=${res.signal} ` +
     `stderr=${(res.stderr || '').trim().slice(0, 500)}`;
   return { verdict: 'UNSUPPORTED', detail };

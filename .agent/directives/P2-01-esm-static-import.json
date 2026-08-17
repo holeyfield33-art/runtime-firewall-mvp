@@ -1,0 +1,28 @@
+{
+  "phase_id": "P2-01",
+  "title": "Close ESM static import interception gap",
+  "target": "aletheia-firewall",
+  "objective": "Determine whether and how static ESM imports bypass the current enforcement boundary and implement the smallest safe interception strategy.",
+  "base_sha": "0793227",
+  "base_sha_note": "Verified current against origin/main HEAD on 2026-08-16 (git rev-parse main == 079322774e92a7d1d5aaf12128712afa130aa63b). Re-verify before starting A1_WRITE if time has passed.",
+  "scope": [
+    "ESM static import interception",
+    "required tests",
+    "execution-surface matrix"
+  ],
+  "out_of_scope": [
+    "dynamic import()",
+    "vm.runInNewContext()",
+    "native .node addons",
+    "registry synchronization unless deterministic gate requires it"
+  ],
+  "success_criteria": [
+    "ESM attack is intercepted or explicitly proven impossible to intercept under supported architecture",
+    "existing controls remain green",
+    "no P0 regression",
+    "candidate SHA remains immutable during verification",
+    "evidence bundle is complete"
+  ],
+  "status": "NOT STARTED",
+  "status_note": "Per directive section 9, this phase must not begin until P2-EXPERIMENT-001 has demonstrated PASS, FAIL->REWORK, and FREEZE. This directive is prepared but the boundary-engineer has not been invoked against it in this run of the .agent/ prototype."
+}

@@ -1,0 +1,17 @@
+{
+  "id": "a1-smoke-check",
+  "run_id": "exp001-fail-rework",
+  "phase_id": "P2-EXPERIMENT-001",
+  "type": "command",
+  "command": "node -e \"console.log('build ok')\"",
+  "exit_code": 0,
+  "started_at": "2026-08-16T01:39:06.667Z",
+  "ended_at": "2026-08-16T01:39:06.874Z",
+  "cwd": "/workspaces/runtime-firewall-mvp",
+  "git_sha": "994466000640c99cec6f28a21b25c2e5faecde35",
+  "stdout_sha256": "5c3d57cf803c92ff537694cda191d9c10c44f33c39eaf5f45e91e34f6413e254",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "stdout_excerpt": "build ok\n",
+  "stderr_excerpt": "",
+  "timed_out": false
+}

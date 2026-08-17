@@ -1,0 +1,23 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "boundary-engineer",
+  "status": "PASS",
+  "base_sha": "0793227",
+  "candidate_sha": "920955327ced380c9138fb0ffb24d97fb4704be1",
+  "changed_files": [
+    "packages/fw-agent/test/__agent-experiment-001-fixture.js"
+  ],
+  "tests_added": [
+    "packages/fw-agent/test/__agent-experiment-001-fixture.js"
+  ],
+  "tests_run": [
+    { "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js", "exit_code": 0 }
+  ],
+  "security_invariant": "No firewall enforcement source under packages/fw-agent/src or packages/fw-control/src was touched; this candidate exists only to exercise the .agent/ graph.",
+  "known_limitations": [
+    "This is a throwaway fixture for P2-EXPERIMENT-001, not a real security fix.",
+    "Fixture is intended to be removed once the experiment is recorded."
+  ],
+  "evidence": ["a1-fixture-test"],
+  "timestamp": "2026-08-16T01:38:00.000Z"
+}

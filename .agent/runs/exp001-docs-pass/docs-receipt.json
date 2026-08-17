@@ -1,0 +1,16 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "docs-scribe",
+  "status": "DRAFTED",
+  "candidate_sha": "920955327ced380c9138fb0ffb24d97fb4704be1",
+  "warden_status_at_draft_time": "PASS",
+  "changed_files": ["CHANGELOG.md"],
+  "changelog_entry": "### Agent-graph proof: no enforcement source touched (per engineer-receipt security_invariant); this candidate exists only to exercise the .agent/ orchestration graph on P2-EXPERIMENT-001.",
+  "source_receipts": {
+    "engineer_security_invariant": "No firewall enforcement source under packages/fw-agent/src or packages/fw-control/src was touched; this candidate exists only to exercise the .agent/ graph.",
+    "engineer_known_limitations": "This is a throwaway fixture for P2-EXPERIMENT-001, not a real security fix. Fixture is intended to be removed once the experiment is recorded.",
+    "warden_sync_required": false
+  },
+  "evidence": [],
+  "timestamp": "2026-08-16T04:10:00.000Z"
+}

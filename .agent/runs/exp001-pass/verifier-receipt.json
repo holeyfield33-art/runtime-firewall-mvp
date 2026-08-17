@@ -1,0 +1,24 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "red-team-verifier",
+  "status": "PASS",
+  "candidate_sha": "920955327ced380c9138fb0ffb24d97fb4704be1",
+  "clean_checkout": false,
+  "commands": [
+    {
+      "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js",
+      "exit_code": 0,
+      "observed_behavior": "printed 'P2-EXPERIMENT-001 fixture: OK' and exited 0"
+    }
+  ],
+  "controls": [
+    { "name": "fixture assertion re-run independently of engineer's claim", "result": "PASS" }
+  ],
+  "attacks": [],
+  "regressions": [],
+  "matrix_result": {},
+  "escape_probes": [],
+  "evidence": ["a2-independent-rerun"],
+  "notes": "This scenario has no attack surface (throwaway non-functional fixture); verification consists of independently re-running the engineer's declared test at the exact candidate SHA, using checkpoint.js assert-sha to confirm the SHA did not move first. clean_checkout=false because this container has no spare disk/process budget for a second full checkout; assert-sha before and after substitutes for that guarantee here (see a2-verify-start/a2-verify-end checkpoints).",
+  "timestamp": "2026-08-16T01:38:30.000Z"
+}

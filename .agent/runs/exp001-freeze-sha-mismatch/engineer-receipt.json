@@ -1,0 +1,22 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "boundary-engineer",
+  "status": "PASS",
+  "base_sha": "0793227",
+  "candidate_sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+  "changed_files": [
+    "packages/fw-agent/test/__agent-experiment-001-fixture.js"
+  ],
+  "tests_added": [
+    "packages/fw-agent/test/__agent-experiment-001-fixture.js"
+  ],
+  "tests_run": [
+    { "command": "node packages/fw-agent/test/__agent-experiment-001-fixture.js", "exit_code": 0 }
+  ],
+  "security_invariant": "No firewall enforcement source under packages/fw-agent/src or packages/fw-control/src was touched.",
+  "known_limitations": [
+    "Deliberate FREEZE-proof scenario: paired with a verifier-receipt.json that (for the purpose of the test) reports a different candidate_sha, simulating Agent 2 having verified the wrong commit or Agent 1 having moved the candidate after handoff."
+  ],
+  "evidence": ["a1-test"],
+  "timestamp": "2026-08-16T01:57:15.000Z"
+}

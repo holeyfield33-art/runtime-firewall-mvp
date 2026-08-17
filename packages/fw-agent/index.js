@@ -4,6 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 const { Worker } = require('worker_threads');
+const { fileURLToPath } = require('url');
 
 // Exit early and export nothing if detection is not enabled - zero overhead for baseline runs
 if (process.env.FW_ENABLE_DETECTION !== '1') {
@@ -574,6 +575,115 @@ Module.prototype._compile = function (content, filename) {
   return originalCompile.apply(this, arguments);
 };
 
+// ── P2-01: ESM static/dynamic import interception ────────────────────────────────────────────
+// Module.prototype._compile (above) is never invoked for ES module evaluation — Node's ESM
+// loader is an entirely separate pipeline. module.registerHooks() (the SYNCHRONOUS Module
+// Customization Hooks variant, added in Node 22.15.0 / 23.5.0) intercepts ESM source before
+// evaluation via a `load` hook that runs on THIS SAME MAIN THREAD — unlike the older, now
+// Stability-0-Deprecated module.register() (which runs its hooks off-thread), this reuses the
+// exact same `detector`, `policyMap`, `verifiedCompilationsCache`, `auditLog`, and
+// `emitTelemetry` the CJS path above uses directly, rather than needing a separate detector
+// instance with separate, disconnected state. On Node versions without registerHooks() (older
+// than the 22.15.0/23.5.0 floor), ESM stays an architecturally UNSUPPORTED bypass — not silently
+// claimed as protected. fw-agent's declared package floor (>=18.0.0) covers its CJS
+// functionality; ESM protection specifically requires the newer floor — see README's coverage
+// table for the honest breakdown, not a blanket "ESM protected" claim.
+//
+// KNOWN LIMITATIONS (disclosed, not hidden):
+//   - QUARANTINE has no ESM equivalent to CJS's `this.exports = stub` silent substitution — there
+//     is no live module object to swap mid-evaluation from inside a `load` hook. An ESM module
+//     policy-configured to QUARANTINE is treated as BLOCK instead: it still never runs, it just
+//     doesn't get the silent-stub-with-a-fake-export treatment CJS QUARANTINE does.
+//   - _compile's per-dependency-tree behaviorTracker reset (`this.parent === null`, above) has no
+//     equivalent signal available inside a `load` hook — ESM module evaluation doesn't expose an
+//     "is this a tree root" concept the way `this.parent` does for CJS. Cross-file behavioral
+//     state is only ever reset when a CJS root triggers the reset above; this can only make
+//     ESM-involving correlation MORE conservative over a process's lifetime, never silently miss
+//     a detection it would otherwise have made.
+let esmHookOk = true;
+let esmHookError = null;
+if (typeof Module.registerHooks === 'function') {
+  try {
+    Module.registerHooks({
+      load(url, context, nextLoad) {
+        const result = nextLoad(url, context);
+
+        // Only scan actual ES module source loaded from a local file. Non-'module' formats
+        // (builtins, JSON, wasm, CJS-interop) either carry no usable text or already route
+        // through the _compile hook above.
+        if (result.format !== 'module' || typeof result.source === 'undefined' || result.source === null) {
+          return result;
+        }
+        if (!url.startsWith('file://')) {
+          return result;
+        }
+
+        if (emergencyLockdown) {
+          throw new Error('[Firewall] Emergency lockdown active. All module loads blocked.');
+        }
+
+        const filename = fileURLToPath(url);
+        const requestName = path.basename(filename);
+        const canonicalIdentity = resolveModuleIdentity(filename);
+        const packageKey = packageKeyForFilename(filename);
+
+        // Same policy lookup precedence as _compile above.
+        let configuredRule = 'OBSERVE';
+        if (policyMap.has(canonicalIdentity)) {
+          configuredRule = policyMap.get(canonicalIdentity);
+        } else if (packageKey && policyMap.has(packageKey)) {
+          configuredRule = policyMap.get(packageKey);
+        } else if (policyMap.has(requestName)) {
+          configuredRule = policyMap.get(requestName);
+        }
+
+        if (configuredRule === 'BLOCK' || configuredRule === 'QUARANTINE') {
+          // See KNOWN LIMITATIONS above: QUARANTINE degrades to BLOCK for ESM.
+          const eventType = configuredRule === 'BLOCK' ? 'BLOCK' : 'QUARANTINE_ACTIVE';
+          const event = { eventType, packageName: canonicalIdentity, timestamp: Date.now(), esm: true };
+          auditLog.write(event);
+          emitTelemetry(eventType, canonicalIdentity, null, configuredRule === 'QUARANTINE' ? { source: 'policy', esmDegradedToBlock: true } : {});
+          throw new Error(`[Firewall] Compilation denied for module: "${requestName}"`);
+        }
+
+        const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
+        const contentHash = crypto.createHash('sha256').update(source).digest('hex');
+        if (verifiedCompilationsCache.get(filename) === contentHash) {
+          return result;
+        }
+
+        compileMetrics.filesCompiled++;
+        const scanResult = detector.scanModuleSync(requestName, source, filename, packageKey);
+        const blockDetections = scanResult.detections.filter((d) => !d.warnOnly);
+        const warnDetections = scanResult.detections.filter((d) => d.warnOnly);
+
+        if (warnDetections.length > 0) {
+          emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map((d) => d.matched) });
+        }
+
+        if (blockDetections.length > 0) {
+          compileMetrics.lockdownsEnforced++;
+          const event = { eventType: 'DETECTION_TRIGGERED', packageName: canonicalIdentity, detections: blockDetections, timestamp: Date.now(), esm: true };
+          auditLog.write(event);
+          emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
+          const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map((d) => d.rule || d.type).join(', ')}`;
+          console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
+          throw new Error(msg);
+        }
+
+        verifiedCompilationsCache.set(filename, contentHash);
+        return result;
+      },
+    });
+  } catch (e) {
+    esmHookOk = false;
+    esmHookError = e;
+  }
+} else {
+  esmHookOk = false;
+  esmHookError = new Error(`module.registerHooks() unavailable on Node ${process.version} (requires >=22.15.0 or >=23.5.0)`);
+}
+
 // ── Graceful shutdown ─────────────────────────────────────────────────────────────────────────
 async function shutdown(signal) {
   console.log(`\n[Helios] Received ${signal}. Flushing telemetry and shutting down workers...`);
@@ -628,6 +738,20 @@ if (!childReinjectionOk) {
     console.error(`[CRITICAL] [Helios] ${message}`);
   } else {
     console.warn(`[Helios] Warning: ${message}. Children/workers spawned from this process may run unprotected.`);
+  }
+}
+
+// Report the outcome of P2-01 ESM hook registration, same enforce/dev split as P0-4 above: on an
+// unsupported Node version or a registration failure, ESM stays an honest, documented bypass
+// rather than a silently-broken guarantee.
+if (!esmHookOk) {
+  const message = `ESM static/dynamic import interception not active: ${esmHookError && esmHookError.message}`;
+  if (fwMode === 'enforce') {
+    auditLog.write({ eventType: 'ESM_HOOK_UNAVAILABLE', message, timestamp: Date.now() });
+    emitTelemetry('ESM_HOOK_UNAVAILABLE', null, null, { message });
+    console.error(`[CRITICAL] [Helios] ${message}`);
+  } else {
+    console.warn(`[Helios] Warning: ${message}. ESM modules loaded via import/import() in this process run unprotected.`);
   }
 }
 

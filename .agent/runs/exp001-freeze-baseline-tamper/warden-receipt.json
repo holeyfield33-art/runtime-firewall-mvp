@@ -1,0 +1,41 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "release-warden",
+  "status": "FREEZE",
+  "candidate_sha": "24db6be0b7caa6845f9e07884115b8b6cba71123",
+  "checks": {
+    "engineer_receipt_present": true,
+    "verifier_receipt_present": true,
+    "engineer_receipt_valid": true,
+    "verifier_receipt_valid": true,
+    "candidate_sha_consistent": true,
+    "candidate_sha_immutable_during_verification": true,
+    "base_sha_is_ancestor": true,
+    "base_sha_matches_directive": false,
+    "base_sha_deviation_disclosed": true,
+    "changed_files_git_derived": [
+      "packages/fw-agent/.helios-baseline"
+    ],
+    "forbidden_files_touched": [
+      "packages/fw-agent/.helios-baseline"
+    ],
+    "helios_baseline_regeneration": {
+      "ok": false,
+      "reason": "packages/fw-agent/.helios-baseline at 24db6be0b7caa6845f9e07884115b8b6cba71123 does NOT match the independently recomputed hash of its own selfFiles (expected 48a6982c560bfee5df5eecf837d38971297eab6d0416258b94b91dee75d493b5, found deadbeef0000000000000000000000000000000000000000000000000000)"
+    }
+  },
+  "sync_required": false,
+  "sync_reason": "not evaluated — run frozen",
+  "reasons": [
+    "forbidden file(s) modified: packages/fw-agent/.helios-baseline (baseline recomputation: packages/fw-agent/.helios-baseline at 24db6be0b7caa6845f9e07884115b8b6cba71123 does NOT match the independently recomputed hash of its own selfFiles (expected 48a6982c560bfee5df5eecf837d38971297eab6d0416258b94b91dee75d493b5, found deadbeef0000000000000000000000000000000000000000000000000000))"
+  ],
+  "freeze_reason": "forbidden file(s) modified: packages/fw-agent/.helios-baseline (baseline recomputation: packages/fw-agent/.helios-baseline at 24db6be0b7caa6845f9e07884115b8b6cba71123 does NOT match the independently recomputed hash of its own selfFiles (expected 48a6982c560bfee5df5eecf837d38971297eab6d0416258b94b91dee75d493b5, found deadbeef0000000000000000000000000000000000000000000000000000))",
+  "evidence": [
+    "a1-trivial-check",
+    "a2-independent-check"
+  ],
+  "docs": {
+    "present": false
+  },
+  "timestamp": "2026-08-16T08:54:33.779Z"
+}

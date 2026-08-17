@@ -140,12 +140,30 @@ human review of any `*_CROSS_FILE` verdict before it is published.
 > starts over-blocking. The full machine-readable inventory is the `gap_report`
 > array in `results/redteam-summary.json`.
 
+### Execution-surface coverage (which code paths reach the detector at all)
+
+The tables above cover *what content* is detected once a module reaches the firewall's hook.
+This is the separate question of *which execution paths reach a hook in the first place* —
+`scripts/execution-surface-matrix.js` (`npm run test:matrix`) is the authoritative, test-backed
+answer, re-run on every change to either hook:
+
+| Execution path | Status | Mechanism |
+|---|---|---|
+| `require()`, nested `require()` | `INTERCEPTED` | `Module.prototype._compile` |
+| `worker_threads -> new Worker`, `child_process.fork()`, `child_process.spawn('node', ...)` | `INTERCEPTED` | P0-4 `NODE_OPTIONS` / `execArgv` re-injection + `_compile` |
+| Module cached/loaded before the firewall preloads | `INTERCEPTED` | Content-hash re-scan on cache hit |
+| `import` (static) / `import()` (dynamic) | `INTERCEPTED` on Node ≥22.15.0/≥23.5.0; **`BYPASS`** below that floor | `module.registerHooks()` (P2-01) — see root `README.md`'s Coverage table for the version-floor detail |
+| `vm.runInNewContext()` | `BYPASS` | Executes source directly via V8, never calls `require()`/`_compile` |
+| Native addon (`.node`) load | `UNSUPPORTED` (architecturally unreachable) | Routes through `process.dlopen()`, never calls `_compile` |
+
 ### Architectural scope boundaries (out of scope by design)
 
 | Boundary | Reason |
 |---|---|
 | Dependency `postinstall` hooks in `node_modules` | The npm installer runs these **before** the firewall loads. Only the host project's own root `package.json` scripts are scanned. Use `npm install --ignore-scripts` + a separate pre-install scan. |
 | Bun / Deno full coverage | Preload is enforced (exit if absent) but interception coverage under these runtimes is limited. |
+| `vm.runInNewContext()` | Never routes through `require()`/`_compile` at all — a different execution primitive entirely, not a detection gap. |
+| Native addon (`.node`) loads | Not JavaScript source; `process.dlopen()` never calls `_compile`. |
 | AST-level obfuscation | Roadmap Phase 5. The behavioral tier mitigates via action-sequence detection but cannot match a determined AST-obfuscated payload. |
 | Self-integrity baseline is committed alongside the code | Integrity *verification*, not *protection*: an attacker who can rewrite the source can rewrite `.helios-baseline`. External/signed anchoring is future work. |
 
@@ -156,6 +174,7 @@ human review of any `*_CROSS_FILE` verdict before it is published.
 ```bash
 npm run test:adversarial   # every Protected/Bypass row above is asserted here or in:
 npm run test:unit          # detector + behavior-tracker + policy + quarantine unit tests
+npm run test:matrix        # execution-surface matrix (which code paths reach a hook at all)
 npm run test:coverage      # engine-core coverage gate (95%)
 npm run test:live          # end-to-end: miner + base64→eval both blocked (Blocked: 2)
 npm run redteam            # 151-payload red-team suite: logs caught vs. bypassed + gap report

@@ -1,0 +1,25 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "title": "Prove the .agent/ orchestration graph on a throwaway task",
+  "target": "aletheia-firewall",
+  "objective": "Demonstrate that the three-agent graph (boundary-engineer -> red-team-verifier -> release-warden) can move a trivial, security-irrelevant change through the full state machine, correctly loop on a failing verification, and correctly FREEZE on a fatal gate violation. This directive is intentionally NOT about fixing any real vulnerability.",
+  "base_sha": "0793227",
+  "scope": [
+    "a single trivial, additive, non-functional file (e.g. a scratch fixture under packages/fw-agent/test/) used only to exercise the graph",
+    ".agent/runs/ artifacts"
+  ],
+  "out_of_scope": [
+    "any change to packages/fw-agent/src or packages/fw-control/src",
+    "any change to detection behavior",
+    "MRN-CRS (does not exist in this repository)",
+    "registry modification",
+    "npm publish"
+  ],
+  "success_criteria": [
+    "PASS scenario: a valid candidate receives verifier PASS and release-warden PASS",
+    "FAIL/REWORK scenario: a candidate the verifier marks FAIL is correctly BLOCKed and the loop back to A1_REWORK is demonstrated",
+    "FREEZE scenario: a candidate that violates a hard gate (e.g. touches a forbidden path, or has a candidate SHA mismatch) is correctly FREEZEd, and no release candidate is produced",
+    "no P0 regression",
+    "no real source files under packages/fw-agent/src or packages/fw-control/src are modified"
+  ]
+}

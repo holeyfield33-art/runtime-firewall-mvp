@@ -1,0 +1,37 @@
+{
+  "phase_id": "P2-EXPERIMENT-001",
+  "agent": "release-warden",
+  "status": "FREEZE",
+  "candidate_sha": "3e91bd42c4c8eda385275f354d705894ee1ca759",
+  "checks": {
+    "engineer_receipt_present": true,
+    "verifier_receipt_present": true,
+    "engineer_receipt_valid": true,
+    "verifier_receipt_valid": true,
+    "candidate_sha_consistent": true,
+    "candidate_sha_immutable_during_verification": true,
+    "base_sha_is_ancestor": true,
+    "base_sha_matches_directive": true,
+    "changed_files_git_derived": [
+      ".agent/scripts/release-warden.js"
+    ],
+    "forbidden_files_touched": [
+      ".agent/scripts/release-warden.js"
+    ],
+    "helios_baseline_regeneration": null
+  },
+  "sync_required": false,
+  "sync_reason": "not evaluated — run frozen",
+  "reasons": [
+    "forbidden file(s) modified: .agent/scripts/release-warden.js"
+  ],
+  "freeze_reason": "forbidden file(s) modified: .agent/scripts/release-warden.js",
+  "evidence": [
+    "a1-claimed-test",
+    "a2-rerun"
+  ],
+  "docs": {
+    "present": false
+  },
+  "timestamp": "2026-08-16T08:54:33.214Z"
+}

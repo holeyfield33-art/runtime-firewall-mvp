@@ -16,7 +16,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [18, 20, 22]
+        # Node 18/20/22: full suite green; ESM interception checks skip (registerHooks() floor is >=22.15.0).
+        # Node 24: hard-asserts full ESM static + dynamic interception via Module.registerHooks().
+        node-version: [18, 20, 22, 24]
 
     steps:
       - name: Checkout
@@ -68,7 +70,10 @@ jobs:
             'src/policy.js',
           ];
           const hash = crypto.createHash('sha256');
-          for (const f of files) hash.update(fs.readFileSync(f));
+          // Must match index.js's own computeSelfHash() exactly (utf8 + CRLF normalization) --
+          // hashing raw buffers instead only happened to agree because this runs on Linux (no
+          // CRLF to normalize away); it would silently disagree on a Windows checkout.
+          for (const f of files) hash.update(fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n'), 'utf8');
           const computed = hash.digest('hex');
           const stored = fs.readFileSync('.helios-baseline', 'utf8').trim();
           if (computed !== stored) {

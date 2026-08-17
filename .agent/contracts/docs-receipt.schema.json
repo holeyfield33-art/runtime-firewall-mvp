@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "docs-receipt.schema.json",
+  "title": "Docs Scribe Receipt",
+  "type": "object",
+  "required": [
+    "phase_id",
+    "agent",
+    "status",
+    "candidate_sha",
+    "warden_status_at_draft_time",
+    "changed_files",
+    "changelog_entry",
+    "source_receipts",
+    "evidence",
+    "timestamp"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "phase_id": { "type": "string", "minLength": 1 },
+    "agent": { "type": "string", "enum": ["docs-scribe"] },
+    "status": { "type": "string", "enum": ["DRAFTED", "SKIPPED"] },
+    "candidate_sha": { "type": "string", "minLength": 7 },
+    "warden_status_at_draft_time": {
+      "type": "string",
+      "enum": ["PASS"]
+    },
+    "changed_files": { "type": "array", "items": { "type": "string" } },
+    "changelog_entry": { "type": "string" },
+    "source_receipts": {
+      "type": "object",
+      "required": [
+        "engineer_security_invariant",
+        "engineer_known_limitations",
+        "warden_sync_required"
+      ],
+      "properties": {
+        "engineer_security_invariant": { "type": "string" },
+        "engineer_known_limitations": { "type": "string" },
+        "warden_sync_required": { "type": "boolean" }
+      }
+    },
+    "skip_reason": { "type": "string" },
+    "evidence": { "type": "array", "items": { "type": "string" } },
+    "timestamp": { "type": "string", "minLength": 1 }
+  }
+}
