@@ -178,6 +178,49 @@ function verifyEvidenceBinding(runDir, phaseId, evidenceIds) {
 // Directory listing is now sorted for determinism, and every file's parsed content is checked
 // against phaseId directly; a directive file that fails to parse is skipped (not fatal), not
 // forwarded as a match.
+// Extracts the phase_id field's value from possibly-malformed JSON text (used only when a
+// directive file has already failed a real JSON.parse — see loadDirectiveForPhase below). Two
+// properties a naive regex does not have, both found missing by independent adversarial review of
+// two prior attempts at this same function: (1) scans ALL occurrences of the phase_id key and
+// keeps the LAST one, mirroring real JSON.parse's own "later key wins" duplicate-key semantics —
+// a naive first-match regex let a stale/duplicate earlier key mask the real, later one, silently
+// disabling enforcement exactly like the original bug; (2) tracks whether the captured value was
+// actually TERMINATED by a real closing quote, or ran off the end of the available text —
+// terminated means a complete, well-formed value, which if it doesn't exactly equal the target is
+// definitively a *different* phase's genuine ID, never a truncation artifact; a prior attempt's
+// bidirectional prefix check ignored this distinction and let one legitimate phase's corrupted
+// directive spuriously match a different, unrelated phase whose ID happened to be its string
+// prefix. Handles JSON string escaping (`\"` inside the value) well enough to compare identifiers,
+// without needing full \uXXXX decoding.
+function extractPhaseIdFragment(raw) {
+  const keyPattern = /"phase_id"\s*:\s*"/g;
+  let match;
+  let last = null;
+  while ((match = keyPattern.exec(raw)) !== null) {
+    let i = match.index + match[0].length;
+    let value = '';
+    let terminated = false;
+    while (i < raw.length) {
+      const ch = raw[i];
+      if (ch === '\\') {
+        value += ch + (raw[i + 1] || '');
+        i += 2;
+        continue;
+      }
+      if (ch === '"') {
+        terminated = true;
+        i += 1;
+        break;
+      }
+      value += ch;
+      i += 1;
+    }
+    last = { value, terminated };
+    keyPattern.lastIndex = i; // resume scanning after the value just consumed, not inside it
+  }
+  return last;
+}
+
 function loadDirectiveForPhase(phaseId) {
   if (!phaseId) return null;
   let files;
@@ -207,26 +250,19 @@ function loadDirectiveForPhase(phaseId) {
         } catch (e2) {
           continue;
         }
-        // SECURITY (round 2 of this fix, found by a further independent adversarial pass): the
-        // original raw.includes(phaseId) whole-file substring search had two real defects —
-        // (a) it required the FULL phaseId string to survive corruption, so truncation mid-value
-        // (e.g. `{"phase_id":"ADV2-PRO` when the target is "ADV2-PROOF-TRUNC-VALUE") silently
-        // failed to match, reproducing the original bypass for exactly the most realistic crash
-        // point (values are typically the last thing written); (b) searching the WHOLE file body
-        // meant an unrelated phase's directive whose garbage bytes merely happened to MENTION this
-        // phaseId elsewhere (a "notes" field, a cross-reference) spuriously escalated, freezing a
-        // healthy, unrelated phase — the opposite failure mode, but still a real defect.
-        // Fixed by anchoring specifically to the phase_id KEY's own value, tolerant of truncation
-        // at any point within that value (never searching outside it): captures whatever raw text
-        // immediately follows `"phase_id":"` up to the next quote or end-of-file, then treats a
-        // match as plausible if EITHER string is a prefix of the other — handles a fully-intact
-        // value (exact match), a value truncated partway through being written (fragment is a
-        // strict prefix of phaseId), and correctly rejects a value for a genuinely different phase
-        // (neither is a prefix of the other) regardless of what else appears elsewhere in the file.
-        const phaseIdKeyMatch = raw.match(/"phase_id"\s*:\s*"([^"]*)/);
-        const rawFragment = phaseIdKeyMatch ? phaseIdKeyMatch[1] : null;
-        const plausiblyThisPhase = rawFragment !== null && rawFragment.length > 0 &&
-          (rawFragment === phaseId || phaseId.startsWith(rawFragment) || rawFragment.startsWith(phaseId));
+        // SECURITY (round 3 of this fix — two independent adversarial rounds each found a real
+        // defect in the previous attempt; see extractPhaseIdFragment's own comment for exactly
+        // what those were and how this version closes them). A match is plausible only if: the
+        // extracted value exactly equals phaseId (always valid, regardless of termination), OR
+        // the value was NOT terminated by a real closing quote (i.e. the file was truncated mid-
+        // write of its value) AND phaseId starts with that unterminated fragment — the only two
+        // shapes a genuine truncation of THIS phase's own directive can produce. A terminated
+        // value that merely happens to be a string-prefix (in either direction) of phaseId is a
+        // complete, well-formed value for a *different* phase and must never match — collapsing
+        // that distinction is exactly what let round 2's fix conflate two real, unrelated phases.
+        const fragment = extractPhaseIdFragment(raw);
+        const plausiblyThisPhase = !!fragment && fragment.value.length > 0 &&
+          (fragment.value === phaseId || (!fragment.terminated && phaseId.startsWith(fragment.value)));
         if (plausiblyThisPhase) {
           const escalated = new Error(`directive file ${f} appears to be phase ${phaseId}'s own directive but is not valid JSON: ${e.message}`);
           escalated.isDirectiveResolutionEscalation = true;
@@ -570,6 +606,15 @@ function evaluate(runDir, phaseId) {
   // real run here has worked — this is "at least one," not "every entry," specifically because a
   // verifier's evidence legitimately includes some main-tree-collected commands too (e.g.
   // confirming a file was read) alongside the worktree-collected ones.
+  //
+  // SECURITY: independent adversarial re-verification found the FIRST version of this check
+  // treated `verifier.evidence.length === 0` as vacuously satisfying it — an attacker could cite
+  // ALL evidence via engineer.evidence (which the earlier, general evidence_present gate already
+  // accepts on its own) and leave verifier.evidence empty, defeating this mitigation entirely with
+  // ZERO real git access to the candidate SHA — strictly worse than the disclosed "sophisticated
+  // attacker" limit above, since it requires no genuine checkout at all. Confirmed every real
+  // historical verifier receipt in this repo already cites at least one evidence entry (1 to 10
+  // across exp001-*, maint-001, pentest-001) before making non-empty a hard requirement here too.
   const verifierEvidenceIds = verifier.evidence || [];
   const verifierEvidenceShas = verifierEvidenceIds.map((id) => {
     try {
@@ -578,9 +623,12 @@ function evaluate(runDir, phaseId) {
       return null;
     }
   });
-  checks.verifier_evidence_bound_to_candidate_sha = verifierEvidenceIds.length === 0 || verifierEvidenceShas.includes(candidateSha);
+  checks.verifier_evidence_bound_to_candidate_sha = verifierEvidenceIds.length > 0 && verifierEvidenceShas.includes(candidateSha);
   if (!checks.verifier_evidence_bound_to_candidate_sha) {
-    return freeze(`no verifier-cited evidence was genuinely captured at candidate_sha (${candidateSha}) — every cited evidence bundle's own recorded git_sha disagrees (${[...new Set(verifierEvidenceShas)].join(', ') || 'none readable'}), suggesting the verifier's work was never actually performed against this candidate`, checks);
+    const reason = verifierEvidenceIds.length === 0
+      ? 'verifier-receipt.json cites no evidence at all — the verifier\'s own work must be independently evidenced, not merely inherited from the engineer\'s citations'
+      : `no verifier-cited evidence was genuinely captured at candidate_sha (${candidateSha}) — every cited evidence bundle's own recorded git_sha disagrees (${[...new Set(verifierEvidenceShas)].join(', ') || 'none readable'}), suggesting the verifier's work was never actually performed against this candidate`;
+    return freeze(reason, checks);
   }
 
   // ── Every required-gate check below (threat-model precondition, then the five optional

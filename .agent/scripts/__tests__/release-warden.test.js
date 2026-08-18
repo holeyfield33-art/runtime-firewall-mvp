@@ -497,5 +497,60 @@ check('at least one genuinely-bound verifier evidence entry is sufficient, even 
   assert.strictEqual(result.status, 'PASS', `one genuinely-bound entry should be sufficient, got ${result.status}: ${result.freeze_reason}`);
 });
 
+// ── Round 4: gaps found in round 3's own directive fail-closed heuristic (its SECOND rewrite) ────
+// (a third independent adversarial pass against commit 06f2a1c, after the round-3 commit).
+
+check('a corrupted directive for a DIFFERENT phase whose real ID is a string-prefix relation to the active phase does not spuriously match, in either direction', () => {
+  // Round 3's bidirectional prefix check (`rawFragment.startsWith(phaseId) || phaseId.startsWith(rawFragment)`)
+  // let a TERMINATED (complete, well-formed) value for a genuinely different phase match purely
+  // because one string happened to be a prefix of the other -- e.g. real phases "RWTEST-PFX" and
+  // "RWTEST-PFX-EXTRA" both legitimately exist; a corruption in EITHER one's own directive must
+  // never be attributed to the other.
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-PFX-EXTRA-directive.json');
+  // phase_id value is COMPLETE ("RWTEST-PFX-EXTRA", properly quote-terminated) -- only the
+  // trailing fields are corrupted, so this is unambiguously that phase's own real, intact ID.
+  fs.writeFileSync(directiveFile, '{"phase_id":"RWTEST-PFX-EXTRA","require_reliability_revi');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-PFX' });
+    const result = evaluate(runDir, 'RWTEST-PFX');
+    assert.strictEqual(result.status, 'PASS', `a different, unrelated phase's complete directive should never match via prefix relation, got ${result.status}: ${result.freeze_reason}`);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+check('a duplicate phase_id key does not let a stale earlier occurrence mask the real, later one', () => {
+  // Round 3's non-global regex only ever inspected the FIRST "phase_id" occurrence. Real
+  // JSON.parse (had the file been well-formed) always resolves duplicate keys to the LAST one --
+  // a stale key left behind by a botched copy/edit, or a crash mid-rewrite, must not hide the
+  // genuine, later value from this fallback heuristic either.
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-DUPKEY-directive.json');
+  fs.writeFileSync(directiveFile, '{"phase_id":"RWTEST-STALE","phase_id":"RWTEST-DUPKEY","require_reliability_review":true,,, broken json here!!!');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-DUPKEY' });
+    const res = runCli(runDir, 'RWTEST-DUPKEY');
+    assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE) -- the real, later phase_id key must not be masked by the stale first one, got ${res.status}. stdout:\n${res.stdout}`);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+check('an empty verifier.evidence array does not vacuously satisfy the candidate-sha-binding check', () => {
+  // Independent adversarial re-verification found the first version of this mitigation treated
+  // verifier.evidence.length === 0 as an automatic pass -- an attacker could cite ALL evidence via
+  // engineer.evidence (which the general evidence_present gate already accepts on its own) and
+  // leave verifier.evidence empty, defeating the mitigation with ZERO real git access to the
+  // candidate SHA at all -- strictly worse than the mitigation's own disclosed limit.
+  const runDir = makeValidRun();
+  writeReceipt(runDir, 'verifier-receipt.json', baseVerifierReceipt({ evidence: [] }));
+  // engineer still cites real, bound evidence -- the general evidence_present gate is satisfied,
+  // so this must fail specifically at the new verifier-evidence-binding check, not earlier.
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
+  assert.ok(/cites no evidence at all/.test(result.freeze_reason), result.freeze_reason);
+});
+
 console.log(`\n${passed} passed, ${failed} failed.`);
 if (failed > 0) process.exit(1);
