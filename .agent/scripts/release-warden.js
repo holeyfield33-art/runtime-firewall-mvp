@@ -135,6 +135,34 @@ function loadJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+// SECURITY: an evidence ID existing in evidence/index.json is not sufficient proof it was actually
+// produced for THIS run — the index is a flat array of ID strings, cross-referenced by every
+// receipt-evidence check in this file, but nothing previously opened the evidence bundle itself
+// (collect-evidence.js's own {id}.json record, which carries its own recorded phase_id/run_id) to
+// confirm those match the phase/run actually being evaluated. Evidence captured for a different
+// phase or run — a typo'd --cwd/runDir/phaseId, or an ID string copied from elsewhere — was
+// previously accepted as valid provenance without complaint. Every evidence-citation check in this
+// file now calls this after confirming index membership, never as a replacement for it (a missing
+// bundle file is itself reported, distinctly, from a bundle that exists but doesn't match).
+function verifyEvidenceBinding(runDir, phaseId, evidenceIds) {
+  const runId = path.basename(runDir);
+  const mismatched = [];
+  for (const id of evidenceIds) {
+    const bundlePath = path.join(runDir, 'evidence', `${id}.json`);
+    let bundle;
+    try {
+      bundle = JSON.parse(fs.readFileSync(bundlePath, 'utf8'));
+    } catch (e) {
+      mismatched.push(`${id} (evidence bundle file missing or unreadable: ${e.message})`);
+      continue;
+    }
+    if (bundle.run_id !== runId || bundle.phase_id !== phaseId) {
+      mismatched.push(`${id} (recorded for run_id=${bundle.run_id}, phase_id=${bundle.phase_id}, not this run's ${runId}/${phaseId})`);
+    }
+  }
+  return mismatched;
+}
+
 // Reused by the reliability-receipt gate below. Independent of the base_sha directive lookup
 // earlier in evaluate() (that one is scoped inside the base_sha/candidateSha guard) — this one
 // must run unconditionally, since require_reliability_review has to be checked even when base_sha
@@ -181,7 +209,7 @@ function loadDirectiveForPhase(phaseId) {
 // consolidating it here means every future receipt type gets that fix for free instead of risking
 // the same class of drift again. Pure: returns a descriptor, never calls freeze()/mutates `checks`
 // itself, so the caller (which owns those closures) decides what to do with the outcome.
-function evaluateOptionalVerdictReceipt({ runDir, candidateSha, evidenceIndex, filename, schemaName, required, roleLabel }) {
+function evaluateOptionalVerdictReceipt({ runDir, phaseId, candidateSha, evidenceIndex, filename, schemaName, required, roleLabel }) {
   const filePath = path.join(runDir, filename);
   const exists = fs.existsSync(filePath);
   if (required && !exists) {
@@ -213,6 +241,14 @@ function evaluateOptionalVerdictReceipt({ runDir, candidateSha, evidenceIndex, f
     return {
       outcome: 'freeze',
       reason: `${filename} cites evidence missing from evidence/index.json: ${missing.join(', ')}`,
+      info: { present: false, required },
+    };
+  }
+  const mismatchedEvidence = verifyEvidenceBinding(runDir, phaseId, cited);
+  if (mismatchedEvidence.length > 0) {
+    return {
+      outcome: 'freeze',
+      reason: `${filename} cites evidence not recorded for this phase/run: ${mismatchedEvidence.join('; ')}`,
       info: { present: false, required },
     };
   }
@@ -460,12 +496,17 @@ function evaluate(runDir, phaseId) {
   // It stays false here (not a free pass — false means "not auto-detected", not "verified clean").
   checks.registry_modified_prematurely = false;
 
-  // ── Required evidence present ───────────────────────────────────────────────────────────────
+  // ── Required evidence present, and actually bound to this phase/run ────────────────────────
   const citedEvidence = [...(engineer.evidence || []), ...(verifier.evidence || [])];
   const missingEvidence = citedEvidence.filter((id) => !evidenceIndex.includes(id));
   checks.evidence_present = missingEvidence.length === 0 && citedEvidence.length > 0;
   if (!checks.evidence_present) {
     return freeze(`cited evidence missing from evidence/index.json: ${missingEvidence.join(', ') || '(no evidence cited)'}`, checks);
+  }
+  const mismatchedEvidence = verifyEvidenceBinding(runDir, phaseId, citedEvidence);
+  checks.evidence_content_bound = mismatchedEvidence.length === 0;
+  if (!checks.evidence_content_bound) {
+    return freeze(`cited evidence not recorded for this phase/run: ${mismatchedEvidence.join('; ')}`, checks);
   }
 
   // ── Every required-gate check below (threat-model precondition, then the five optional
@@ -509,6 +550,10 @@ function evaluate(runDir, phaseId) {
     if (missingTmEvidence.length > 0) {
       return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks);
     }
+    const mismatchedTmEvidence = verifyEvidenceBinding(runDir, phaseId, tmEvidence);
+    if (mismatchedTmEvidence.length > 0) {
+      return freeze(`threat-model cites evidence not recorded for this phase/run: ${mismatchedTmEvidence.join('; ')}`, checks);
+    }
     if (threatModelRequired && threatModel.status !== 'COMPLETE') {
       return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks);
     }
@@ -527,6 +572,7 @@ function evaluate(runDir, phaseId) {
 
   const reliabilityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'reliability-receipt.json',
@@ -552,6 +598,7 @@ function evaluate(runDir, phaseId) {
 
   const qualityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'quality-receipt.json',
@@ -577,6 +624,7 @@ function evaluate(runDir, phaseId) {
 
   const testReviewResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'test-coverage-receipt.json',
@@ -603,6 +651,7 @@ function evaluate(runDir, phaseId) {
 
   const compatibilityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'compatibility-receipt.json',
@@ -634,6 +683,7 @@ function evaluate(runDir, phaseId) {
   // still contains a forbidden path is exactly the failure mode this check exists to catch.
   const releaseAuditResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'release-audit-receipt.json',
