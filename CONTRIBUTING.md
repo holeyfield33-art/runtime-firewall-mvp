@@ -6,9 +6,11 @@ Thank you for contributing. This document encodes the non-negotiable rules for t
 
 ### 1. Engine-file edits require a baseline regeneration in the same PR
 
-The seven self-hashed engine files are:
+The nine self-hashed engine files are:
 
 - `packages/fw-agent/index.js`
+- `packages/fw-agent/sync-worker.js`
+- `packages/fw-agent/src/aho-corasick.js`
 - `packages/fw-agent/src/detector.js`
 - `packages/fw-agent/src/behavior-tracker.js`
 - `packages/fw-agent/src/policy-watcher.js`
@@ -122,7 +124,7 @@ Before opening a PR, confirm that:
 1. `npm test` passes from `packages/fw-agent`.
 2. `npm run test:adversarial` passes from `packages/fw-agent`.
 3. `npm pack --dry-run` from `packages/fw-agent` shows exactly 13 files.
-4. If you touched any of the seven engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
+4. If you touched any of the nine engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
 
 ### CI is split by package Node version
 

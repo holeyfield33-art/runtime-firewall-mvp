@@ -18,7 +18,7 @@ or incident reports if available.
 ## Proposed approach
 
 How would you implement this? Note which files would change and whether it
-requires editing any of the 7 self-hashed engine files (if so, `.helios-baseline`
+requires editing any of the 9 self-hashed engine files (if so, `.helios-baseline`
 must be regenerated — see CONTRIBUTING.md).
 
 ## Alternatives considered
