@@ -1,0 +1,22 @@
+{
+  "phase_id": "QUALITY-001",
+  "title": "Code quality and test coverage review of the Team Config 1-4 tooling (PR #61)",
+  "target": "aletheia-firewall",
+  "objective": "release-warden.js grew by roughly 300 lines in PR #61 (five new opt-in receipt gates, a shared helper, a mechanical deny-list scan) with zero new automated tests -- every check performed on it so far has been a manual regression sweep against fixtures, run by hand, not committed as a test suite. This directive runs Team Configuration 3 (Code Quality Reviewer + Test Engineer) against that commit for real.",
+  "base_sha": "ceece572bf879bea3c621b654dc93a514dbb5b51",
+  "base_sha_note": "Direct parent of candidate_sha -- single-commit candidate.",
+  "scope": [
+    "commit 5974d06 only: .agent/scripts/release-warden.js and the new .agent/agents/*.md, .agent/contracts/*.schema.json files"
+  ],
+  "out_of_scope": [
+    "packages/fw-agent and packages/fw-control source -- unchanged by this commit"
+  ],
+  "success_criteria": [
+    "quality-receipt.json reviews exactly the fourteen dimensions against the real diff",
+    "test-coverage-receipt.json identifies whether release-warden.js's new logic has ANY automated test coverage at all, and if not, whether that gap is blocking",
+    "test engineer actually attempts the revert-and-rerun check against release-warden.js's new logic using something runnable, not just inspection"
+  ],
+  "require_quality_review": true,
+  "require_test_review": true,
+  "status": "NOT STARTED"
+}

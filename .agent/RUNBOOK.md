@@ -365,7 +365,126 @@ node .agent/scripts/model-runner.js <model> <prompt...>
 
 ---
 
-## 9. Worked example: `P2-01`, condensed
+## 9. Team presets — running Configs 1-4 yourself
+
+Beyond the core A1/A2/A3(/A4) loop, `.agent/agents/` now has a library of interchangeable
+reviewer roles, each writing its own optional receipt, gated by one shared function
+(`evaluateOptionalVerdictReceipt()` in `release-warden.js`) via a `require_*` flag in the
+directive. Nothing below needs new code — every "team" is just a directive that opts into a
+different combination of these flags, plus which role files you hand to which subagent.
+
+### 9.0 Quick reference
+
+| Team | Seats beyond A1/A3 | Directive flag(s) | Role files |
+|---|---|---|---|
+| 1 — Edge-Case/Failure-Hunter | A2 Failure Hunter + A2b Reliability Reviewer | `require_reliability_review: true` | `red-team-verifier.md`, `reliability-reviewer.md` |
+| 2 — Pentest | A1b Threat Modeler + A2p Pentester | `"track": "pentest"`, `require_threat_model: true` | `threat-modeler.md`, `pentester.md` |
+| 3 — Code Quality | A2c Quality Reviewer + A2t Test Engineer | `require_quality_review: true`, `require_test_review: true` | `quality-reviewer.md`, `test-engineer.md` |
+| 4 — Release | A2v Compatibility Reviewer + A2r Release Auditor | `"track": "release"`, `require_compatibility_review: true`, `require_release_audit: true` | `compatibility-reviewer.md`, `release-auditor.md` |
+
+A2 (Failure Hunter/Pentester) both write `verifier-receipt.json` — same file, `agent` field tells
+them apart. Every other seat writes its own uniquely-named receipt (`reliability-receipt.json`,
+`threat-model.json`, `quality-receipt.json`, `test-coverage-receipt.json`,
+`compatibility-receipt.json`, `release-audit-receipt.json`) — you can mix and match flags on one
+directive to run more than one team's reviewers against the same candidate in a single run
+directory (that's exactly what a "run all the teams" pass looks like — one directive per team
+sharing candidate/base SHAs, not one directive with every flag set, since A2's slot can only hold
+one role at a time).
+
+### 9.1 Mechanics common to every team
+
+```bash
+# 1. Directive: copy the closest existing example under directives/ and edit phase_id, base_sha
+#    (the candidate's real immediate parent for a single-commit candidate), scope, and the
+#    require_* flags for your team from the table above.
+
+# 2. Run directory + candidate checkpoint, from an isolated worktree (never the main tree):
+mkdir -p .agent/runs/<run-id>
+git worktree add /tmp/<wt-name> <candidate-sha>
+cd /tmp/<wt-name> && npm install && cd -
+
+# checkpoint.js's cwd comes from where you invoke it, not an argument -- cd into the worktree,
+# use an ABSOLUTE run-dir path so the checkpoint/evidence land in the main repo:
+( cd /tmp/<wt-name> && node "$(pwd -P)/../../.vscode/runtime-firewall-mvp/.agent/scripts/checkpoint.js" create /absolute/path/to/.agent/runs/<run-id> a1-candidate )
+# (simplest in practice: cd into the worktree yourself and run the two commands below with an
+#  absolute runDir path -- see any engineer-receipt.json in .agent/runs/ for the exact SHA fields
+#  a real checkpoint produces)
+
+# 3. Evidence + engineer-receipt.json (Seat 1) -- if there's no new code (reviewing something
+#    already committed, same as every run in this batch), write engineer-receipt.json by hand:
+#    changed_files: [], status: PASS, security_invariant explaining this is review-only, evidence
+#    citing a real `npm test` run captured via collect-evidence.js. Validate it:
+node .agent/scripts/validate-receipt.js engineer-receipt .agent/runs/<run-id>/engineer-receipt.json
+
+# 4. Hand each seat's role file + the directive + the run directory to an independent agent (a
+#    fresh Claude Code session, or the Agent tool if you're orchestrating from inside one) with
+#    explicit instructions to: read its role file in full, work in its OWN fresh worktree (see
+#    rules/sandbox-boundaries.md -- never the main tree), write its receipt via
+#    collect-evidence.js-backed evidence, and validate before reporting done. There's no
+#    non-agent way to "run" a reviewer seat -- the whole point is independent judgment, not a
+#    deterministic script. Only A3 is a plain command (step 5).
+
+# 5. The gate -- the only step that's ever just a command, never a role:
+node .agent/scripts/release-warden.js .agent/runs/<run-id> <PHASE_ID>
+echo "exit=$?"   # 0=PASS 1=BLOCK 2=FREEZE
+```
+
+### 9.2 Team 1 — Edge-Case/Failure-Hunter (general maintenance)
+
+Directive fields beyond the basics: `require_reliability_review: true`. No `track` field needed
+(this is the default track). See `directives/MAINT-001-graph-hardening-review.json` for a real
+example. Prompt both seats with the same candidate/base SHAs; they can run fully in parallel
+(neither depends on the other's output).
+
+### 9.3 Team 2 — Pentest
+
+Directive fields: `"track": "pentest"`, `require_threat_model: true`. **Sequential, not
+parallel**: A1b Threat Modeler must finish and write `threat-model.json` before A2p Pentester
+starts (the Pentester's role file requires reading it first). See
+`directives/PENTEST-001-esm-enforcement-boundary.json` for a real example, including the specific,
+repo-tailored governing question worth reusing: *"what execution path allows code to execute
+without passing through the intended enforcement boundary?"* Picking `candidate_sha` doesn't have
+to mean "the newest commit" — see `directives/PENTEST-002-graph-trust-boundary.json` for an
+example where the candidate is pinned to something safe specifically to avoid an unrelated
+mechanical check, while the directive's `scope`/`objective` text names the real subject under
+attack explicitly.
+
+### 9.4 Team 3 — Code Quality
+
+Directive fields: `require_quality_review: true`, `require_test_review: true`. Both seats can run
+in parallel. The Test Engineer's single most valuable output is `false_positive_tests_found` —
+don't skip its required "revert the behavior, confirm something actually catches it" check, that's
+the whole point of the seat.
+
+### 9.5 Team 4 — Release
+
+Directive fields: `"track": "release"`, `require_compatibility_review: true`,
+`require_release_audit: true`. Both seats can run in parallel. Give the Release Auditor a real
+`npm pack --dry-run --json` evidence entry from Seat 1 to cross-reference, but require it to run
+its own copy too (a receipt claiming to have audited a command it never ran itself defeats the
+point). Remember: `release-warden.js` mechanically re-scans `packaged_files` against
+`PACKAGE_DENY_PATTERNS` regardless of this role's own `status` — that check runs whenever
+`release-audit-receipt.json` exists, with or without the opt-in flag set.
+
+### 9.6 A candidate that touches `.agent/` itself has no team that can PASS it
+
+This is a hard design boundary, not a gap: `FORBIDDEN_PATH_PATTERNS` blocks any candidate whose
+`changed_files` includes `.agent/{agents,contracts,rules,scripts}/**`, and no team's opt-in flags
+change that check — reviewing the graph's own tooling will always mechanically FREEZE at that
+check, regardless of what any reviewer finds. That's deliberate (§6.3: the control plane can't
+certify changes to itself), and it's a legitimate thing to run anyway for the substantive review
+content, as long as you read the resulting FREEZE as "expected, not a verdict on the findings" —
+see `directives/MAINT-002-agent-tooling-review.json` for a directive that does exactly this on
+purpose. If you need a candidate whose gate outcome is actually meaningful (not a guaranteed
+FREEZE), point `candidate_sha` at something outside `.agent/` instead, the way
+`directives/PENTEST-002-graph-trust-boundary.json` and `RELEASE-001-fw-agent-package-audit.json`
+both do — the directive's `scope`/`objective` prose can still name `.agent/scripts/*.js` as the
+real subject under review even when `candidate_sha` points elsewhere, since those scripts aren't
+tied to any one commit the way product code is.
+
+---
+
+## 10. Worked example: `P2-01`, condensed
 
 Full detail lives in `.agent/runs/p2-01/` (gitignored — local only) and this repo's git history.
 Shape, for reference when running your own real directive:
