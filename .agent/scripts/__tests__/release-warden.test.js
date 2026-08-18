@@ -464,5 +464,38 @@ check('a directive whose UNRELATED content happens to mention another phase_id d
   }
 });
 
+// ── Partial checkpoint-forgery mitigation: verifier evidence must be genuinely bound to
+// candidate_sha for at least one cited entry (disclosed as a bar-raising mitigation, not a full
+// fix -- see the check's own comment in release-warden.js for the honest limit). ─────────────────
+
+check('verifier evidence whose recorded git_sha never matches candidate_sha FREEZEs (naive forgery)', () => {
+  const runDir = makeValidRun();
+  // Overwrite ev-1's git_sha to something that is NOT the real candidate_sha -- simulating
+  // evidence collected without ever actually being at the claimed candidate commit.
+  const evPath = path.join(runDir, 'evidence', 'ev-1.json');
+  const ev = JSON.parse(fs.readFileSync(evPath, 'utf8'));
+  ev.git_sha = '0000000000000000000000000000000000000f';
+  fs.writeFileSync(evPath, JSON.stringify(ev, null, 2));
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
+  assert.ok(/no verifier-cited evidence was genuinely captured at candidate_sha/.test(result.freeze_reason), result.freeze_reason);
+});
+
+check('at least one genuinely-bound verifier evidence entry is sufficient, even alongside a mismatched one', () => {
+  // Mirrors a real, legitimate pattern found in this repo's own history: a verifier's evidence
+  // legitimately includes some main-tree-collected commands (e.g. confirming a file was read)
+  // alongside worktree-collected ones -- only ONE genuinely-bound entry should be required, not
+  // unanimity, or this would false-positive on real, honest verifier work.
+  const runDir = makeValidRun();
+  writeEvidence(runDir, 'ev-2', { runId: path.basename(runDir) }); // genuinely bound (default git_sha = CANDIDATE_SHA)
+  const evPath = path.join(runDir, 'evidence', 'ev-1.json'); // ev-1 deliberately mismatched
+  const ev = JSON.parse(fs.readFileSync(evPath, 'utf8'));
+  ev.git_sha = '0000000000000000000000000000000000000f';
+  fs.writeFileSync(evPath, JSON.stringify(ev, null, 2));
+  writeReceipt(runDir, 'verifier-receipt.json', baseVerifierReceipt({ evidence: ['ev-1', 'ev-2'] }));
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'PASS', `one genuinely-bound entry should be sufficient, got ${result.status}: ${result.freeze_reason}`);
+});
+
 console.log(`\n${passed} passed, ${failed} failed.`);
 if (failed > 0) process.exit(1);

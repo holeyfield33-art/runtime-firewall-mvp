@@ -553,6 +553,36 @@ function evaluate(runDir, phaseId) {
     return freeze(`cited evidence not recorded for this phase/run: ${mismatchedEvidence.join('; ')}`, checks);
   }
 
+  // ── Partial mitigation for checkpoint/receipt forgery — disclosed as partial, not a fix ─────
+  // KNOWN LIMITATION, not fully closed by this check: checkpoints.json and every receipt in this
+  // run are self-reported files with no cryptographic or process-level binding to a real separate
+  // invocation of checkpoint.js/collect-evidence.js — a single actor with full filesystem write
+  // access can fabricate an internally-consistent set of all three from scratch. Closing that
+  // fully requires either genuine process separation (an orchestrator capturing checkpoints
+  // independently of either role) or signing, both out of scope here. What this DOES add: evidence
+  // bundles record `git_sha` from an actual `git rev-parse HEAD` run at real command-execution
+  // time (collect-evidence.js), not authored JSON — so requiring at least one verifier-cited
+  // evidence bundle to have been genuinely captured AT the claimed candidate_sha forces an
+  // attacker to have real git access to that exact commit (a `git checkout`/worktree away from
+  // trivial), not just JSON-authoring skill. Verified against every real historical run in this
+  // repo before being made a hard gate: red-team-verifier.md's own mandate ("verify the candidate
+  // SHA, not a working directory") means at least one genuinely-bound entry is already how every
+  // real run here has worked — this is "at least one," not "every entry," specifically because a
+  // verifier's evidence legitimately includes some main-tree-collected commands too (e.g.
+  // confirming a file was read) alongside the worktree-collected ones.
+  const verifierEvidenceIds = verifier.evidence || [];
+  const verifierEvidenceShas = verifierEvidenceIds.map((id) => {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(runDir, 'evidence', `${id}.json`), 'utf8')).git_sha;
+    } catch (e) {
+      return null;
+    }
+  });
+  checks.verifier_evidence_bound_to_candidate_sha = verifierEvidenceIds.length === 0 || verifierEvidenceShas.includes(candidateSha);
+  if (!checks.verifier_evidence_bound_to_candidate_sha) {
+    return freeze(`no verifier-cited evidence was genuinely captured at candidate_sha (${candidateSha}) — every cited evidence bundle's own recorded git_sha disagrees (${[...new Set(verifierEvidenceShas)].join(', ') || 'none readable'}), suggesting the verifier's work was never actually performed against this candidate`, checks);
+  }
+
   // ── Every required-gate check below (threat-model precondition, then the five optional
   // peer-reviewer verdicts) is evaluated BEFORE a2_pass/p0_regression/verifier_regressions_clean,
   // deliberately, for every one of them — not just threat-model. SECURITY: this used to be true
