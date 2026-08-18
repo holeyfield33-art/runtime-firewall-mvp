@@ -20,27 +20,19 @@ The nine self-hashed engine files are:
 
 Any edit to any of these files MUST be accompanied by a regenerated `.helios-baseline` committed in the same PR. If they diverge, the firewall will refuse to start.
 
-To regenerate the baseline, run this from `packages/fw-agent`:
+To regenerate the baseline, run this from the repo root:
 
 ```bash
-node -e "
-const crypto = require('crypto');
-const fs = require('fs');
-const files = [
-  'index.js',
-  'src/detector.js',
-  'src/behavior-tracker.js',
-  'src/policy-watcher.js',
-  'src/quarantine.js',
-  'src/audit-log.js',
-  'src/policy.js',
-];
-const hash = crypto.createHash('sha256');
-for (const f of files) hash.update(fs.readFileSync(f));
-fs.writeFileSync('.helios-baseline', hash.digest('hex') + '\n', 'utf8');
-console.log('Baseline written.');
-"
+npm run baseline        # writes packages/fw-agent/.helios-baseline
+npm run baseline:check  # verifies it matches the committed source
 ```
+
+`scripts/generate-baseline.js` is the single source of truth for the hashed
+file list and hashing method (UTF-8 with CRLF normalization). It is kept in
+lockstep with `verifySelfIntegrity()` in `packages/fw-agent/index.js` and the
+CI self-integrity step. Do not hand-roll a hashing snippet: reading raw bytes
+instead of UTF-8-normalized content, or an out-of-date file list, produces a
+baseline the firewall will reject at startup.
 
 If you are unsure whether your change touches an engine file, err on the side of regenerating.
 
