@@ -429,5 +429,40 @@ check('a corrupted directive for an UNRELATED phase does not freeze this phase (
   }
 });
 
+// ── Round 3: gaps found in round 2's own directive fail-closed heuristic ────────────────────────
+// (a further independent adversarial pass against commit bc756d5, after the round-2 commit).
+
+check('truncation MID-VALUE of phase_id itself (not just after it) still FREEZEs, not silently disables', () => {
+  // The round-2 heuristic only matched a fully-intact phaseId substring anywhere in the file --
+  // truncation partway through writing the value itself (the realistic crash point) evaded it.
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-MIDVALUE-directive.json');
+  // "RWTEST-MIDVALUE-TARGET" truncated to "RWTEST-MIDV" -- a strict prefix, mid-value.
+  fs.writeFileSync(directiveFile, '{"phase_id":"RWTEST-MIDV');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-MIDVALUE-TARGET' });
+    const res = runCli(runDir, 'RWTEST-MIDVALUE-TARGET');
+    assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE), got ${res.status}. stdout:\n${res.stdout}`);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+check('a directive whose UNRELATED content happens to mention another phase_id does not spuriously freeze that phase', () => {
+  // The round-2 heuristic searched the WHOLE file body for phaseId -- a directive for a genuinely
+  // different phase whose "notes"/cross-reference text happened to mention this phaseId elsewhere
+  // spuriously froze this healthy, unrelated phase (a DoS-direction defect, not a bypass).
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-MENTIONS-directive.json');
+  fs.writeFileSync(directiveFile, '{"phase_id":"SOME-OTHER-PHASE","notes":"see also RWTEST-MENTIONED-ELSEWHERE"}');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-MENTIONED-ELSEWHERE' });
+    const result = evaluate(runDir, 'RWTEST-MENTIONED-ELSEWHERE');
+    assert.strictEqual(result.status, 'PASS', `an unrelated directive merely mentioning this phaseId should not freeze it, got ${result.status}: ${result.freeze_reason}`);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
 console.log(`\n${passed} passed, ${failed} failed.`);
 if (failed > 0) process.exit(1);

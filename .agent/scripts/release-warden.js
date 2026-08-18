@@ -207,7 +207,27 @@ function loadDirectiveForPhase(phaseId) {
         } catch (e2) {
           continue;
         }
-        if (raw.includes(`"phase_id"`) && raw.includes(phaseId)) {
+        // SECURITY (round 2 of this fix, found by a further independent adversarial pass): the
+        // original raw.includes(phaseId) whole-file substring search had two real defects —
+        // (a) it required the FULL phaseId string to survive corruption, so truncation mid-value
+        // (e.g. `{"phase_id":"ADV2-PRO` when the target is "ADV2-PROOF-TRUNC-VALUE") silently
+        // failed to match, reproducing the original bypass for exactly the most realistic crash
+        // point (values are typically the last thing written); (b) searching the WHOLE file body
+        // meant an unrelated phase's directive whose garbage bytes merely happened to MENTION this
+        // phaseId elsewhere (a "notes" field, a cross-reference) spuriously escalated, freezing a
+        // healthy, unrelated phase — the opposite failure mode, but still a real defect.
+        // Fixed by anchoring specifically to the phase_id KEY's own value, tolerant of truncation
+        // at any point within that value (never searching outside it): captures whatever raw text
+        // immediately follows `"phase_id":"` up to the next quote or end-of-file, then treats a
+        // match as plausible if EITHER string is a prefix of the other — handles a fully-intact
+        // value (exact match), a value truncated partway through being written (fragment is a
+        // strict prefix of phaseId), and correctly rejects a value for a genuinely different phase
+        // (neither is a prefix of the other) regardless of what else appears elsewhere in the file.
+        const phaseIdKeyMatch = raw.match(/"phase_id"\s*:\s*"([^"]*)/);
+        const rawFragment = phaseIdKeyMatch ? phaseIdKeyMatch[1] : null;
+        const plausiblyThisPhase = rawFragment !== null && rawFragment.length > 0 &&
+          (rawFragment === phaseId || phaseId.startsWith(rawFragment) || rawFragment.startsWith(phaseId));
+        if (plausiblyThisPhase) {
           const escalated = new Error(`directive file ${f} appears to be phase ${phaseId}'s own directive but is not valid JSON: ${e.message}`);
           escalated.isDirectiveResolutionEscalation = true;
           throw escalated;
