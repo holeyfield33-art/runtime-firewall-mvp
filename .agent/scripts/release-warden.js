@@ -241,6 +241,15 @@ function evaluate(runDir, phaseId) {
   // Rework loops reuse the same run directory and accumulate checkpoints across iterations, so
   // only the MOST RECENT checkpoint per role matters — a stale checkpoint from an earlier,
   // superseded candidate must not be compared against the current receipts.
+  //
+  // SECURITY: checkpoints.json is the ONLY corroboration of candidate_sha that isn't self-reported
+  // by the very receipts being evaluated. It MUST be mandatory, not merely checked-if-present —
+  // a run with no checkpoints.json at all (or missing one of the three required labels) has zero
+  // independent confirmation that any verification actually happened against the claimed SHA, and
+  // must FREEZE. Demonstrated exploitable when this was optional: two fabricated receipts that
+  // merely agree with each other on a fake candidate_sha, with checkpoints.json entirely absent,
+  // reached PASS — candidate_sha_consistent degraded to bare self-report agreement, and
+  // candidate_sha_immutable_during_verification was vacuously true via `!verifyStart || !verifyEnd`.
   const checkpoints = readCheckpoints(runDir);
   const latestByPredicate = (pred) => {
     for (let i = checkpoints.length - 1; i >= 0; i--) {
@@ -251,17 +260,27 @@ function evaluate(runDir, phaseId) {
   const latestA1 = latestByPredicate((c) => c.label === 'a1-candidate' || c.label.startsWith('a1-rework-candidate'));
   const latestVerifyStart = latestByPredicate((c) => c.label === 'a2-verify-start');
   const latestVerifyEnd = latestByPredicate((c) => c.label === 'a2-verify-end');
-  const candidateChecks = [latestA1, latestVerifyStart, latestVerifyEnd].filter(Boolean);
-  const shas = new Set([engineer.candidate_sha, verifier.candidate_sha, ...candidateChecks.map((c) => c.sha)]);
+
+  const missingCheckpoints = [
+    !latestA1 && 'a1-candidate',
+    !latestVerifyStart && 'a2-verify-start',
+    !latestVerifyEnd && 'a2-verify-end',
+  ].filter(Boolean);
+  if (missingCheckpoints.length > 0) {
+    return freeze(
+      `checkpoints.json missing required checkpoint(s): ${missingCheckpoints.join(', ')} — candidate SHA has no independent corroboration`,
+      { checkpoints_present: false },
+    );
+  }
+  checks.checkpoints_present = true;
+
+  const shas = new Set([engineer.candidate_sha, verifier.candidate_sha, latestA1.sha, latestVerifyStart.sha, latestVerifyEnd.sha]);
   checks.candidate_sha_consistent = shas.size <= 1;
   if (!checks.candidate_sha_consistent) {
     return freeze(`candidate SHA mismatch across artifacts: ${[...shas].join(', ')}`, checks);
   }
 
-  const verifyStart = latestVerifyStart;
-  const verifyEnd = latestVerifyEnd;
-  checks.candidate_sha_immutable_during_verification =
-    !verifyStart || !verifyEnd || verifyStart.sha === verifyEnd.sha;
+  checks.candidate_sha_immutable_during_verification = latestVerifyStart.sha === latestVerifyEnd.sha;
   if (!checks.candidate_sha_immutable_during_verification) {
     return freeze('candidate SHA changed during verification', checks);
   }
