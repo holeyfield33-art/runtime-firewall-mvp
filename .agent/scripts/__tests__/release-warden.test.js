@@ -12,11 +12,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 
 const REPO_ROOT = path.join(__dirname, '..', '..', '..');
 process.chdir(REPO_ROOT); // evaluate()'s git calls run relative to process.cwd()
 
 const { evaluate } = require('../release-warden.js');
+const RELEASE_WARDEN_CLI = path.join(__dirname, '..', 'release-warden.js');
+
+// Some defects only manifest through the real CLI entry point (main() -> writeWardenReceipt()),
+// not through evaluate() called directly in-process -- found by independent adversarial
+// re-verification when a defect in writeWardenReceipt() itself (which re-reads receipts a second
+// time, outside evaluate()'s own protection) went undetected by every evaluate()-only test above.
+function runCli(runDir, phaseId) {
+  return spawnSync(process.execPath, [RELEASE_WARDEN_CLI, runDir, phaseId], { encoding: 'utf8', timeout: 30000 });
+}
 
 // A real commit and its real immediate parent, already used throughout this repo's own real runs
 // today -- P2-01's final candidate. Chosen specifically because candidate^..candidate's diff is
@@ -319,6 +329,101 @@ check('a release-audit receipt whose packaged_files contains a denied path FREEZ
     const result = evaluate(runDir, 'RWTEST-PKGDENY');
     assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
     assert.ok(/packaged_files contains forbidden path/.test(result.freeze_reason), result.freeze_reason);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+// ── Round 2: fixes made in response to independent adversarial re-verification ──────────────────
+// (attack-graph-again workflow, run against commit 52c63da). These specifically exercise the real
+// CLI where the first round's tests only exercised evaluate() in-process, since that's exactly how
+// the writeWardenReceipt() crash escaped the first round's coverage.
+
+check('malformed engineer-receipt.json crashes neither evaluate() NOR the real CLI (writeWardenReceipt regression)', () => {
+  const runDir = makeValidRun();
+  fs.writeFileSync(path.join(runDir, 'engineer-receipt.json'), '{not valid json, truncated');
+  const res = runCli(runDir, 'RWTEST');
+  assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE), got ${res.status} (signal ${res.signal}). stderr:\n${res.stderr}`);
+  assert.strictEqual(res.stderr, '', `expected no uncaught-exception stderr, got:\n${res.stderr}`);
+  assert.ok(fs.existsSync(path.join(runDir, 'warden-receipt.json')), 'warden-receipt.json was not written');
+  const receipt = JSON.parse(fs.readFileSync(path.join(runDir, 'warden-receipt.json'), 'utf8'));
+  assert.strictEqual(receipt.status, 'FREEZE');
+});
+
+check('malformed verifier-receipt.json crashes neither evaluate() NOR the real CLI (writeWardenReceipt regression)', () => {
+  const runDir = makeValidRun();
+  fs.writeFileSync(path.join(runDir, 'verifier-receipt.json'), '{not valid json, truncated');
+  const res = runCli(runDir, 'RWTEST');
+  assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE), got ${res.status}. stderr:\n${res.stderr}`);
+  assert.strictEqual(res.stderr, '', `expected no uncaught-exception stderr, got:\n${res.stderr}`);
+  assert.ok(fs.existsSync(path.join(runDir, 'warden-receipt.json')), 'warden-receipt.json was not written');
+});
+
+check('a required-but-missing reliability review FREEZEs with an HONEST required:true in the persisted receipt', () => {
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-HONESTFREEZE-directive.json');
+  fs.writeFileSync(directiveFile, JSON.stringify({ phase_id: 'RWTEST-HONESTFREEZE', require_reliability_review: true }));
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-HONESTFREEZE' });
+    const result = evaluate(runDir, 'RWTEST-HONESTFREEZE');
+    assert.strictEqual(result.status, 'FREEZE');
+    // Before the fix, writeWardenReceipt()'s documented default {present:false,required:false}
+    // silently overwrote this -- the freeze_reason said "required by directive" while the
+    // structured field lied and said required:false.
+    assert.strictEqual(result.reliability && result.reliability.required, true, `result.reliability.required lied: ${JSON.stringify(result.reliability)}`);
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+check('docs-receipt citing evidence from a different run is rejected, not silently accepted', () => {
+  const runDir = makeValidRun();
+  writeEvidence(runDir, 'docs-foreign-ev', { runId: 'some-other-run-entirely', phaseId: 'RWTEST' });
+  writeReceipt(runDir, 'docs-receipt.json', {
+    phase_id: 'RWTEST',
+    agent: 'docs-scribe',
+    status: 'DRAFTED',
+    candidate_sha: CANDIDATE_SHA,
+    warden_status_at_draft_time: 'PASS',
+    changed_files: ['README.md'],
+    changelog_entry: 'test',
+    source_receipts: { engineer_security_invariant: 'x', engineer_known_limitations: 'x', warden_sync_required: false },
+    evidence: ['docs-foreign-ev'],
+    timestamp: new Date(0).toISOString(),
+  });
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
+  assert.ok(/docs-receipt cites evidence/.test(result.freeze_reason), result.freeze_reason);
+});
+
+check('a malformed directive that plausibly belongs to the active phase FREEZEs instead of silently disabling its requirements', () => {
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-CORRUPT-directive.json');
+  // Deliberately corrupted but still contains its own phase_id as a literal string, the way a
+  // truncated-mid-write file realistically would.
+  fs.writeFileSync(directiveFile, '{"phase_id": "RWTEST-CORRUPT", "require_reliability_revi');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST-CORRUPT' });
+    // evaluate() itself may throw here (that's fine, main()'s catch-all handles it) -- what
+    // matters is the real CLI never silently proceeds to PASS with the corrupted directive's
+    // requirements simply vanishing.
+    const res = runCli(runDir, 'RWTEST-CORRUPT');
+    assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE) on a corrupted directive for the active phase, got ${res.status}. stdout:\n${res.stdout}`);
+    const receipt = JSON.parse(fs.readFileSync(path.join(runDir, 'warden-receipt.json'), 'utf8'));
+    assert.strictEqual(receipt.status, 'FREEZE');
+  } finally {
+    fs.unlinkSync(directiveFile);
+  }
+});
+
+check('a corrupted directive for an UNRELATED phase does not freeze this phase (no over-correction)', () => {
+  const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
+  const directiveFile = path.join(directivesDir, 'RWTEST-UNRELATED-CORRUPT-directive.json');
+  fs.writeFileSync(directiveFile, '{"phase_id": "SOME-COMPLETELY-DIFFERENT-PHASE", "require_rel');
+  try {
+    const runDir = makeValidRun({ phaseId: 'RWTEST' });
+    const result = evaluate(runDir, 'RWTEST');
+    assert.strictEqual(result.status, 'PASS', `an unrelated phase's corrupted directive should not affect this phase, got ${result.status}: ${result.freeze_reason}`);
   } finally {
     fs.unlinkSync(directiveFile);
   }

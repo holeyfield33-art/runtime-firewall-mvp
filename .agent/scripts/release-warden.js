@@ -185,17 +185,41 @@ function loadDirectiveForPhase(phaseId) {
     const directivesDir = path.join(__dirname, '..', 'directives');
     files = fs.readdirSync(directivesDir).filter((f) => f.endsWith('.json')).sort();
     for (const f of files) {
+      const filePath = path.join(directivesDir, f);
       let directive;
       try {
-        directive = loadJson(path.join(directivesDir, f));
+        directive = loadJson(filePath);
       } catch (e) {
-        continue; // malformed directive file — skip it, never let it crash directive resolution
+        // SECURITY: a directive file that fails to parse must not be silently treated as "no
+        // directive for this phase" when it plausibly WAS meant to be this phase's directive —
+        // found by independent adversarial re-verification: a corrupted directive for the active
+        // phase_id silently lost all its require_* enforcement and the run reached PASS with none
+        // of its required reviews performed (fail-open, not fail-closed). A cheap raw-text
+        // pre-check (this file can't be JSON.parse'd, so a full structural check isn't possible,
+        // but a corrupted-but-still-legible file plausibly still contains its own phase_id string
+        // literal) escalates to a thrown error — caught by main()'s catch-all, producing a FREEZE
+        // — instead of silently disabling enforcement. A genuinely unrelated file that happens to
+        // be corrupted (never mentions this phaseId anywhere in its raw bytes) is still skipped,
+        // exactly as before, so bit-rot in one phase's directive doesn't freeze every other phase.
+        let raw = '';
+        try {
+          raw = fs.readFileSync(filePath, 'utf8');
+        } catch (e2) {
+          continue;
+        }
+        if (raw.includes(`"phase_id"`) && raw.includes(phaseId)) {
+          const escalated = new Error(`directive file ${f} appears to be phase ${phaseId}'s own directive but is not valid JSON: ${e.message}`);
+          escalated.isDirectiveResolutionEscalation = true;
+          throw escalated;
+        }
+        continue;
       }
       if (directive && directive.phase_id === phaseId) return directive;
     }
     return null;
   } catch (e) {
-    return null;
+    if (e && e.isDirectiveResolutionEscalation) throw e; // intentional — see above, must reach main()'s catch-all as a FREEZE
+    return null; // genuine lookup failure (e.g. no directives/ dir at all) — no directive is a legitimate, non-fatal state
   }
 }
 
@@ -534,28 +558,28 @@ function evaluate(runDir, phaseId) {
   const threatModelExists = fs.existsSync(threatModelPath);
   let threatModelInfo = { present: false, required: threatModelRequired };
   if (threatModelRequired && !threatModelExists) {
-    return freeze('threat-model.json required by directive but missing', checks);
+    return freeze('threat-model.json required by directive but missing', checks, null, { threat_model: threatModelInfo });
   }
   if (threatModelExists) {
     const tmValid = validateReceipt(path.join(CONTRACTS_DIR, 'threat-model.schema.json'), threatModelPath);
     if (!tmValid.valid) {
-      return freeze('threat-model.json failed schema validation', checks, tmValid.errors.map((e) => `threat-model: ${e}`));
+      return freeze('threat-model.json failed schema validation', checks, tmValid.errors.map((e) => `threat-model: ${e}`), { threat_model: threatModelInfo });
     }
     const threatModel = loadJson(threatModelPath);
     if (threatModel.candidate_sha !== candidateSha) {
-      return freeze(`threat-model candidate_sha (${threatModel.candidate_sha}) does not match candidate_sha (${candidateSha})`, checks);
+      return freeze(`threat-model candidate_sha (${threatModel.candidate_sha}) does not match candidate_sha (${candidateSha})`, checks, null, { threat_model: threatModelInfo });
     }
     const tmEvidence = threatModel.evidence || [];
     const missingTmEvidence = tmEvidence.filter((id) => !evidenceIndex.includes(id));
     if (missingTmEvidence.length > 0) {
-      return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks);
+      return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks, null, { threat_model: threatModelInfo });
     }
     const mismatchedTmEvidence = verifyEvidenceBinding(runDir, phaseId, tmEvidence);
     if (mismatchedTmEvidence.length > 0) {
-      return freeze(`threat-model cites evidence not recorded for this phase/run: ${mismatchedTmEvidence.join('; ')}`, checks);
+      return freeze(`threat-model cites evidence not recorded for this phase/run: ${mismatchedTmEvidence.join('; ')}`, checks, null, { threat_model: threatModelInfo });
     }
     if (threatModelRequired && threatModel.status !== 'COMPLETE') {
-      return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks);
+      return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks, null, { threat_model: threatModelInfo });
     }
     threatModelInfo = { present: true, required: threatModelRequired, status: threatModel.status, attack_classes_identified: (threatModel.likely_attack_classes || []).length };
   }
@@ -581,7 +605,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'reliability-reviewer',
   });
   if (reliabilityResult.outcome === 'freeze') {
-    return freeze(reliabilityResult.reason, checks, reliabilityResult.extraReasons);
+    return freeze(reliabilityResult.reason, checks, reliabilityResult.extraReasons, { reliability: reliabilityResult.info, threat_model: threatModelInfo });
   }
   let reliabilityInfo = reliabilityResult.info;
   if (reliabilityResult.receipt) {
@@ -607,7 +631,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'quality-reviewer',
   });
   if (qualityResult.outcome === 'freeze') {
-    return freeze(qualityResult.reason, checks, qualityResult.extraReasons);
+    return freeze(qualityResult.reason, checks, qualityResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityResult.info });
   }
   let qualityInfo = qualityResult.info;
   if (qualityResult.receipt) {
@@ -633,7 +657,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'test-engineer',
   });
   if (testReviewResult.outcome === 'freeze') {
-    return freeze(testReviewResult.reason, checks, testReviewResult.extraReasons);
+    return freeze(testReviewResult.reason, checks, testReviewResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewResult.info });
   }
   let testReviewInfo = testReviewResult.info;
   if (testReviewResult.receipt) {
@@ -660,7 +684,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'compatibility-reviewer',
   });
   if (compatibilityResult.outcome === 'freeze') {
-    return freeze(compatibilityResult.reason, checks, compatibilityResult.extraReasons);
+    return freeze(compatibilityResult.reason, checks, compatibilityResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityResult.info });
   }
   let compatibilityInfo = compatibilityResult.info;
   if (compatibilityResult.receipt) {
@@ -692,7 +716,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'release-auditor',
   });
   if (releaseAuditResult.outcome === 'freeze') {
-    return freeze(releaseAuditResult.reason, checks, releaseAuditResult.extraReasons);
+    return freeze(releaseAuditResult.reason, checks, releaseAuditResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditResult.info });
   }
   let releaseAuditInfo = releaseAuditResult.info;
   if (releaseAuditResult.receipt) {
@@ -707,7 +731,7 @@ function evaluate(runDir, phaseId) {
     };
     checks.release_audit_receipt = releaseAuditInfo;
     if (deniedPackagedFiles.length > 0) {
-      return freeze(`release-audit packaged_files contains forbidden path(s): ${deniedPackagedFiles.join(', ')}`, checks);
+      return freeze(`release-audit packaged_files contains forbidden path(s): ${deniedPackagedFiles.join(', ')}`, checks, null, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo });
     }
   }
   checks.release_audit_receipt = releaseAuditInfo;
@@ -774,6 +798,20 @@ function evaluate(runDir, phaseId) {
     if (docsInvalidPaths.length > 0) {
       return freeze(`docs-scribe touched non-documentation path(s): ${docsInvalidPaths.join(', ')}`, checks);
     }
+    // SECURITY: docs-receipt.evidence was never checked at all -- not for evidence/index.json
+    // membership, and not via verifyEvidenceBinding() -- found by independent adversarial
+    // re-verification: a docs-receipt could cite fabricated or cross-run/cross-phase evidence and
+    // still reach PASS. docs-receipt.schema.json requires this field; it must be held to the same
+    // discipline as every other evidence-citing surface in this file.
+    const docsEvidence = docs.evidence || [];
+    const missingDocsEvidence = docsEvidence.filter((id) => !evidenceIndex.includes(id));
+    if (missingDocsEvidence.length > 0) {
+      return freeze(`docs-receipt cites evidence missing from evidence/index.json: ${missingDocsEvidence.join(', ')}`, checks);
+    }
+    const mismatchedDocsEvidence = verifyEvidenceBinding(runDir, phaseId, docsEvidence);
+    if (mismatchedDocsEvidence.length > 0) {
+      return freeze(`docs-receipt cites evidence not recorded for this phase/run: ${mismatchedDocsEvidence.join('; ')}`, checks);
+    }
     docsInfo = { present: true, status: docs.status, changed_files: docsChangedFiles };
   }
   checks.docs_receipt = docsInfo;
@@ -791,7 +829,15 @@ function evaluate(runDir, phaseId) {
     ...gateInfo,
   };
 
-  function freeze(reason, extraChecks, extraReasons) {
+  // SECURITY: extraTopLevel threads whatever gate-info objects (threat_model/reliability/
+  // quality/test_coverage/compatibility/release_audit) are already known at the call site into
+  // the persisted warden-receipt.json. Found by independent adversarial re-verification: every
+  // freeze() call for the six required-gate checks previously omitted these, so
+  // writeWardenReceipt()'s documented default `{present:false,required:false}` silently
+  // overwrote a truthfully-known `required:true` — the exact "misreports required-ness" symptom
+  // the gate-ordering fix was supposed to close, just recurring on the FREEZE path instead of an
+  // early BLOCK. Every required-gate freeze() call below now passes what's known so far.
+  function freeze(reason, extraChecks, extraReasons, extraTopLevel) {
     return {
       status: 'FREEZE',
       reasons: extraReasons || [reason],
@@ -799,13 +845,27 @@ function evaluate(runDir, phaseId) {
       freeze_reason: reason,
       sync_required: false,
       sync_reason: 'not evaluated — run frozen',
+      ...(extraTopLevel || {}),
     };
   }
 }
 
+// SECURITY: never throws. Found by independent adversarial re-verification: this function
+// re-reads engineer/verifier-receipt.json a SECOND time (evaluate() already read them once,
+// safely) via the unguarded loadJson(), called from main() OUTSIDE the try/catch that wraps
+// evaluate() -- so malformed JSON here reproduced the exact original crash (uncaught SyntaxError,
+// exit 1, no receipt written), just relocated from evaluate() to this redundant read.
+function safeLoadJsonOrNull(file) {
+  try {
+    return loadJson(file);
+  } catch (e) {
+    return null;
+  }
+}
+
 function writeWardenReceipt(runDir, phaseId, result) {
-  const engineer = loadJson(path.join(runDir, 'engineer-receipt.json'));
-  const verifier = loadJson(path.join(runDir, 'verifier-receipt.json'));
+  const engineer = safeLoadJsonOrNull(path.join(runDir, 'engineer-receipt.json'));
+  const verifier = safeLoadJsonOrNull(path.join(runDir, 'verifier-receipt.json'));
   const receipt = {
     phase_id: phaseId,
     agent: 'release-warden',
