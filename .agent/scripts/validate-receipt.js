@@ -61,9 +61,24 @@ function validate(schema, value, pointer, errors) {
   }
 }
 
+// SECURITY: never throws on malformed JSON. The previous version let JSON.parse's SyntaxError
+// propagate uncaught all the way through release-warden.js's evaluate()/main(), which crashed the
+// entire gate with no warden-receipt.json written at all and an exit code (1) that collided with
+// the script's own documented meaning for BLOCK rather than FREEZE. A partial/interrupted write of
+// any receipt this graph reads must fail closed with a recorded decision, not crash with none.
 function validateReceipt(schemaPath, receiptPath) {
-  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
-  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  let schema;
+  try {
+    schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  } catch (e) {
+    return { valid: false, errors: [`schema at ${schemaPath} is not valid JSON: ${e.message}`], receipt: null };
+  }
+  let receipt;
+  try {
+    receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  } catch (e) {
+    return { valid: false, errors: [`${receiptPath} is not valid JSON: ${e.message}`], receipt: null };
+  }
   const errors = [];
   validate(schema, receipt, '$', errors);
   return { valid: errors.length === 0, errors, receipt };

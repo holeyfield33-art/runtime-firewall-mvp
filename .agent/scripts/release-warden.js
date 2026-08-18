@@ -135,18 +135,91 @@ function loadJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+// SECURITY: an evidence ID existing in evidence/index.json is not sufficient proof it was actually
+// produced for THIS run — the index is a flat array of ID strings, cross-referenced by every
+// receipt-evidence check in this file, but nothing previously opened the evidence bundle itself
+// (collect-evidence.js's own {id}.json record, which carries its own recorded phase_id/run_id) to
+// confirm those match the phase/run actually being evaluated. Evidence captured for a different
+// phase or run — a typo'd --cwd/runDir/phaseId, or an ID string copied from elsewhere — was
+// previously accepted as valid provenance without complaint. Every evidence-citation check in this
+// file now calls this after confirming index membership, never as a replacement for it (a missing
+// bundle file is itself reported, distinctly, from a bundle that exists but doesn't match).
+function verifyEvidenceBinding(runDir, phaseId, evidenceIds) {
+  const runId = path.basename(runDir);
+  const mismatched = [];
+  for (const id of evidenceIds) {
+    const bundlePath = path.join(runDir, 'evidence', `${id}.json`);
+    let bundle;
+    try {
+      bundle = JSON.parse(fs.readFileSync(bundlePath, 'utf8'));
+    } catch (e) {
+      mismatched.push(`${id} (evidence bundle file missing or unreadable: ${e.message})`);
+      continue;
+    }
+    if (bundle.run_id !== runId || bundle.phase_id !== phaseId) {
+      mismatched.push(`${id} (recorded for run_id=${bundle.run_id}, phase_id=${bundle.phase_id}, not this run's ${runId}/${phaseId})`);
+    }
+  }
+  return mismatched;
+}
+
 // Reused by the reliability-receipt gate below. Independent of the base_sha directive lookup
 // earlier in evaluate() (that one is scoped inside the base_sha/candidateSha guard) — this one
 // must run unconditionally, since require_reliability_review has to be checked even when base_sha
 // is absent.
+//
+// SECURITY: resolves by each directive file's OWN `phase_id` field, matched EXACTLY — never by
+// filename. The previous implementation filtered filenames with `startsWith(phaseId)` and took
+// files[0] with no exact-match check and no disambiguation of multiple matches. Demonstrated
+// exploitable both directions: an unrelated directive whose filename happens to be a string-
+// prefix superset of the target phase_id could spuriously impose its own require_* flags on a
+// phase that never asked for them, or — depending on filesystem listing order, since readdirSync
+// order is not guaranteed sorted — silently absorb and skip a genuinely required review instead.
+// Directory listing is now sorted for determinism, and every file's parsed content is checked
+// against phaseId directly; a directive file that fails to parse is skipped (not fatal), not
+// forwarded as a match.
 function loadDirectiveForPhase(phaseId) {
   if (!phaseId) return null;
+  let files;
   try {
     const directivesDir = path.join(__dirname, '..', 'directives');
-    const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
-    return files.length > 0 ? loadJson(path.join(directivesDir, files[0])) : null;
-  } catch (e) {
+    files = fs.readdirSync(directivesDir).filter((f) => f.endsWith('.json')).sort();
+    for (const f of files) {
+      const filePath = path.join(directivesDir, f);
+      let directive;
+      try {
+        directive = loadJson(filePath);
+      } catch (e) {
+        // SECURITY: a directive file that fails to parse must not be silently treated as "no
+        // directive for this phase" when it plausibly WAS meant to be this phase's directive —
+        // found by independent adversarial re-verification: a corrupted directive for the active
+        // phase_id silently lost all its require_* enforcement and the run reached PASS with none
+        // of its required reviews performed (fail-open, not fail-closed). A cheap raw-text
+        // pre-check (this file can't be JSON.parse'd, so a full structural check isn't possible,
+        // but a corrupted-but-still-legible file plausibly still contains its own phase_id string
+        // literal) escalates to a thrown error — caught by main()'s catch-all, producing a FREEZE
+        // — instead of silently disabling enforcement. A genuinely unrelated file that happens to
+        // be corrupted (never mentions this phaseId anywhere in its raw bytes) is still skipped,
+        // exactly as before, so bit-rot in one phase's directive doesn't freeze every other phase.
+        let raw = '';
+        try {
+          raw = fs.readFileSync(filePath, 'utf8');
+        } catch (e2) {
+          continue;
+        }
+        if (raw.includes(`"phase_id"`) && raw.includes(phaseId)) {
+          const escalated = new Error(`directive file ${f} appears to be phase ${phaseId}'s own directive but is not valid JSON: ${e.message}`);
+          escalated.isDirectiveResolutionEscalation = true;
+          throw escalated;
+        }
+        continue;
+      }
+      if (directive && directive.phase_id === phaseId) return directive;
+    }
     return null;
+  } catch (e) {
+    if (e && e.isDirectiveResolutionEscalation) throw e; // intentional — see above, must reach main()'s catch-all as a FREEZE
+    return null; // genuine lookup failure (e.g. no directives/ dir at all) — no directive is a legitimate, non-fatal state
   }
 }
 
@@ -160,7 +233,7 @@ function loadDirectiveForPhase(phaseId) {
 // consolidating it here means every future receipt type gets that fix for free instead of risking
 // the same class of drift again. Pure: returns a descriptor, never calls freeze()/mutates `checks`
 // itself, so the caller (which owns those closures) decides what to do with the outcome.
-function evaluateOptionalVerdictReceipt({ runDir, candidateSha, evidenceIndex, filename, schemaName, required, roleLabel }) {
+function evaluateOptionalVerdictReceipt({ runDir, phaseId, candidateSha, evidenceIndex, filename, schemaName, required, roleLabel }) {
   const filePath = path.join(runDir, filename);
   const exists = fs.existsSync(filePath);
   if (required && !exists) {
@@ -195,6 +268,14 @@ function evaluateOptionalVerdictReceipt({ runDir, candidateSha, evidenceIndex, f
       info: { present: false, required },
     };
   }
+  const mismatchedEvidence = verifyEvidenceBinding(runDir, phaseId, cited);
+  if (mismatchedEvidence.length > 0) {
+    return {
+      outcome: 'freeze',
+      reason: `${filename} cites evidence not recorded for this phase/run: ${mismatchedEvidence.join('; ')}`,
+      info: { present: false, required },
+    };
+  }
   const info = { present: true, required, status: receipt.status };
   if (receipt.status !== 'PASS') {
     return { outcome: 'block', reason: `${roleLabel} reported ${receipt.status}`, info, receipt };
@@ -211,8 +292,22 @@ function evaluate(runDir, phaseId) {
   const verifierPath = path.join(runDir, 'verifier-receipt.json');
   const evidenceIndexPath = path.join(runDir, 'evidence', 'index.json');
 
-  const engineer = loadJson(engineerPath);
-  const verifier = loadJson(verifierPath);
+  // SECURITY: malformed JSON in either mandatory receipt must FREEZE with a specific reason, not
+  // crash. loadJson()'s own JSON.parse can still throw here (unlike validateReceipt(), which is
+  // now hardened below) — caught explicitly so the diagnosis stays precise instead of falling
+  // through to main()'s generic catch-all.
+  let engineer;
+  try {
+    engineer = loadJson(engineerPath);
+  } catch (e) {
+    return freeze(`engineer-receipt.json is not valid JSON: ${e.message}`, { engineer_receipt_present: true, engineer_receipt_valid: false });
+  }
+  let verifier;
+  try {
+    verifier = loadJson(verifierPath);
+  } catch (e) {
+    return freeze(`verifier-receipt.json is not valid JSON: ${e.message}`, { engineer_receipt_present: true, verifier_receipt_present: true, verifier_receipt_valid: false });
+  }
   const evidenceIndex = loadJson(evidenceIndexPath) || [];
 
   // ── Missing artifacts is always a FREEZE: no receipt, no verdict. ──────────────────────────
@@ -241,6 +336,15 @@ function evaluate(runDir, phaseId) {
   // Rework loops reuse the same run directory and accumulate checkpoints across iterations, so
   // only the MOST RECENT checkpoint per role matters — a stale checkpoint from an earlier,
   // superseded candidate must not be compared against the current receipts.
+  //
+  // SECURITY: checkpoints.json is the ONLY corroboration of candidate_sha that isn't self-reported
+  // by the very receipts being evaluated. It MUST be mandatory, not merely checked-if-present —
+  // a run with no checkpoints.json at all (or missing one of the three required labels) has zero
+  // independent confirmation that any verification actually happened against the claimed SHA, and
+  // must FREEZE. Demonstrated exploitable when this was optional: two fabricated receipts that
+  // merely agree with each other on a fake candidate_sha, with checkpoints.json entirely absent,
+  // reached PASS — candidate_sha_consistent degraded to bare self-report agreement, and
+  // candidate_sha_immutable_during_verification was vacuously true via `!verifyStart || !verifyEnd`.
   const checkpoints = readCheckpoints(runDir);
   const latestByPredicate = (pred) => {
     for (let i = checkpoints.length - 1; i >= 0; i--) {
@@ -251,17 +355,27 @@ function evaluate(runDir, phaseId) {
   const latestA1 = latestByPredicate((c) => c.label === 'a1-candidate' || c.label.startsWith('a1-rework-candidate'));
   const latestVerifyStart = latestByPredicate((c) => c.label === 'a2-verify-start');
   const latestVerifyEnd = latestByPredicate((c) => c.label === 'a2-verify-end');
-  const candidateChecks = [latestA1, latestVerifyStart, latestVerifyEnd].filter(Boolean);
-  const shas = new Set([engineer.candidate_sha, verifier.candidate_sha, ...candidateChecks.map((c) => c.sha)]);
+
+  const missingCheckpoints = [
+    !latestA1 && 'a1-candidate',
+    !latestVerifyStart && 'a2-verify-start',
+    !latestVerifyEnd && 'a2-verify-end',
+  ].filter(Boolean);
+  if (missingCheckpoints.length > 0) {
+    return freeze(
+      `checkpoints.json missing required checkpoint(s): ${missingCheckpoints.join(', ')} — candidate SHA has no independent corroboration`,
+      { checkpoints_present: false },
+    );
+  }
+  checks.checkpoints_present = true;
+
+  const shas = new Set([engineer.candidate_sha, verifier.candidate_sha, latestA1.sha, latestVerifyStart.sha, latestVerifyEnd.sha]);
   checks.candidate_sha_consistent = shas.size <= 1;
   if (!checks.candidate_sha_consistent) {
     return freeze(`candidate SHA mismatch across artifacts: ${[...shas].join(', ')}`, checks);
   }
 
-  const verifyStart = latestVerifyStart;
-  const verifyEnd = latestVerifyEnd;
-  checks.candidate_sha_immutable_during_verification =
-    !verifyStart || !verifyEnd || verifyStart.sha === verifyEnd.sha;
+  checks.candidate_sha_immutable_during_verification = latestVerifyStart.sha === latestVerifyEnd.sha;
   if (!checks.candidate_sha_immutable_during_verification) {
     return freeze('candidate SHA changed during verification', checks);
   }
@@ -306,18 +420,11 @@ function evaluate(runDir, phaseId) {
       return freeze(`base_sha (${baseSha}) is not a git ancestor of candidate_sha (${candidateSha})`, checks);
     }
 
-    const directiveMatch = (() => {
-      if (!phaseId) return null;
-      try {
-        const directivesDir = path.join(__dirname, '..', 'directives');
-        const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
-        return files.length > 0 ? path.join(directivesDir, files[0]) : null;
-      } catch (e) {
-        return null;
-      }
-    })();
-    if (directiveMatch) {
-      const directive = loadJson(directiveMatch);
+    // Consolidated onto loadDirectiveForPhase() — this used to be its own inline, separately-
+    // buggy filename-prefix lookup; now shares the single exact-phase_id-match resolver.
+    const directiveForBaseShaCheck = loadDirectiveForPhase(phaseId);
+    if (directiveForBaseShaCheck) {
+      const directive = directiveForBaseShaCheck;
       const directiveBaseSha = directive && directive.base_sha;
       if (directiveBaseSha && directiveBaseSha !== baseSha) {
         const note = (engineer.base_sha_note || '').trim();
@@ -413,87 +520,83 @@ function evaluate(runDir, phaseId) {
   // It stays false here (not a free pass — false means "not auto-detected", not "verified clean").
   checks.registry_modified_prematurely = false;
 
-  // ── Required evidence present ───────────────────────────────────────────────────────────────
+  // ── Required evidence present, and actually bound to this phase/run ────────────────────────
   const citedEvidence = [...(engineer.evidence || []), ...(verifier.evidence || [])];
   const missingEvidence = citedEvidence.filter((id) => !evidenceIndex.includes(id));
   checks.evidence_present = missingEvidence.length === 0 && citedEvidence.length > 0;
   if (!checks.evidence_present) {
     return freeze(`cited evidence missing from evidence/index.json: ${missingEvidence.join(', ') || '(no evidence cited)'}`, checks);
   }
+  const mismatchedEvidence = verifyEvidenceBinding(runDir, phaseId, citedEvidence);
+  checks.evidence_content_bound = mismatchedEvidence.length === 0;
+  if (!checks.evidence_content_bound) {
+    return freeze(`cited evidence not recorded for this phase/run: ${mismatchedEvidence.join('; ')}`, checks);
+  }
 
-  // ── Threat Modeler (Agent 1b) — opt-in per directive (require_threat_model: true), same
-  // backward-compatible construction as the reliability-receipt gate below: a directive that
-  // predates this field is unaffected. Unlike reliability/verifier receipts this one has no
-  // PASS/FAIL verdict to BLOCK on — it is a recon precondition, not a judgment — so the only two
-  // outcomes are "present, COMPLETE, evidence checks out" (fine) or FREEZE (missing, invalid,
-  // wrong candidate, missing evidence, or explicitly INCOMPLETE — attacking off an admittedly
-  // incomplete map is exactly the discipline this gate exists to prevent). Evaluated BEFORE the
-  // a2_pass check below, deliberately: whether the pentester's attack PASSed or FAILed, a required
-  // threat model that's missing/invalid/incomplete is a process failure that must surface either
-  // way, not something an early BLOCK return on a2_pass can silently skip past.
-  const threatModelDirective = loadDirectiveForPhase(phaseId);
+  // ── Every required-gate check below (threat-model precondition, then the five optional
+  // peer-reviewer verdicts) is evaluated BEFORE a2_pass/p0_regression/verifier_regressions_clean,
+  // deliberately, for every one of them — not just threat-model. SECURITY: this used to be true
+  // only for threat-model; the five verdict gates further down sat AFTER the a2_pass early-return,
+  // so whenever the verifier already failed (or a P0/regression check fired), a required-but-
+  // missing reliability/quality/test/compatibility/release-audit receipt was never checked at all,
+  // and the persisted warden-receipt.json then falsely reported it as required:false — a receipt
+  // reader had no way to tell "not required" from "required but never evaluated." Demonstrated via
+  // a constructed run: require_reliability_review:true + verifier.status=FAIL produced BLOCK
+  // without ever checking reliability-receipt.json's existence. One directive load now serves all
+  // six checks (was loaded separately, redundantly, for threat-model and for the verdict gates).
+  const directiveForGates = loadDirectiveForPhase(phaseId);
+
+  // Threat Modeler (Agent 1b) — opt-in per directive (require_threat_model: true). Unlike
+  // reliability/verifier receipts this one has no PASS/FAIL verdict to BLOCK on — it is a recon
+  // precondition, not a judgment — so the only two outcomes are "present, COMPLETE, evidence
+  // checks out" (fine) or FREEZE (missing, invalid, wrong candidate, missing evidence, or
+  // explicitly INCOMPLETE — attacking off an admittedly incomplete map is exactly the discipline
+  // this gate exists to prevent).
+  const threatModelDirective = directiveForGates;
   const threatModelRequired = !!(threatModelDirective && threatModelDirective.require_threat_model);
   const threatModelPath = path.join(runDir, 'threat-model.json');
   const threatModelExists = fs.existsSync(threatModelPath);
   let threatModelInfo = { present: false, required: threatModelRequired };
   if (threatModelRequired && !threatModelExists) {
-    return freeze('threat-model.json required by directive but missing', checks);
+    return freeze('threat-model.json required by directive but missing', checks, null, { threat_model: threatModelInfo });
   }
   if (threatModelExists) {
     const tmValid = validateReceipt(path.join(CONTRACTS_DIR, 'threat-model.schema.json'), threatModelPath);
     if (!tmValid.valid) {
-      return freeze('threat-model.json failed schema validation', checks, tmValid.errors.map((e) => `threat-model: ${e}`));
+      return freeze('threat-model.json failed schema validation', checks, tmValid.errors.map((e) => `threat-model: ${e}`), { threat_model: threatModelInfo });
     }
     const threatModel = loadJson(threatModelPath);
     if (threatModel.candidate_sha !== candidateSha) {
-      return freeze(`threat-model candidate_sha (${threatModel.candidate_sha}) does not match candidate_sha (${candidateSha})`, checks);
+      return freeze(`threat-model candidate_sha (${threatModel.candidate_sha}) does not match candidate_sha (${candidateSha})`, checks, null, { threat_model: threatModelInfo });
     }
     const tmEvidence = threatModel.evidence || [];
     const missingTmEvidence = tmEvidence.filter((id) => !evidenceIndex.includes(id));
     if (missingTmEvidence.length > 0) {
-      return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks);
+      return freeze(`threat-model cites evidence missing from evidence/index.json: ${missingTmEvidence.join(', ')}`, checks, null, { threat_model: threatModelInfo });
+    }
+    const mismatchedTmEvidence = verifyEvidenceBinding(runDir, phaseId, tmEvidence);
+    if (mismatchedTmEvidence.length > 0) {
+      return freeze(`threat-model cites evidence not recorded for this phase/run: ${mismatchedTmEvidence.join('; ')}`, checks, null, { threat_model: threatModelInfo });
     }
     if (threatModelRequired && threatModel.status !== 'COMPLETE') {
-      return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks);
+      return freeze(`threat-model.status is "${threatModel.status}" (not COMPLETE) but this directive requires a completed threat model before the pentester proceeds`, checks, null, { threat_model: threatModelInfo });
     }
     threatModelInfo = { present: true, required: threatModelRequired, status: threatModel.status, attack_classes_identified: (threatModel.likely_attack_classes || []).length };
   }
   checks.threat_model = threatModelInfo;
 
-  // ── A2 verdict is authoritative and cannot be overridden ────────────────────────────────────
-  checks.a2_pass = verifier.status === 'PASS';
-  if (engineer.status !== 'PASS') {
-    reasons.push('engineer receipt status is not PASS');
-  }
-  if (!checks.a2_pass) {
-    return { status: 'BLOCK', reasons: [...reasons, `${verifier.agent || 'verifier'} reported FAIL`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── P0 regression: engineer's own recorded test runs must all be exit 0 ─────────────────────
-  const failingTests = (engineer.tests_run || []).filter((t) => t.exit_code !== 0);
-  checks.p0_regression = failingTests.length > 0;
-  if (checks.p0_regression) {
-    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── Regressions flagged explicitly by the verifier ──────────────────────────────────────────
-  const verifierRegressions = (verifier.regressions || []).filter((r) => r && r.status && r.status !== 'OK' && r.status !== 'PASS');
-  checks.verifier_regressions_clean = verifierRegressions.length === 0;
-  if (!checks.verifier_regressions_clean) {
-    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── Optional peer-reviewer verdict receipts (Reliability, Code Quality, Test Engineer) ────────
-  // Each is opt-in per directive (require_reliability_review / require_quality_review /
-  // require_test_review), backward compatible by construction: a directive predating a given flag
-  // behaves exactly as before that receipt type existed. If present even without opting in, it is
-  // still validated and honored — a stricter run than required is never penalized, only a
-  // required-but-missing one is. All three share evaluateOptionalVerdictReceipt() (see its comment
-  // for why this is one function instead of three copy-pasted blocks).
-  const directiveForVerdicts = loadDirectiveForPhase(phaseId);
+  // ── Optional peer-reviewer verdict receipts (Reliability, Code Quality, Test Engineer,
+  // Compatibility, Release Audit) — evaluated here, before a2_pass/p0_regression/regressions
+  // below, for the same reason threat-model is: opt-in per directive, backward compatible by
+  // construction (a directive predating a given flag behaves exactly as before that receipt type
+  // existed), and if present even without opting in, still validated and honored. All five share
+  // evaluateOptionalVerdictReceipt() (see its comment for why this is one function instead of five
+  // copy-pasted blocks).
+  const directiveForVerdicts = directiveForGates;
 
   const reliabilityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'reliability-receipt.json',
@@ -502,7 +605,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'reliability-reviewer',
   });
   if (reliabilityResult.outcome === 'freeze') {
-    return freeze(reliabilityResult.reason, checks, reliabilityResult.extraReasons);
+    return freeze(reliabilityResult.reason, checks, reliabilityResult.extraReasons, { reliability: reliabilityResult.info, threat_model: threatModelInfo });
   }
   let reliabilityInfo = reliabilityResult.info;
   if (reliabilityResult.receipt) {
@@ -519,6 +622,7 @@ function evaluate(runDir, phaseId) {
 
   const qualityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'quality-receipt.json',
@@ -527,7 +631,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'quality-reviewer',
   });
   if (qualityResult.outcome === 'freeze') {
-    return freeze(qualityResult.reason, checks, qualityResult.extraReasons);
+    return freeze(qualityResult.reason, checks, qualityResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityResult.info });
   }
   let qualityInfo = qualityResult.info;
   if (qualityResult.receipt) {
@@ -544,6 +648,7 @@ function evaluate(runDir, phaseId) {
 
   const testReviewResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'test-coverage-receipt.json',
@@ -552,7 +657,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'test-engineer',
   });
   if (testReviewResult.outcome === 'freeze') {
-    return freeze(testReviewResult.reason, checks, testReviewResult.extraReasons);
+    return freeze(testReviewResult.reason, checks, testReviewResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewResult.info });
   }
   let testReviewInfo = testReviewResult.info;
   if (testReviewResult.receipt) {
@@ -570,6 +675,7 @@ function evaluate(runDir, phaseId) {
 
   const compatibilityResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'compatibility-receipt.json',
@@ -578,7 +684,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'compatibility-reviewer',
   });
   if (compatibilityResult.outcome === 'freeze') {
-    return freeze(compatibilityResult.reason, checks, compatibilityResult.extraReasons);
+    return freeze(compatibilityResult.reason, checks, compatibilityResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityResult.info });
   }
   let compatibilityInfo = compatibilityResult.info;
   if (compatibilityResult.receipt) {
@@ -601,6 +707,7 @@ function evaluate(runDir, phaseId) {
   // still contains a forbidden path is exactly the failure mode this check exists to catch.
   const releaseAuditResult = evaluateOptionalVerdictReceipt({
     runDir,
+    phaseId,
     candidateSha,
     evidenceIndex,
     filename: 'release-audit-receipt.json',
@@ -609,7 +716,7 @@ function evaluate(runDir, phaseId) {
     roleLabel: 'release-auditor',
   });
   if (releaseAuditResult.outcome === 'freeze') {
-    return freeze(releaseAuditResult.reason, checks, releaseAuditResult.extraReasons);
+    return freeze(releaseAuditResult.reason, checks, releaseAuditResult.extraReasons, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditResult.info });
   }
   let releaseAuditInfo = releaseAuditResult.info;
   if (releaseAuditResult.receipt) {
@@ -624,12 +731,47 @@ function evaluate(runDir, phaseId) {
     };
     checks.release_audit_receipt = releaseAuditInfo;
     if (deniedPackagedFiles.length > 0) {
-      return freeze(`release-audit packaged_files contains forbidden path(s): ${deniedPackagedFiles.join(', ')}`, checks);
+      return freeze(`release-audit packaged_files contains forbidden path(s): ${deniedPackagedFiles.join(', ')}`, checks, null, { reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo });
     }
   }
   checks.release_audit_receipt = releaseAuditInfo;
   if (releaseAuditResult.outcome === 'block') {
     return { status: 'BLOCK', reasons: [...reasons, releaseAuditResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo };
+  }
+
+  // All optional-gate accumulator fields (threat_model/reliability/quality/test_coverage/
+  // compatibility/release_audit) are fully and honestly computed by this point, regardless of
+  // what the checks below find — the property the gate-ordering fix above exists to guarantee.
+  const gateInfo = { threat_model: threatModelInfo, reliability: reliabilityInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo };
+
+  // ── Engineer's own status must actually gate the verdict, not just get noted ─────────────────
+  // Previously pushed onto `reasons` but never checked — a receipt with status !== 'PASS' but
+  // otherwise-clean everything-else still fell through to an overall PASS at the bottom of this
+  // function, with an unused, unacted-on reason sitting in the output. Found while moving this
+  // section; fixed alongside it since it's the same theme (a real signal must actually gate the
+  // outcome, not just get silently recorded).
+  if (engineer.status !== 'PASS') {
+    return { status: 'BLOCK', reasons: [...reasons, 'engineer receipt status is not PASS'], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── A2 verdict is authoritative and cannot be overridden ────────────────────────────────────
+  checks.a2_pass = verifier.status === 'PASS';
+  if (!checks.a2_pass) {
+    return { status: 'BLOCK', reasons: [...reasons, `${verifier.agent || 'verifier'} reported FAIL`], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── P0 regression: engineer's own recorded test runs must all be exit 0 ─────────────────────
+  const failingTests = (engineer.tests_run || []).filter((t) => t.exit_code !== 0);
+  checks.p0_regression = failingTests.length > 0;
+  if (checks.p0_regression) {
+    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── Regressions flagged explicitly by the verifier ──────────────────────────────────────────
+  const verifierRegressions = (verifier.regressions || []).filter((r) => r && r.status && r.status !== 'OK' && r.status !== 'PASS');
+  checks.verifier_regressions_clean = verifierRegressions.length === 0;
+  if (!checks.verifier_regressions_clean) {
+    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null, ...gateInfo };
   }
 
   // ── Sync gate (deterministic, not model-decided) ────────────────────────────────────────────
@@ -656,6 +798,20 @@ function evaluate(runDir, phaseId) {
     if (docsInvalidPaths.length > 0) {
       return freeze(`docs-scribe touched non-documentation path(s): ${docsInvalidPaths.join(', ')}`, checks);
     }
+    // SECURITY: docs-receipt.evidence was never checked at all -- not for evidence/index.json
+    // membership, and not via verifyEvidenceBinding() -- found by independent adversarial
+    // re-verification: a docs-receipt could cite fabricated or cross-run/cross-phase evidence and
+    // still reach PASS. docs-receipt.schema.json requires this field; it must be held to the same
+    // discipline as every other evidence-citing surface in this file.
+    const docsEvidence = docs.evidence || [];
+    const missingDocsEvidence = docsEvidence.filter((id) => !evidenceIndex.includes(id));
+    if (missingDocsEvidence.length > 0) {
+      return freeze(`docs-receipt cites evidence missing from evidence/index.json: ${missingDocsEvidence.join(', ')}`, checks);
+    }
+    const mismatchedDocsEvidence = verifyEvidenceBinding(runDir, phaseId, docsEvidence);
+    if (mismatchedDocsEvidence.length > 0) {
+      return freeze(`docs-receipt cites evidence not recorded for this phase/run: ${mismatchedDocsEvidence.join('; ')}`, checks);
+    }
     docsInfo = { present: true, status: docs.status, changed_files: docsChangedFiles };
   }
   checks.docs_receipt = docsInfo;
@@ -670,15 +826,18 @@ function evaluate(runDir, phaseId) {
       ? `changed_files touched detector-relevant source: ${syncFiles.join(', ')}`
       : 'no detector-relevant source files changed',
     docs: docsInfo,
-    reliability: reliabilityInfo,
-    threat_model: threatModelInfo,
-    quality: qualityInfo,
-    test_coverage: testReviewInfo,
-    compatibility: compatibilityInfo,
-    release_audit: releaseAuditInfo,
+    ...gateInfo,
   };
 
-  function freeze(reason, extraChecks, extraReasons) {
+  // SECURITY: extraTopLevel threads whatever gate-info objects (threat_model/reliability/
+  // quality/test_coverage/compatibility/release_audit) are already known at the call site into
+  // the persisted warden-receipt.json. Found by independent adversarial re-verification: every
+  // freeze() call for the six required-gate checks previously omitted these, so
+  // writeWardenReceipt()'s documented default `{present:false,required:false}` silently
+  // overwrote a truthfully-known `required:true` — the exact "misreports required-ness" symptom
+  // the gate-ordering fix was supposed to close, just recurring on the FREEZE path instead of an
+  // early BLOCK. Every required-gate freeze() call below now passes what's known so far.
+  function freeze(reason, extraChecks, extraReasons, extraTopLevel) {
     return {
       status: 'FREEZE',
       reasons: extraReasons || [reason],
@@ -686,13 +845,27 @@ function evaluate(runDir, phaseId) {
       freeze_reason: reason,
       sync_required: false,
       sync_reason: 'not evaluated — run frozen',
+      ...(extraTopLevel || {}),
     };
   }
 }
 
+// SECURITY: never throws. Found by independent adversarial re-verification: this function
+// re-reads engineer/verifier-receipt.json a SECOND time (evaluate() already read them once,
+// safely) via the unguarded loadJson(), called from main() OUTSIDE the try/catch that wraps
+// evaluate() -- so malformed JSON here reproduced the exact original crash (uncaught SyntaxError,
+// exit 1, no receipt written), just relocated from evaluate() to this redundant read.
+function safeLoadJsonOrNull(file) {
+  try {
+    return loadJson(file);
+  } catch (e) {
+    return null;
+  }
+}
+
 function writeWardenReceipt(runDir, phaseId, result) {
-  const engineer = loadJson(path.join(runDir, 'engineer-receipt.json'));
-  const verifier = loadJson(path.join(runDir, 'verifier-receipt.json'));
+  const engineer = safeLoadJsonOrNull(path.join(runDir, 'engineer-receipt.json'));
+  const verifier = safeLoadJsonOrNull(path.join(runDir, 'verifier-receipt.json'));
   const receipt = {
     phase_id: phaseId,
     agent: 'release-warden',
@@ -723,7 +896,25 @@ function main() {
     console.error('Usage: release-warden.js <runDir> [phaseId]');
     process.exit(2);
   }
-  const result = evaluate(runDir, phaseId);
+  // SECURITY: defense-in-depth backstop. Every crash site found in practice (malformed JSON in
+  // any of six now-hardened call sites, and any other unexpected input shape) is now handled with
+  // a specific reason closer to its source, but this catch-all guarantees the property holds for
+  // ANY cause, known or not: evaluate() must never crash the process with no warden-receipt.json
+  // written and no recorded decision. Fail closed, always with a receipt, always FREEZE (exit 2),
+  // never colliding with BLOCK's exit code the way a bare uncaught exception (exit 1) used to.
+  let result;
+  try {
+    result = evaluate(runDir, phaseId);
+  } catch (e) {
+    result = {
+      status: 'FREEZE',
+      reasons: [`release-warden.js crashed evaluating this run: ${e.message}`],
+      checks: {},
+      freeze_reason: `unhandled exception during evaluation: ${e.message}`,
+      sync_required: false,
+      sync_reason: 'not evaluated — run frozen',
+    };
+  }
   const receipt = writeWardenReceipt(runDir, phaseId || 'UNKNOWN', result);
   console.log(JSON.stringify(receipt, null, 2));
 

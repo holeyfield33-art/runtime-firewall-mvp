@@ -1,0 +1,23 @@
+{
+  "phase_id": "MAINT-002",
+  "title": "Edge-case/reliability review of the Team Config 1-4 tooling itself (PR #61)",
+  "target": "aletheia-firewall",
+  "objective": "PR #61 added five new opt-in reviewer roles, a shared gating helper, and a new deterministic mechanical check (PACKAGE_DENY_PATTERNS) to release-warden.js -- the single most security-relevant script in this repo's own tooling -- and merged to main without ever being independently reviewed by the graph it extends. This directive runs Team Configuration 1 (Failure Hunter + Reliability Reviewer) against that commit for real.",
+  "base_sha": "ceece572bf879bea3c621b654dc93a514dbb5b51",
+  "base_sha_note": "Direct parent of candidate_sha -- single-commit candidate, matching the one-commit-per-candidate convention.",
+  "scope": [
+    "commit 5974d06 only: .agent/agents/*, .agent/contracts/*, .agent/rules/*, .agent/scripts/release-warden.js, .agent/README.md, .agent/directives/MAINT-001-*, .agent/directives/PENTEST-001-*"
+  ],
+  "out_of_scope": [
+    "packages/fw-agent and packages/fw-control source -- unchanged by this commit",
+    "re-reviewing MAINT-001/PENTEST-001's own findings about the firewall code -- this directive is about the review tooling itself, not what it already found"
+  ],
+  "success_criteria": [
+    "engineer receipt honestly documents this is a review-only pass of already-committed tooling",
+    "Failure Hunter systematically probes release-warden.js's new logic (evaluateOptionalVerdictReceipt, PACKAGE_DENY_PATTERNS, threat-model precondition ordering) against the general edge-case checklist",
+    "Reliability Reviewer independently reviews the nine dimensions against the same commit",
+    "no P0 regression"
+  ],
+  "require_reliability_review": true,
+  "status": "NOT STARTED"
+}

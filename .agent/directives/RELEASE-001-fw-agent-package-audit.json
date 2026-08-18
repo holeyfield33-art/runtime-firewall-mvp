@@ -1,0 +1,24 @@
+{
+  "phase_id": "RELEASE-001",
+  "title": "Compatibility and package audit of packages/fw-agent as it stands today",
+  "target": "aletheia-firewall",
+  "track": "release",
+  "objective": "packages/fw-agent has never been through this graph's release track (Team Configuration 4, new in PR #61). This directive runs it for real against the package as it currently stands on main -- not a hypothetical future release, an audit of what would actually be published if `npm publish` were run right now from packages/fw-agent.",
+  "base_sha": "079322774e92a7d1d5aaf12128712afa130aa63b",
+  "base_sha_note": "candidate_sha is 94388bd, the last commit that touched packages/fw-agent (confirmed identical to current HEAD's packages/fw-agent/{index.js,src/*,package.json} -- only test fixtures changed since, which npm pack doesn't include anyway). Chosen specifically to avoid .agent/'s own forbidden-path rule, which a HEAD-equivalent candidate_sha would trip for reasons unrelated to this directive's actual subject.",
+  "scope": [
+    "packages/fw-agent's package.json, .npmignore (if present), README.md, LICENSE, and the real `npm pack --dry-run --json` output at candidate_sha 5974d06"
+  ],
+  "out_of_scope": [
+    "packages/fw-control -- not being prepared for a standalone npm release in this directive",
+    "actually running npm publish or any registry-modifying command -- audit only"
+  ],
+  "success_criteria": [
+    "compatibility-receipt.json reviews the eight dimensions against packages/fw-agent's current exports/engines/dependencies",
+    "release-audit-receipt.json's packaged_files is the real, verbatim npm pack --dry-run output, not asserted",
+    "explicit answer to 'what would accidentally get packaged' -- even if the answer is nothing"
+  ],
+  "require_compatibility_review": true,
+  "require_release_audit": true,
+  "status": "NOT STARTED"
+}

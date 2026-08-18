@@ -8,6 +8,7 @@
     "verifier_receipt_present": true,
     "engineer_receipt_valid": true,
     "verifier_receipt_valid": true,
+    "checkpoints_present": true,
     "candidate_sha_consistent": true,
     "candidate_sha_immutable_during_verification": true,
     "base_sha_is_ancestor": true,
@@ -19,6 +20,31 @@
     "helios_baseline_regeneration": null,
     "registry_modified_prematurely": false,
     "evidence_present": true,
+    "evidence_content_bound": true,
+    "threat_model": {
+      "present": false,
+      "required": false
+    },
+    "reliability_receipt": {
+      "present": false,
+      "required": false
+    },
+    "quality_receipt": {
+      "present": false,
+      "required": false
+    },
+    "test_coverage_receipt": {
+      "present": false,
+      "required": false
+    },
+    "compatibility_receipt": {
+      "present": false,
+      "required": false
+    },
+    "release_audit_receipt": {
+      "present": false,
+      "required": false
+    },
     "a2_pass": true,
     "p0_regression": false,
     "verifier_regressions_clean": true,
@@ -45,5 +71,29 @@
       "CHANGELOG.md"
     ]
   },
-  "timestamp": "2026-08-16T08:54:23.632Z"
+  "reliability": {
+    "present": false,
+    "required": false
+  },
+  "threat_model": {
+    "present": false,
+    "required": false
+  },
+  "quality": {
+    "present": false,
+    "required": false
+  },
+  "test_coverage": {
+    "present": false,
+    "required": false
+  },
+  "compatibility": {
+    "present": false,
+    "required": false
+  },
+  "release_audit": {
+    "present": false,
+    "required": false
+  },
+  "timestamp": "2026-08-18T01:13:19.923Z"
 }
