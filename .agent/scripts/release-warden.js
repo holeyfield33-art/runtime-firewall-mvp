@@ -468,17 +468,26 @@ function evaluate(runDir, phaseId) {
     return freeze(`cited evidence missing from evidence/index.json: ${missingEvidence.join(', ') || '(no evidence cited)'}`, checks);
   }
 
-  // ── Threat Modeler (Agent 1b) — opt-in per directive (require_threat_model: true), same
-  // backward-compatible construction as the reliability-receipt gate below: a directive that
-  // predates this field is unaffected. Unlike reliability/verifier receipts this one has no
-  // PASS/FAIL verdict to BLOCK on — it is a recon precondition, not a judgment — so the only two
-  // outcomes are "present, COMPLETE, evidence checks out" (fine) or FREEZE (missing, invalid,
-  // wrong candidate, missing evidence, or explicitly INCOMPLETE — attacking off an admittedly
-  // incomplete map is exactly the discipline this gate exists to prevent). Evaluated BEFORE the
-  // a2_pass check below, deliberately: whether the pentester's attack PASSed or FAILed, a required
-  // threat model that's missing/invalid/incomplete is a process failure that must surface either
-  // way, not something an early BLOCK return on a2_pass can silently skip past.
-  const threatModelDirective = loadDirectiveForPhase(phaseId);
+  // ── Every required-gate check below (threat-model precondition, then the five optional
+  // peer-reviewer verdicts) is evaluated BEFORE a2_pass/p0_regression/verifier_regressions_clean,
+  // deliberately, for every one of them — not just threat-model. SECURITY: this used to be true
+  // only for threat-model; the five verdict gates further down sat AFTER the a2_pass early-return,
+  // so whenever the verifier already failed (or a P0/regression check fired), a required-but-
+  // missing reliability/quality/test/compatibility/release-audit receipt was never checked at all,
+  // and the persisted warden-receipt.json then falsely reported it as required:false — a receipt
+  // reader had no way to tell "not required" from "required but never evaluated." Demonstrated via
+  // a constructed run: require_reliability_review:true + verifier.status=FAIL produced BLOCK
+  // without ever checking reliability-receipt.json's existence. One directive load now serves all
+  // six checks (was loaded separately, redundantly, for threat-model and for the verdict gates).
+  const directiveForGates = loadDirectiveForPhase(phaseId);
+
+  // Threat Modeler (Agent 1b) — opt-in per directive (require_threat_model: true). Unlike
+  // reliability/verifier receipts this one has no PASS/FAIL verdict to BLOCK on — it is a recon
+  // precondition, not a judgment — so the only two outcomes are "present, COMPLETE, evidence
+  // checks out" (fine) or FREEZE (missing, invalid, wrong candidate, missing evidence, or
+  // explicitly INCOMPLETE — attacking off an admittedly incomplete map is exactly the discipline
+  // this gate exists to prevent).
+  const threatModelDirective = directiveForGates;
   const threatModelRequired = !!(threatModelDirective && threatModelDirective.require_threat_model);
   const threatModelPath = path.join(runDir, 'threat-model.json');
   const threatModelExists = fs.existsSync(threatModelPath);
@@ -507,37 +516,14 @@ function evaluate(runDir, phaseId) {
   }
   checks.threat_model = threatModelInfo;
 
-  // ── A2 verdict is authoritative and cannot be overridden ────────────────────────────────────
-  checks.a2_pass = verifier.status === 'PASS';
-  if (engineer.status !== 'PASS') {
-    reasons.push('engineer receipt status is not PASS');
-  }
-  if (!checks.a2_pass) {
-    return { status: 'BLOCK', reasons: [...reasons, `${verifier.agent || 'verifier'} reported FAIL`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── P0 regression: engineer's own recorded test runs must all be exit 0 ─────────────────────
-  const failingTests = (engineer.tests_run || []).filter((t) => t.exit_code !== 0);
-  checks.p0_regression = failingTests.length > 0;
-  if (checks.p0_regression) {
-    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── Regressions flagged explicitly by the verifier ──────────────────────────────────────────
-  const verifierRegressions = (verifier.regressions || []).filter((r) => r && r.status && r.status !== 'OK' && r.status !== 'PASS');
-  checks.verifier_regressions_clean = verifierRegressions.length === 0;
-  if (!checks.verifier_regressions_clean) {
-    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null, threat_model: threatModelInfo };
-  }
-
-  // ── Optional peer-reviewer verdict receipts (Reliability, Code Quality, Test Engineer) ────────
-  // Each is opt-in per directive (require_reliability_review / require_quality_review /
-  // require_test_review), backward compatible by construction: a directive predating a given flag
-  // behaves exactly as before that receipt type existed. If present even without opting in, it is
-  // still validated and honored — a stricter run than required is never penalized, only a
-  // required-but-missing one is. All three share evaluateOptionalVerdictReceipt() (see its comment
-  // for why this is one function instead of three copy-pasted blocks).
-  const directiveForVerdicts = loadDirectiveForPhase(phaseId);
+  // ── Optional peer-reviewer verdict receipts (Reliability, Code Quality, Test Engineer,
+  // Compatibility, Release Audit) — evaluated here, before a2_pass/p0_regression/regressions
+  // below, for the same reason threat-model is: opt-in per directive, backward compatible by
+  // construction (a directive predating a given flag behaves exactly as before that receipt type
+  // existed), and if present even without opting in, still validated and honored. All five share
+  // evaluateOptionalVerdictReceipt() (see its comment for why this is one function instead of five
+  // copy-pasted blocks).
+  const directiveForVerdicts = directiveForGates;
 
   const reliabilityResult = evaluateOptionalVerdictReceipt({
     runDir,
@@ -679,6 +665,41 @@ function evaluate(runDir, phaseId) {
     return { status: 'BLOCK', reasons: [...reasons, releaseAuditResult.reason], checks, freeze_reason: null, reliability: reliabilityInfo, threat_model: threatModelInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo };
   }
 
+  // All optional-gate accumulator fields (threat_model/reliability/quality/test_coverage/
+  // compatibility/release_audit) are fully and honestly computed by this point, regardless of
+  // what the checks below find — the property the gate-ordering fix above exists to guarantee.
+  const gateInfo = { threat_model: threatModelInfo, reliability: reliabilityInfo, quality: qualityInfo, test_coverage: testReviewInfo, compatibility: compatibilityInfo, release_audit: releaseAuditInfo };
+
+  // ── Engineer's own status must actually gate the verdict, not just get noted ─────────────────
+  // Previously pushed onto `reasons` but never checked — a receipt with status !== 'PASS' but
+  // otherwise-clean everything-else still fell through to an overall PASS at the bottom of this
+  // function, with an unused, unacted-on reason sitting in the output. Found while moving this
+  // section; fixed alongside it since it's the same theme (a real signal must actually gate the
+  // outcome, not just get silently recorded).
+  if (engineer.status !== 'PASS') {
+    return { status: 'BLOCK', reasons: [...reasons, 'engineer receipt status is not PASS'], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── A2 verdict is authoritative and cannot be overridden ────────────────────────────────────
+  checks.a2_pass = verifier.status === 'PASS';
+  if (!checks.a2_pass) {
+    return { status: 'BLOCK', reasons: [...reasons, `${verifier.agent || 'verifier'} reported FAIL`], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── P0 regression: engineer's own recorded test runs must all be exit 0 ─────────────────────
+  const failingTests = (engineer.tests_run || []).filter((t) => t.exit_code !== 0);
+  checks.p0_regression = failingTests.length > 0;
+  if (checks.p0_regression) {
+    return { status: 'BLOCK', reasons: [...reasons, `engineer tests_run had nonzero exit codes: ${failingTests.map((t) => t.command).join(', ')}`], checks, freeze_reason: null, ...gateInfo };
+  }
+
+  // ── Regressions flagged explicitly by the verifier ──────────────────────────────────────────
+  const verifierRegressions = (verifier.regressions || []).filter((r) => r && r.status && r.status !== 'OK' && r.status !== 'PASS');
+  checks.verifier_regressions_clean = verifierRegressions.length === 0;
+  if (!checks.verifier_regressions_clean) {
+    return { status: 'BLOCK', reasons: [...reasons, `verifier reported regressions: ${JSON.stringify(verifierRegressions)}`], checks, freeze_reason: null, ...gateInfo };
+  }
+
   // ── Sync gate (deterministic, not model-decided) ────────────────────────────────────────────
   const syncFiles = gitChanged.filter((f) => SYNC_TRIGGER_PATTERNS.some((re) => re.test(f)));
   const syncRequired = syncFiles.length > 0;
@@ -717,12 +738,7 @@ function evaluate(runDir, phaseId) {
       ? `changed_files touched detector-relevant source: ${syncFiles.join(', ')}`
       : 'no detector-relevant source files changed',
     docs: docsInfo,
-    reliability: reliabilityInfo,
-    threat_model: threatModelInfo,
-    quality: qualityInfo,
-    test_coverage: testReviewInfo,
-    compatibility: compatibilityInfo,
-    release_audit: releaseAuditInfo,
+    ...gateInfo,
   };
 
   function freeze(reason, extraChecks, extraReasons) {
