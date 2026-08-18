@@ -139,12 +139,33 @@ function loadJson(file) {
 // earlier in evaluate() (that one is scoped inside the base_sha/candidateSha guard) — this one
 // must run unconditionally, since require_reliability_review has to be checked even when base_sha
 // is absent.
+//
+// SECURITY: resolves by each directive file's OWN `phase_id` field, matched EXACTLY — never by
+// filename. The previous implementation filtered filenames with `startsWith(phaseId)` and took
+// files[0] with no exact-match check and no disambiguation of multiple matches. Demonstrated
+// exploitable both directions: an unrelated directive whose filename happens to be a string-
+// prefix superset of the target phase_id could spuriously impose its own require_* flags on a
+// phase that never asked for them, or — depending on filesystem listing order, since readdirSync
+// order is not guaranteed sorted — silently absorb and skip a genuinely required review instead.
+// Directory listing is now sorted for determinism, and every file's parsed content is checked
+// against phaseId directly; a directive file that fails to parse is skipped (not fatal), not
+// forwarded as a match.
 function loadDirectiveForPhase(phaseId) {
   if (!phaseId) return null;
+  let files;
   try {
     const directivesDir = path.join(__dirname, '..', 'directives');
-    const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
-    return files.length > 0 ? loadJson(path.join(directivesDir, files[0])) : null;
+    files = fs.readdirSync(directivesDir).filter((f) => f.endsWith('.json')).sort();
+    for (const f of files) {
+      let directive;
+      try {
+        directive = loadJson(path.join(directivesDir, f));
+      } catch (e) {
+        continue; // malformed directive file — skip it, never let it crash directive resolution
+      }
+      if (directive && directive.phase_id === phaseId) return directive;
+    }
+    return null;
   } catch (e) {
     return null;
   }
@@ -211,8 +232,22 @@ function evaluate(runDir, phaseId) {
   const verifierPath = path.join(runDir, 'verifier-receipt.json');
   const evidenceIndexPath = path.join(runDir, 'evidence', 'index.json');
 
-  const engineer = loadJson(engineerPath);
-  const verifier = loadJson(verifierPath);
+  // SECURITY: malformed JSON in either mandatory receipt must FREEZE with a specific reason, not
+  // crash. loadJson()'s own JSON.parse can still throw here (unlike validateReceipt(), which is
+  // now hardened below) — caught explicitly so the diagnosis stays precise instead of falling
+  // through to main()'s generic catch-all.
+  let engineer;
+  try {
+    engineer = loadJson(engineerPath);
+  } catch (e) {
+    return freeze(`engineer-receipt.json is not valid JSON: ${e.message}`, { engineer_receipt_present: true, engineer_receipt_valid: false });
+  }
+  let verifier;
+  try {
+    verifier = loadJson(verifierPath);
+  } catch (e) {
+    return freeze(`verifier-receipt.json is not valid JSON: ${e.message}`, { engineer_receipt_present: true, verifier_receipt_present: true, verifier_receipt_valid: false });
+  }
   const evidenceIndex = loadJson(evidenceIndexPath) || [];
 
   // ── Missing artifacts is always a FREEZE: no receipt, no verdict. ──────────────────────────
@@ -325,18 +360,11 @@ function evaluate(runDir, phaseId) {
       return freeze(`base_sha (${baseSha}) is not a git ancestor of candidate_sha (${candidateSha})`, checks);
     }
 
-    const directiveMatch = (() => {
-      if (!phaseId) return null;
-      try {
-        const directivesDir = path.join(__dirname, '..', 'directives');
-        const files = fs.readdirSync(directivesDir).filter((f) => f.startsWith(phaseId) && f.endsWith('.json'));
-        return files.length > 0 ? path.join(directivesDir, files[0]) : null;
-      } catch (e) {
-        return null;
-      }
-    })();
-    if (directiveMatch) {
-      const directive = loadJson(directiveMatch);
+    // Consolidated onto loadDirectiveForPhase() — this used to be its own inline, separately-
+    // buggy filename-prefix lookup; now shares the single exact-phase_id-match resolver.
+    const directiveForBaseShaCheck = loadDirectiveForPhase(phaseId);
+    if (directiveForBaseShaCheck) {
+      const directive = directiveForBaseShaCheck;
       const directiveBaseSha = directive && directive.base_sha;
       if (directiveBaseSha && directiveBaseSha !== baseSha) {
         const note = (engineer.base_sha_note || '').trim();
@@ -742,7 +770,25 @@ function main() {
     console.error('Usage: release-warden.js <runDir> [phaseId]');
     process.exit(2);
   }
-  const result = evaluate(runDir, phaseId);
+  // SECURITY: defense-in-depth backstop. Every crash site found in practice (malformed JSON in
+  // any of six now-hardened call sites, and any other unexpected input shape) is now handled with
+  // a specific reason closer to its source, but this catch-all guarantees the property holds for
+  // ANY cause, known or not: evaluate() must never crash the process with no warden-receipt.json
+  // written and no recorded decision. Fail closed, always with a receipt, always FREEZE (exit 2),
+  // never colliding with BLOCK's exit code the way a bare uncaught exception (exit 1) used to.
+  let result;
+  try {
+    result = evaluate(runDir, phaseId);
+  } catch (e) {
+    result = {
+      status: 'FREEZE',
+      reasons: [`release-warden.js crashed evaluating this run: ${e.message}`],
+      checks: {},
+      freeze_reason: `unhandled exception during evaluation: ${e.message}`,
+      sync_required: false,
+      sync_reason: 'not evaluated — run frozen',
+    };
+  }
   const receipt = writeWardenReceipt(runDir, phaseId || 'UNKNOWN', result);
   console.log(JSON.stringify(receipt, null, 2));
 
