@@ -1,15 +1,15 @@
 {
-  "generatedAt": "2026-08-16T07:31:37.210Z",
+  "generatedAt": "2026-08-19T15:10:57.669Z",
   "target": "packages/fw-agent",
   "metadata": {
     "matrixVersion": "execution-surface-matrix-v1",
-    "gitSha": "dcb7f81fe670ba28a5d0f584c8ed080e50f6a8c5",
+    "gitSha": "374bb304d1dc93f145aaac86b48a8c8d987692af",
     "package": {
       "name": "aletheia-firewall",
-      "version": "0.4.0"
+      "version": "0.5.0"
     },
-    "nodeVersion": "v24.18.0",
-    "platform": "win32",
+    "nodeVersion": "v22.22.2",
+    "platform": "linux",
     "arch": "x64"
   },
   "rows": [
@@ -26,7 +26,7 @@
     {
       "path": "ESM static import",
       "verdict": "INTERCEPTED",
-      "detail": "Child crashed (exit=1) before it could self-report a verdict, but stderr shows a firewall block: [COMPILATION LOCKDOWN] Threat detected in \"sentinel-block.mjs\"\nC:\\Users\\SuperAdmin\\.vscode\\runtime-firewall-mvp\\packages\\fw-agent\\index.js:671\r\n          throw new Error(msg);\r\n                ^\r\n\r\nError: [Firewall] Detection in \"sentinel-block.mjs\": crypto-miner\r\n    at load (C:\\Users\\SuperAdmin\\.v"
+      "detail": "Child crashed (exit=1) before it could self-report a verdict, but stderr shows a firewall block: [COMPILATION LOCKDOWN] Threat detected in \"sentinel-block.mjs\"\n/home/user/runtime-firewall-mvp/packages/fw-agent/index.js:677\n          throw new Error(msg);\n                ^\n\nError: [Firewall] Detection in \"sentinel-block.mjs\": crypto-miner\n    at load (/home/user/runtime-firewall-mvp/packages/fw-"
     },
     {
       "path": "dynamic import()",
