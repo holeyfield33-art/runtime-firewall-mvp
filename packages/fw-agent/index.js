@@ -166,6 +166,12 @@ const fwMode = resolveFwMode();
     path.join(__dirname, 'src', 'quarantine.js'),
     path.join(__dirname, 'src', 'audit-log.js'),
     path.join(__dirname, 'src', 'policy.js'),
+    // aho-corasick.js is the signature-matching engine required by both detector.js and
+    // behavior-tracker.js; sync-worker.js is the telemetry worker loaded at runtime. Both ship
+    // in the npm manifest and are security-critical, so they must be covered here — omitting
+    // them let a tampered aho-corasick silently defeat detection while self-integrity passed.
+    path.join(__dirname, 'src', 'aho-corasick.js'),
+    path.join(__dirname, 'sync-worker.js'),
   ];
 
   function computeSelfHash() {

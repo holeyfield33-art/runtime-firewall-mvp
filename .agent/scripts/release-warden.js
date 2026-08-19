@@ -46,6 +46,14 @@ const HELIOS_SELF_INTEGRITY_FILES = [
   'src/quarantine.js',
   'src/audit-log.js',
   'src/policy.js',
+  // F-01: this list was missing these two files, which are hashed by index.js's own
+  // computeSelfHash() and by scripts/generate-baseline.js and ci.yml's inline check. That
+  // desync let the warden excuse a .helios-baseline change against a 7-file recomputation
+  // that never matched the real 9-file baseline actually shipped, silently passing a
+  // release where the anchor did not protect the files it claims to. Order matters -- it
+  // changes the digest -- and must match index.js's selfFiles array exactly.
+  'src/aho-corasick.js',
+  'sync-worker.js',
 ].map((f) => `packages/fw-agent/${f}`);
 
 function gitShowAtSha(sha, relPath) {
@@ -927,4 +935,14 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { evaluate, writeWardenReceipt, FORBIDDEN_PATH_PATTERNS, SYNC_TRIGGER_PATTERNS, DOC_PATH_ALLOWLIST };
+module.exports = {
+  evaluate,
+  writeWardenReceipt,
+  FORBIDDEN_PATH_PATTERNS,
+  SYNC_TRIGGER_PATTERNS,
+  DOC_PATH_ALLOWLIST,
+  HELIOS_SELF_INTEGRITY_FILES,
+  HELIOS_BASELINE_PATH,
+  computeExpectedHeliosBaseline,
+  verifyHeliosBaselineRegeneration,
+};

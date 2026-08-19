@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-18
+
+### Security
+
+- **Self-integrity check now covers the full shipped runtime surface**: `verifySelfIntegrity()`
+  and the baseline generator/CI check previously hashed only 7 of the package's executable files,
+  omitting `src/aho-corasick.js` (the Aho-Corasick signature-matching engine required by both
+  `detector.js` and `behavior-tracker.js`) and `sync-worker.js` (the telemetry worker loaded at
+  runtime). A tampered `aho-corasick.js` — e.g. one whose `search()` returns no matches — passed
+  the self-integrity check **and** silently defeated signature detection (a credential-exfil
+  payload scanned to `OBSERVE` with zero detections). Both files are now included in the hashed
+  set in `packages/fw-agent/index.js`, `scripts/generate-baseline.js`, and the CI
+  self-integrity step (all three kept in lockstep), and `.helios-baseline` was regenerated.
+  Tampering either file now fails closed (`Refusing to run`, exit 1).
+
 ### Added
 
 - **ESM `import` / `import()` interception (P2-01)**: closes the gap where ES modules bypassed
@@ -303,7 +318,8 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.3.0...v0.4.0
 [0.2.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.0...v0.1.1

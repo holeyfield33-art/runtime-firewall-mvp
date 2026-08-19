@@ -29,11 +29,25 @@ function runCli(runDir, phaseId) {
 }
 
 // A real commit and its real immediate parent, already used throughout this repo's own real runs
-// today -- P2-01's final candidate. Chosen specifically because candidate^..candidate's diff is
-// packages/fw-agent-only (no .agent/ forbidden-path hit), so tests can reach the checks under
-// test without an unrelated earlier gate firing first.
-const CANDIDATE_SHA = '94388bdeabc93f1ccf6227828ffac13d592089b1';
-const BASE_SHA = '079322774e92a7d1d5aaf12128712afa130aa63b';
+// today. Chosen specifically because candidate^..candidate's diff hits no forbidden path other
+// than packages/fw-agent/.helios-baseline (which carries the baseline-regeneration carve-out),
+// so tests can reach the checks under test without an unrelated earlier gate firing first.
+//
+// P-A note (2026-08-18): this was previously 94388bde (P2-01's final candidate), a commit that
+// predates the security fix (3f70cc7) which added src/aho-corasick.js and sync-worker.js to the
+// self-integrity file list. Once release-warden.js's HELIOS_SELF_INTEGRITY_FILES was corrected
+// from 7 to 9 files (closing F-01: the list had silently desynced from index.js's real,
+// already-9-file list), recomputing 94388bde's baseline against the now-correct 9-file list no
+// longer matched what was legitimately a 7-file baseline at that point in history -- because at
+// that commit, self-integrity genuinely only covered 7 files. That's not a bad fixture choice
+// becoming a bad fixture; it's the fixture aging out from under a config the code now, correctly,
+// no longer supports pretending is 7. Swapped to 3f70cc7 (the commit that made the fix, and whose
+// own baseline was computed against the corrected 9-file list, verified independently in P-A) and
+// its parent, so these tests validate release-warden's *other* properties (checkpoint chains,
+// receipt binding, etc.) against a candidate that is honestly compatible with the current,
+// corrected self-integrity list -- not against one whose baseline predates it.
+const CANDIDATE_SHA = '3f70cc70d279e959be8df91a10422faca82006eb';
+const BASE_SHA = '42f6ed4e97fafca0109524c4ed7b371e756659c3';
 
 let passed = 0;
 let failed = 0;

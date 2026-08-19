@@ -68,6 +68,8 @@ jobs:
             'src/quarantine.js',
             'src/audit-log.js',
             'src/policy.js',
+            'src/aho-corasick.js',
+            'sync-worker.js',
           ];
           const hash = crypto.createHash('sha256');
           // Must match index.js's own computeSelfHash() exactly (utf8 + CRLF normalization) --
