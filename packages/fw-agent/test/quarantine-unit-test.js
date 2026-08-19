@@ -115,6 +115,45 @@ const { QuarantineStub } = require('../src/quarantine');
   console.log('  ✓ telemetry.emit + first-breach console path covered');
 }
 
+// ── Test 3d: defineProperty trap is pretend-success, never forwards to target (F-63) ─────────
+{
+  const stub = new QuarantineStub('define-pkg', null);
+  const proxy = stub.createProxy();
+
+  // Previously untrapped: forwarded to the real (empty) target via default Reflect.defineProperty,
+  // which then made ownKeys/getOwnPropertyDescriptor's "report no keys" answer invalid (Proxy
+  // invariant violation) and threw a raw TypeError on the very next enumeration call.
+  assert.doesNotThrow(() => {
+    Object.defineProperty(proxy, 'x', { value: 1 });
+  }, 'defineProperty on the quarantine proxy must not throw');
+
+  assert.deepStrictEqual(Object.keys(proxy), [], 'ownKeys must still report no keys after defineProperty');
+  assert.deepStrictEqual(Reflect.ownKeys(proxy), [], 'Reflect.ownKeys must still report no keys after defineProperty');
+  assert.doesNotThrow(() => {
+    assert.deepStrictEqual(Object.getOwnPropertyDescriptors(proxy), {}, 'getOwnPropertyDescriptors must report no descriptors');
+  }, 'getOwnPropertyDescriptors must not throw after defineProperty');
+
+  assert.ok(stub.interceptCount > 0, 'defineProperty must be recorded');
+  console.log('  ✓ defineProperty trap is pretend-success and does not break subsequent enumeration (F-63)');
+}
+
+// ── Test 3e: preventExtensions/isExtensible remain untrapped and correct (F-63 non-regression) ──
+{
+  // F-63 explicitly does NOT add preventExtensions/isExtensible traps with the same
+  // "pretend" pattern -- that was tested directly and confirmed to throw, because a proxy's
+  // reported extensibility must genuinely match its target's actual extensibility unless
+  // preventExtensions was really called on the target. These two traps stay untrapped, and the
+  // default forwarding behavior is already correct (the target genuinely is extensible).
+  const stub = new QuarantineStub('extensible-pkg', null);
+  const proxy = stub.createProxy();
+
+  assert.strictEqual(Object.isExtensible(proxy), true, 'quarantine proxy must be extensible by default (no trap override)');
+  assert.doesNotThrow(() => { Object.preventExtensions(proxy); }, 'preventExtensions must work via default forwarding');
+  assert.strictEqual(Object.isExtensible(proxy), false, 'isExtensible must reflect the real preventExtensions() call');
+
+  console.log('  ✓ preventExtensions/isExtensible remain untrapped and correct (F-63 non-regression)');
+}
+
 console.log('All quarantine unit tests passed.');
 
 // ── Test 4: proxy is not an accidental thenable (F-17) ───────────────────────
