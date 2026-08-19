@@ -770,7 +770,31 @@ if (!esmHookOk) {
   }
 }
 
-// Export via getter so consumers always see the live map after hot-reload (F-21).
-const _exports = { compileMetrics, quarantinedModules, resolveModuleIdentity, packageKeyForFilename };
-Object.defineProperty(_exports, 'policyMap', { get: () => policyMap, enumerable: true });
+// ── F-57: read-only policy/quarantine query surface ──────────────────────────────────────────
+// policyMap and quarantinedModules used to be exported directly (policyMap via a getter, so
+// reassignment was blocked, but the live Map object itself was still handed out; quarantinedModules
+// as a plain property export of the live Set). Either one let any allowed code call
+// `.set()`/`.delete()`/`.clear()`/`.add()` on the REAL object and mutate live enforcement state.
+// Only these read-only query functions are exported now — none of them returns the live
+// Map/Set or an iterable view of it.
+function hasPolicy(key) {
+  return policyMap.has(key);
+}
+
+function getPolicyDecision(key) {
+  if (!policyMap.has(key)) return undefined;
+  const value = policyMap.get(key);
+  // Policy values are strings today ('BLOCK'/'OBSERVE'/'QUARANTINE'), but if a value is ever an
+  // object, hand back a frozen deep copy rather than the live reference.
+  if (value !== null && typeof value === 'object') {
+    return Object.freeze(JSON.parse(JSON.stringify(value)));
+  }
+  return value;
+}
+
+function isQuarantined(filename) {
+  return quarantinedModules.has(filename);
+}
+
+const _exports = { compileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
 module.exports = _exports;
