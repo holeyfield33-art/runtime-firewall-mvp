@@ -147,7 +147,7 @@ HELIOS_LOG_DIR=/data/logs node --require=aletheia-firewall app.js
 
 **Prerequisites:** Node.js ≥ 18
 
-The optional fw-control dashboard/telemetry server requires Node.js ≥ 20 (Fastify 5); the firewall agent itself only needs Node.js ≥ 18.
+The optional fw-control dashboard/telemetry server requires Node.js ≥ 20 (Fastify 5); the firewall agent itself only needs Node.js ≥ 18. That floor covers CommonJS `require()` coverage, which is this project's core guarantee. ESM (`import`/`import()`) interception needs a newer Node — ≥22.15.0 or ≥23.5.0 — and runs as a disclosed, unprotected bypass below that floor; CommonJS coverage is unaffected either way. See the Coverage table above and `packages/fw-agent/README.md` for the full breakdown.
 
 ```bash
 git clone https://github.com/holeyfield33-art/runtime-firewall-mvp

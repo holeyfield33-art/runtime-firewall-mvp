@@ -751,8 +751,17 @@ if (!childReinjectionOk) {
 // unsupported Node version or a registration failure, ESM stays an honest, documented bypass
 // rather than a silently-broken guarantee.
 if (!esmHookOk) {
-  const message = `ESM static/dynamic import interception not active: ${esmHookError && esmHookError.message}`;
-  if (fwMode === 'enforce') {
+  const message = `ESM static/dynamic import interception not active: ${esmHookError && esmHookError.message}. CommonJS require() coverage is unaffected.`;
+  // FW_REQUIRE_ESM_COVERAGE=1 is a separate, more specific assertion than FW_MODE=enforce: "I
+  // require ESM coverage specifically," not just "I require the agent to be preloaded." A
+  // deployer who genuinely depends on ESM interception can opt into failing closed even in dev
+  // mode; leaving the flag unset (the default) keeps behavior byte-identical to before.
+  if (process.env.FW_REQUIRE_ESM_COVERAGE === '1') {
+    auditLog.write({ eventType: 'ESM_HOOK_UNAVAILABLE', message, timestamp: Date.now() });
+    emitTelemetry('ESM_HOOK_UNAVAILABLE', null, null, { message });
+    console.error(`[CRITICAL] [Helios] ${message} FW_REQUIRE_ESM_COVERAGE=1 is set. Refusing to start.`);
+    process.exit(1);
+  } else if (fwMode === 'enforce') {
     auditLog.write({ eventType: 'ESM_HOOK_UNAVAILABLE', message, timestamp: Date.now() });
     emitTelemetry('ESM_HOOK_UNAVAILABLE', null, null, { message });
     console.error(`[CRITICAL] [Helios] ${message}`);

@@ -33,7 +33,7 @@ function check(name, fn) {
   }
 }
 
-function spawnFixture(fixture) {
+function spawnFixture(fixture, extraEnv) {
   return spawnSync(
     process.execPath,
     [`--require=${AGENT_PATH}`, path.join(FIXTURES_DIR, fixture)],
@@ -41,7 +41,7 @@ function spawnFixture(fixture) {
       cwd: REPO_ROOT,
       encoding: 'utf8',
       timeout: 15000,
-      env: Object.assign({}, process.env, { FW_ENABLE_DETECTION: '1', FW_ALLOW_DEV_POLICY_KEY: '1' }),
+      env: Object.assign({}, process.env, { FW_ENABLE_DETECTION: '1', FW_ALLOW_DEV_POLICY_KEY: '1' }, extraEnv),
     }
   );
 }
@@ -106,6 +106,27 @@ check('no DeprecationWarning is emitted (confirms registerHooks(), not the depre
   const res = spawnFixture('benign.mjs');
   assert.strictEqual(res.status, 0, 'expected exit 0: ' + res.status + '\nstderr:\n' + res.stderr);
   assert.ok(!/DeprecationWarning/.test(res.stderr), 'must not trigger a deprecation warning:\n' + res.stderr);
+});
+
+// N-03 / P-D: FW_REQUIRE_ESM_COVERAGE=1 is a separate, more specific opt-in than FW_MODE=enforce
+// -- "I require ESM coverage specifically," not just "I require the agent to be preloaded." Like
+// the checks above, the outcome it produces is genuinely Node-version-dependent, so condition on
+// REGISTER_HOOKS_AVAILABLE rather than hard-asserting one branch.
+check(REGISTER_HOOKS_AVAILABLE
+  ? `FW_REQUIRE_ESM_COVERAGE=1 does not misfire when registerHooks() is genuinely available (Node ${process.version})`
+  : `FW_REQUIRE_ESM_COVERAGE=1 fails closed when registerHooks() is unavailable (Node ${process.version})`, () => {
+  const res = spawnFixture('benign.mjs', { FW_REQUIRE_ESM_COVERAGE: '1' });
+  if (REGISTER_HOOKS_AVAILABLE) {
+    assert.strictEqual(res.status, 0, 'the flag must not fail closed when ESM coverage is genuinely active: ' + res.status + '\nstderr:\n' + res.stderr);
+  } else {
+    assert.notStrictEqual(res.status, 0, 'expected a non-zero exit when ESM coverage is required but unavailable, got ' + res.status);
+    assert.ok(res.stderr.includes('ESM_HOOK_UNAVAILABLE') || res.stderr.includes('not active'), 'expected the ESM_HOOK_UNAVAILABLE / "not active" message on stderr:\n' + res.stderr);
+  }
+});
+
+check('FW_REQUIRE_ESM_COVERAGE unset (default) leaves ESM-unavailable behavior unchanged from before this flag existed', () => {
+  const res = spawnFixture('benign.mjs');
+  assert.strictEqual(res.status, 0, 'agent must start cleanly regardless of registerHooks() availability when the flag is unset: ' + res.status + '\nstderr:\n' + res.stderr);
 });
 
 console.log(`\n${passed} ESM loader checks passed.`);
