@@ -33,7 +33,8 @@ API) for the ES module loader. This means:
 | Load path | Covered |
 |---|---|
 | `require()` of `.js` / `.cjs` | ✅ |
-| `import` / `import()` (ESM, `.mjs`, or `.js` under `"type": "module"`) | ✅ on Node ≥22.15.0 / ≥23.5.0 — ❌ below that floor (see note) |
+| `import` / `import()` of a `file://` module URL (ESM, `.mjs`, or `.js` under `"type": "module"`) | ✅ on Node ≥22.15.0 / ≥23.5.0 — ❌ below that floor (see note) |
+| `import()` of a `data:`, `http:`, `https:`, or `blob:` module URL | ❌ always — see note |
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
 | Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
@@ -43,6 +44,12 @@ requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`
 its CommonJS functionality; below the ESM-specific floor, `import`/`import()` runs
 **unprotected**, with a loud, logged warning (`FW_MODE=enforce` treats it as a hard failure) —
 never silently claimed as covered.
+
+**ESM module-URL scheme:** even on a supported Node version, ESM coverage only applies to
+`file://` module URLs. The load hook returns before the detector runs for any other scheme, so
+`import()` of a `data:`, `http:`, `https:`, or `blob:` URL is **unprotected on every Node
+version**, floor or no floor — this is a separate gap from the version floor above, not covered
+by it. See `docs/THREAT-COVERAGE.md`'s execution-path table for the full breakdown.
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your CommonJS require graph, after `npm install` has finished. It is not an

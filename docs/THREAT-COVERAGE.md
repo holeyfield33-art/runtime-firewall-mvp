@@ -150,9 +150,11 @@ answer, re-run on every change to either hook:
 | Execution path | Status | Mechanism |
 |---|---|---|
 | `require()`, nested `require()` | `INTERCEPTED` | `Module.prototype._compile` |
-| `worker_threads -> new Worker`, `child_process.fork()`, `child_process.spawn('node', ...)` | `INTERCEPTED` | P0-4 `NODE_OPTIONS` / `execArgv` re-injection + `_compile` |
+| `worker_threads -> new Worker`, `child_process.fork()`, `child_process.spawn('node', ...)` — child's own `require()`/`import()` calls | `INTERCEPTED` | P0-4 `NODE_OPTIONS` / `execArgv` re-injection + `_compile` |
+| `child_process.spawn('node', ['-e', src])` / `execSync('node -e ...')` — inline `-e` source itself | **`BYPASS`**, regardless of preload state | `node -e`'s inline eval path never calls `Module.prototype._compile` or the `registerHooks()` load hook — re-injection makes the child *preloaded*, but "preloaded" only covers what that child subsequently `require()`s/`import()`s, not code passed via `-e` |
 | Module cached/loaded before the firewall preloads | `INTERCEPTED` | Content-hash re-scan on cache hit |
-| `import` (static) / `import()` (dynamic) | `INTERCEPTED` on Node ≥22.15.0/≥23.5.0; **`BYPASS`** below that floor | `module.registerHooks()` (P2-01) — see root `README.md`'s Coverage table for the version-floor detail |
+| `import` (static) / `import()` (dynamic) of a `file://` module URL | `INTERCEPTED` on Node ≥22.15.0/≥23.5.0; **`BYPASS`** below that floor | `module.registerHooks()` (P2-01) — see root `README.md`'s Coverage table for the version-floor detail |
+| `import()` of a `data:`, `http:`, `https:`, or `blob:` module URL | **`BYPASS`**, on every Node version, floor or no floor | The `registerHooks()` load hook returns before the detector runs for any non-`file://` scheme (`packages/fw-agent/index.js:623`) — a separate, independent gap from the version-floor one above |
 | `vm.runInNewContext()` | `BYPASS` | Executes source directly via V8, never calls `require()`/`_compile` |
 | Native addon (`.node`) load | `UNSUPPORTED` (architecturally unreachable) | Routes through `process.dlopen()`, never calls `_compile` |
 
