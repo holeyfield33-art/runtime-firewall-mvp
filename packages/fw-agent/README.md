@@ -20,17 +20,29 @@ For Bun:
 FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 ```
 
+> **ESM coverage requires Node ≥22.15.0 / ≥23.5.0.** Below that floor, CommonJS `require()`
+> coverage is unaffected, but `import`/`import()` runs unprotected — see the version-floor note
+> below.
+
 ## Coverage & Limitations
 
-Aletheia hooks `Module.prototype._compile`, Node's CommonJS compilation step. This means:
+Aletheia hooks `Module.prototype._compile` (Node's CommonJS compilation step) and, on a
+supported Node version, `module.registerHooks()` (Node's synchronous ESM Customization Hooks
+API) for the ES module loader. This means:
 
 | Load path | Covered |
 |---|---|
 | `require()` of `.js` / `.cjs` | ✅ |
-| `import` / `import()` (ESM, `.mjs`) | ❌ separate Node loader, not hooked |
+| `import` / `import()` (ESM, `.mjs`, or `.js` under `"type": "module"`) | ✅ on Node ≥22.15.0 / ≥23.5.0 — ❌ below that floor (see note) |
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
 | Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
+
+**ESM version floor:** `module.registerHooks()` — the non-deprecated, synchronous ESM hook API —
+requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`>=18.0.0`) covers
+its CommonJS functionality; below the ESM-specific floor, `import`/`import()` runs
+**unprotected**, with a loud, logged warning (`FW_MODE=enforce` treats it as a hard failure) —
+never silently claimed as covered.
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your CommonJS require graph, after `npm install` has finished. It is not an
@@ -91,7 +103,7 @@ own key (`scripts/generate-policy-key.js`) and set `FW_POLICY_PUBKEY`.
 
 The firewall's cost is a **one-time per-module compile scan** — the `Module._compile` hook runs once per file on first load, then a compilation cache short-circuits repeat compilations. There is **zero overhead when `FW_ENABLE_DETECTION` is unset** (`index.js` returns immediately and installs no hook).
 
-The repo maintains a 25% median compilation-overhead gate budget, but this is a regression threshold, not a published release guarantee. Current v0.3.0 evidence shows the runtime `Module._compile` interception path is the dominant steady-state cost; `Detector.scanModuleSync` is a secondary contributor in the verified 900-module workload.
+The repo maintains a 25% median compilation-overhead gate budget, but this is a regression threshold, not a published release guarantee. The v0.4.0 frozen evidence (the most recent controlled performance freeze — see the note below) shows the runtime `Module._compile` interception path is the dominant steady-state cost; `Detector.scanModuleSync` is a secondary contributor in the verified 900-module workload.
 
 | Metric | Budget | Enforced? |
 |--------|--------|-----------|
@@ -100,7 +112,7 @@ The repo maintains a 25% median compilation-overhead gate budget, but this is a 
 
 The gate is a **regression guard**, not a performance target. If the median exceeds 25%, the change needs review.
 
-For the v0.3.0 frozen baseline and diagnostic evidence, see `PERFORMANCE.md` and `results/benchmarks/steady-state-compile-attr-*.json`.
+For the v0.4.0 frozen baseline and diagnostic evidence, see `PERFORMANCE.md` and `results/benchmarks/steady-state-compile-attr-*.json`. This is the most recent controlled performance freeze in the repo; no v0.5.0-specific freeze has been published yet, so treat these numbers as last-measured-at-v0.4.0, not as a v0.5.0 guarantee.
 
 To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
