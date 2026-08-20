@@ -77,9 +77,12 @@ Expected output:
 
 ```bash
 # Author a rules file, then SIGN it into policy.signed.json (an unsigned file fails
-# verification and triggers emergency lockdown). The dev key requires FW_ALLOW_DEV_POLICY_KEY=1.
+# verification and triggers emergency lockdown). There is no bundled/committed dev private
+# key -- generate your own local-only key first. A key matching the bundled
+# DEV_PUBLIC_KEY_PEM default requires FW_ALLOW_DEV_POLICY_KEY=1.
+node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
 echo '{ "untrusted.js": "QUARANTINE", "evil.js": "BLOCK" }' > rules.json
-node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
 
 # BLOCK: module never executes
 cat > /tmp/evil.js << 'EOF'
@@ -109,8 +112,9 @@ rm -f policy.signed.json rules.json
 
 ```bash
 # Start from a validly signed (empty-rules) policy.
+node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
 echo '{}' > rules.json
-node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
 
 FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent -e "
   // Overwriting the signed file with an unsigned/tampered one makes the next 60s watcher

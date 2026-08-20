@@ -107,6 +107,21 @@ class QuarantineStub {
         return true; // Pretend deletion succeeded
       },
 
+      // F-63: defineProperty was previously untrapped, so it forwarded to the real (empty)
+      // target via the default Reflect.defineProperty behavior. That actually defined the
+      // property on target — typically non-configurable, since Object.defineProperty defaults
+      // `configurable` to false when omitted. The ownKeys/getOwnPropertyDescriptor traps below
+      // still reported the module as having no keys at all, which violates the Proxy invariant
+      // that ownKeys' result must include every non-configurable own key the target actually
+      // has — the engine then throws a raw TypeError on the next Object.keys() /
+      // Reflect.ownKeys() / Object.getOwnPropertyDescriptors() call, entirely outside the
+      // firewall's control. Pretend success, matching every other trap in this file, and never
+      // forward to the target so its own-property set stays empty and the invariant holds.
+      defineProperty: (target, prop, descriptor) => {
+        this.record(`property_define`, { property: String(prop) });
+        return true; // Pretend the definition succeeded; never touch the real target
+      },
+
       ownKeys: (target) => {
         this.record(`enumerate_keys`, {});
         return [];

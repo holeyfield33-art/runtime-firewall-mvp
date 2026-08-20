@@ -7,7 +7,17 @@
 //   3. FP/control: a legacy basename-keyed policy rule still resolves via the compat shim.
 'use strict';
 process.env.FW_ENABLE_DETECTION = '1';
-process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
+
+// F-62: no shared, committed dev private key exists any more (see SECURITY.md). Generate a
+// fresh Ed25519 keypair in-memory for this process only, and use FW_POLICY_PUBKEY (the real
+// explicit-trusted-key production path) instead of the FW_ALLOW_DEV_POLICY_KEY convenience
+// gate, for both the in-process require below and every spawned child in this file.
+const crypto = require('crypto');
+const { publicKey: TEST_PUBLIC_KEY, privateKey: TEST_PRIVATE_KEY } = crypto.generateKeyPairSync('ed25519', {
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
+process.env.FW_POLICY_PUBKEY = TEST_PUBLIC_KEY;
 
 const assert = require('assert');
 const fs = require('fs');
@@ -16,9 +26,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const AGENT_PATH = path.join(__dirname, '..', 'index.js');
-const DEV_PRIVATE_KEY = fs.readFileSync(
-  path.join(__dirname, '../../../scripts/dev-private-key.pem'), 'utf8'
-);
+const DEV_PRIVATE_KEY = TEST_PRIVATE_KEY;
 const { signPolicy } = require('../../../scripts/sign-policy');
 
 let passed = 0;
@@ -49,7 +57,7 @@ function runFirewalledChild(cwd, childScript, env) {
   return spawnSync(process.execPath, [`--require=${AGENT_PATH}`, childScript], {
     cwd,
     encoding: 'utf8',
-    env: Object.assign({}, process.env, { FW_ENABLE_DETECTION: '1', FW_ALLOW_DEV_POLICY_KEY: '1' }, env),
+    env: Object.assign({}, process.env, { FW_ENABLE_DETECTION: '1', FW_POLICY_PUBKEY: TEST_PUBLIC_KEY }, env),
     timeout: 15000,
   });
 }

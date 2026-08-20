@@ -62,11 +62,61 @@ Deferred to Phase 3+ (out of scope for 0.2.0):
 | F-11: Postinstall shim for pre-firewall hooks | MEDIUM | Architectural; hooks run before the firewall loads |
 | F-12: Runtime taint tracking | LOW | Requires dynamic analysis infrastructure |
 
+## August 2026 P0 Hardening Pass — Resolution Status
+
+The following findings, from a two-session TMRP deliberation (strategic decision + technical
+review) with orchestrator-verified evidence at every disputed point, have been addressed:
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-57: `policyMap`/`quarantinedModules` exported as live, mutable state | HIGH | ✅ Fixed | The live `Map`/`Set` are no longer exported at all; replaced with read-only query functions (`hasPolicy`, `getPolicyDecision`, `isQuarantined`). Any allowed code could previously call `.set()`/`.delete()`/`.clear()` on the real object and mutate enforcement state directly. |
+| F-62: `crypto.verify`/`crypto.createHash` called fresh each time (monkeypatchable) | HIGH | ✅ Fixed | Pristine references captured at each file's own module top level, before any later-loaded code can run; used exclusively from then on. Verified with a regression test that monkeypatches `crypto.verify`/`crypto.createHash` *after* the module has loaded and confirms tamper detection, valid-signature acceptance, and hot-reload change-detection are all unaffected. |
+| Dev key: `scripts/dev-private-key.pem` committed to the public repo | HIGH | ✅ Fixed | Deleted from `HEAD`; `DEV_PUBLIC_KEY_PEM` rotated to a freshly generated public key whose private half has never been committed anywhere. History was **not** rewritten (separate, explicit decision) — see "Policy signing key management" below for the full revocation record. |
+| F-63: Quarantine Proxy's untrapped `defineProperty` throws on subsequent enumeration | MEDIUM | ✅ Fixed | Added a `defineProperty` trap matching the pretend-success pattern already used by every other trap in `quarantine.js`; never forwards to the real target, so `ownKeys`'s "no keys" invariant stays satisfied. `preventExtensions`/`isExtensible` deliberately left untrapped — confirmed by direct testing that the same pretend pattern breaks the Proxy invariant for those two specifically. |
+| F-43/F-68: `CREDENTIAL_EXFILTRATION` and related behavioral rules false-positive on large bundled files | HIGH | ✅ Fixed | `behavior-tracker.js`'s multi-signal correlation rules (`CREDENTIAL_EXFILTRATION` — both the sensitive-path and `.npmrc` variants —, `DYNAMIC_CODE_EXEC_CHAIN`, `OBFUSCATED_CODE_EXECUTION`, `REMOTE_FETCH_EXEC`) now require their constituent signals to co-occur within a 200-character window, not just appear anywhere in the same file. Confirmed on the real `vite@8.2.1`/`astro` false positive and validated against a 15,728-file real-world corpus (0 false positives) with 100% true-positive retention. See `docs/THREAT-COVERAGE.md` §2 for details. |
+| F-58: `require.cache` pre-seeding bypasses `Module.prototype._compile` scanning | HIGH | ✅ Fixed (specific mechanism only — see scope note) | `Module._load` is now wrapped with a three-state verified/unknown/blocked model; policy-controlled via `FW_CACHE_POLICY=block\|audit\|allow` (default `block` under `FW_MODE=enforce`, `audit` otherwise). **Scope:** this closes the specific mechanism — a forged or bare-object `require.cache` entry bypassing `_compile` — confirmed with a live repro before the fix and a full test matrix after. It does **not** claim to close the broader same-process ceiling: code already running inside a protected process that finds some other way to install or return forged state, not via `require.cache`, is a different, broader problem this change does not address. |
+| PR6: opt-in `Module.prototype._compile` freeze | — | Shipped (opt-in) | `FW_HARDEN_MODULE_PRIMITIVES=1`, default-off — complementary hardening against the classic `_compile` monkeypatch specifically; does nothing against `require.cache` poisoning (F-58's target). Not default-on for the same compatibility reasons `FW_FREEZE_PROTOTYPES` already isn't. |
+
 ### Policy signing key management
 
-The dev key pair shipped in `scripts/` is for **development and CI only**. Before deploying to production:
+There is **no shared dev private key committed to this repository.** `DEV_PUBLIC_KEY_PEM` in
+`packages/fw-agent/src/policy-watcher.js` is a public key with no matching private key held by
+anyone — it exists only so `policy.signed.json` fixtures the project ships (empty-rules demo
+files) can carry a valid signature, and so `FW_ALLOW_DEV_POLICY_KEY=1` has something concrete to
+gate. Before deploying to production:
 
-1. Run `node scripts/generate-policy-key.js` and save the private key securely (never commit it).
-2. Replace `DEV_PUBLIC_KEY_PEM` in `packages/fw-agent/src/policy-watcher.js` with your new public key.
-3. Regenerate `.helios-baseline`: `node -e "const c=require('crypto'),f=require('fs'),files=['index.js','src/detector.js','src/behavior-tracker.js','src/policy-watcher.js','src/quarantine.js','src/audit-log.js','src/policy.js'],h=c.createHash('sha256');files.forEach(x=>h.update(f.readFileSync(x)));f.writeFileSync('.helios-baseline',h.digest('hex')+'\n');"` (from `packages/fw-agent/`).
+1. Run `node scripts/generate-policy-key.js` and keep the private key on your own machine —
+   never commit it, never share it, and never write it to a path inside this repository.
+2. Either set `FW_POLICY_PUBKEY` to your new public key at runtime (recommended — no source
+   change needed), or replace `DEV_PUBLIC_KEY_PEM` in `packages/fw-agent/src/policy-watcher.js`
+   for your own fork.
+3. If you edited `policy-watcher.js`, regenerate `.helios-baseline`: `npm run baseline` (from
+   the repo root). Do not hand-roll the hashing snippet — `scripts/generate-baseline.js` is the
+   single source of truth for the hashed file list and hashing method; see `CONTRIBUTING.md`.
 4. Sign your policy rules: `node scripts/sign-policy.js your-private-key.pem rules.json`.
+
+#### Key revocation record (F-62, 2026-08-20)
+
+`scripts/dev-private-key.pem` — a shared development/CI private key — was committed to this
+public repository from the project's early history through the v0.5.0 release. Its matching
+public key was hardcoded as `DEV_PUBLIC_KEY_PEM`. Anyone with read access to the repository
+(or its git history) could use it to forge a validly-signed `policy.signed.json`; the only
+guard was the `FW_ALLOW_DEV_POLICY_KEY=1` opt-in (required by `PolicyWatcher.start()`) and the
+`NODE_ENV=production` check in `assertProductionKeyConfig()`, both of which depend on correct
+deployment configuration rather than on the key itself being untrusted.
+
+As part of this hardening pass:
+
+- `scripts/dev-private-key.pem` was **deleted from `HEAD`**. `DEV_PUBLIC_KEY_PEM` was rotated to
+  a freshly generated public key whose private counterpart has never been committed anywhere,
+  in this repository or elsewhere, and never will be.
+- The old private key **remains recoverable from this repository's git history** — history was
+  deliberately not rewritten in this change (a separate, explicit decision, not an oversight).
+  Treat every signature produced by the old key as **permanently untrusted**: a
+  freshly-rotated agent rejects it regardless of `FW_ALLOW_DEV_POLICY_KEY`, because it no longer
+  matches the bundled `DEV_PUBLIC_KEY_PEM` or any key an operator would configure via
+  `FW_POLICY_PUBKEY`.
+- Production deployments were already required to set `FW_POLICY_PUBKEY` explicitly
+  (`assertProductionKeyConfig()` refuses to start under `NODE_ENV=production` against the
+  bundled dev key without it); this rotation does not change that contract, it only closes the
+  exposure window for anyone who was relying on the bundled key outside of local dev/CI.

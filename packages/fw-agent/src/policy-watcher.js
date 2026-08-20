@@ -8,8 +8,10 @@
 // An invalid or missing signature immediately triggers emergency lockdown.
 // A valid signature with changed rules triggers hot-reload via onValidChange().
 //
-// To sign a policy file:
-//   node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+// To sign a policy file, generate your own local dev key first (never commit it — see
+// SECURITY.md "Policy signing key management"), then sign with it:
+//   node scripts/generate-policy-key.js > /tmp/my-dev-key.txt   # keep the private key local-only
+//   node scripts/sign-policy.js <your-private-key.pem> rules.json policy.signed.json
 //
 // To generate a production key pair:
 //   node scripts/generate-policy-key.js
@@ -17,14 +19,41 @@
 const fs = require('fs');
 const crypto = require('crypto');
 
+// ── F-62: pristine crypto method capture ──────────────────────────────────────
+// require('crypto') returns the SAME cached module object to every caller in the process —
+// including any allowed code that runs after this module loads. crypto.verify(...) was
+// previously called fresh (via `crypto.verify`) on every signature check, so a monkeypatch on
+// crypto.verify installed by allowed code AFTER this module has already loaded defeats every
+// future signature verification, including the ones this file performs. Capturing the
+// functions here, at module top level, before any later-loaded code has a chance to run,
+// means a later `crypto.verify = () => true` mutates the crypto module's OWN property, not
+// this local binding — so this file's checks keep using the real implementation regardless.
+//
+// crypto.verify is the actual trust decision (does this policy carry a genuine signature) and
+// is always captured. crypto.createHash has two call sites in this file:
+//   - _hashRules(): change-detection only ("not security-critical — just diffing", see below).
+//     Every tick still independently re-verifies the signature via pristineVerify before
+//     _hashRules ever runs, so a forged createHash here cannot smuggle unsigned/tampered rules
+//     past the trust gate. It CAN, if forced to collide, suppress onValidChange from firing for
+//     a validly re-signed policy (a staleness/downgrade-prevention concern, not a forgery one).
+//     Captured anyway for defense-in-depth since it costs nothing and removes the ambiguity.
+const pristineVerify = crypto.verify;
+const pristineCreateHash = crypto.createHash;
+
 const WATCH_INTERVAL_MS = 60_000;
 
 // ── Dev/CI public key ─────────────────────────────────────────────────────────
-// Generated with: node scripts/generate-policy-key.js
 // PRODUCTION: replace with your own key and regenerate .helios-baseline.
-// The private key is in scripts/dev-private-key.pem — DO NOT deploy that file.
+//
+// F-62 dev-key rotation: this replaces a public key whose matching private key
+// (scripts/dev-private-key.pem) was committed to this public repository — see SECURITY.md
+// "Policy signing key management" for the revocation record. The matching private key for
+// THIS public key has never been committed anywhere and never will be: there is no shared
+// dev private key any more. Generate your own with `node scripts/generate-policy-key.js`,
+// keep it local-only, and either set FW_POLICY_PUBKEY to your own public key (recommended —
+// this is the real production path) or replace the constant below for your own fork.
 const DEV_PUBLIC_KEY_PEM = `-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEANejKx1KxfXVk5B0UzI2Cp3XO9hmy6nIXTAhsW0bhlFo=
+MCowBQYDK2VwAyEAFz7lD+f865pDlKeKLHtWDJk6Gs/C6SXHR8xA9tfE0As=
 -----END PUBLIC KEY-----`;
 
 // Allow the public key to be overridden via environment variable for production deployments.
@@ -32,8 +61,10 @@ MCowBQYDK2VwAyEANejKx1KxfXVk5B0UzI2Cp3XO9hmy6nIXTAhsW0bhlFo=
 const PUBLIC_KEY_PEM = process.env.FW_POLICY_PUBKEY || DEV_PUBLIC_KEY_PEM;
 
 // F-02a: true when we're verifying with the bundled dev key (fallback, or explicitly set).
-// The matching private key (scripts/dev-private-key.pem) is committed to the public repo,
-// so any policy file signed with it is trivially forgeable.
+// No matching private key is committed anywhere in this repo (F-62 rotation, see SECURITY.md)
+// -- but this constant is still public by nature (it's a public key, meant to be shared), and
+// a deployer's own locally-generated dev key is not distinguishable from it at this layer, so
+// the same treat-it-as-unverified-for-production posture still applies: still gated below.
 // Fail loud in start() unless explicitly opted in via FW_ALLOW_DEV_POLICY_KEY=1.
 const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim();
 
@@ -134,7 +165,7 @@ class PolicyWatcher {
 
     let valid = false;
     try {
-      valid = crypto.verify(null, payload, { key: PUBLIC_KEY_PEM, format: 'pem', type: 'spki' }, sigBuffer);
+      valid = pristineVerify(null, payload, { key: PUBLIC_KEY_PEM, format: 'pem', type: 'spki' }, sigBuffer);
     } catch (e) {
       console.error('[PolicyWatcher] Signature verification error:', e.message);
       return null;
@@ -160,7 +191,7 @@ class PolicyWatcher {
    * Hash the rules for change detection (not security-critical — just diffing).
    */
   _hashRules(rules) {
-    return crypto.createHash('sha256').update(JSON.stringify(rules)).digest('hex');
+    return pristineCreateHash('sha256').update(JSON.stringify(rules)).digest('hex');
   }
 
   /**

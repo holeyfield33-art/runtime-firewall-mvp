@@ -17,6 +17,9 @@ policy.signed.json.baseline
 # IDE/Editor noise
 .vscode/
 .idea/
+
+# Claude Code harness-local state (worktrees for background subagents, etc.) — not project source
+.claude/
 packages/fw-agent/*.tgz
 fw-agent-slowest.json
 *-slowest.json

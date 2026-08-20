@@ -157,6 +157,114 @@ function matchesAny(content, patterns) {
   return patterns.some(p => p.test(content));
 }
 
+// ── F-43/F-68: proximity-based correlation ──────────────────────────────────────────────────
+// A multi-signal correlation rule (e.g. "reads a credential path AND makes a network call")
+// used to check whole-file boolean flags with no requirement that the two things actually
+// happen near each other. That is correct for a small hand-written malicious module (where
+// everything is naturally close together) but false-positives hard on large bundled/minified
+// files: a single-file rollup/webpack chunk routinely contains a credential-path-shaped string
+// literal, a network call, an eval(), a base64 decode, and a child_process reference SOMEWHERE
+// in tens or hundreds of KB of unrelated legitimate code, with no relationship between them at
+// all. Confirmed on the real vite@8.2.1 dist/node/chunks/node.js chunk (1.35MB): a `.npmrc`
+// reference and an unrelated `host:` object key are a coincidental 312 characters apart, while
+// the actual network-egress call is 68,519 characters from either -- and the same file
+// independently trips CREDENTIAL_EXFILTRATION (via the unrelated sensitivePath path), remote
+// fetch-and-exec, and decode-then-eval, each pairing signals tens of thousands of characters
+// apart. A window-based proximity requirement -- do the SPECIFIC signals a rule combines all
+// occur within some bounded span of each other -- keeps the same small hand-written malicious
+// snippets caught (their signals are inherently adjacent) while no longer treating "this string
+// exists somewhere in a 1MB bundle" as evidence of anything.
+//
+// Character distance (not line distance) is the chosen primitive: minified/bundled files are
+// frequently near-single-line, where a line-based window would be meaningless (the entire
+// 1.35MB vite chunk is a handful of lines), while character distance degrades gracefully
+// regardless of formatting.
+//
+// PROXIMITY_WINDOW_CHARS was chosen empirically, not by intuition: swept 50/100/200/400/800/
+// 1200/2000 characters against (a) the red-team suite (red-team/run.js: 125 malicious fixtures +
+// 26 benign controls at sweep time) plus the fw-control adversarial suite (52 cases at sweep
+// time), and (b) a real false-positive corpus: every package in corpus-top100.json (100
+// packages, ~1100 with transitive deps, 15,728 .js/.mjs/.cjs files) plus vite@8.2.1 and
+// astro@7.2.4 at the exact versions that previously false-positived. A new synthetic
+// npmrc-read-token-exfiltration true positive (adversarial.test.js, "F-43/F-68: new TP") and a
+// new benign control mirroring the exact vite npmrc/host:/far-egress shape
+// (benign-controls-extended.js, "benign-bundled-npmrc-host-far-egress") were added after the
+// sweep and re-confirmed passing at the selected window -- the corpus below reflects those
+// (125 malicious + 27 benign red-team; 53 adversarial).
+//
+//   window(chars)  red-team        adversarial    real-corpus FP files (of 15,728)
+//   50             FAIL (2 new bypasses, exfil-passwd-createReadStream +
+//                   sc-fetch-eval-generic-host missed; 5 adversarial cases also regress)
+//   100            FAIL (same 2 red-team bypasses)                        0
+//   200            PASS                            52/52                 0   <- selected
+//   400            PASS                            52/52                 1  (babel-core lib/api/browser.js,
+//                                                                             REMOTE_FETCH_EXEC, distance 337)
+//   800            PASS                            52/52                 1  (same)
+//   1200           PASS                            52/52                 1  (same)
+//   2000           PASS                            52/52                 2  (+ a second, unrelated
+//                                                                             DYNAMIC_CODE_EXEC_CHAIN pairing)
+//
+// 200 is the smallest tested window that preserves 100% of required true positives while
+// eliminating every observed false positive. Below 200, two genuine hand-written attack
+// fixtures whose constituent signals sit 100-200 characters apart (a credential read piped
+// into a stream a few statements later, and a fetch-then-eval separated by a handful of
+// intervening lines) stop being caught. At 400 and above, babel-core's legitimate (if risky)
+// browser API -- which fetches a remote script via XHR and executes it with `new Function(...)`
+// 337 characters later, in `lib/api/browser.js` -- starts false-positiving again; at 2000, a
+// second, unrelated pairing in the real corpus does too. The smallest false-positive-causing
+// distance found anywhere in the real corpus (excluding babel-core's genuine fetch-and-eval
+// pattern) was 13,236 characters -- 200 sits two orders of magnitude below that with room to
+// spare, while still safely above every true-positive distance actually observed (worst case:
+// the sc-fetch-eval-generic-host fixture at ~150 characters).
+const PROXIMITY_WINDOW_CHARS = 200;
+
+// Collect every match START INDEX (character offset into `content`) for every pattern in
+// `patterns`, regardless of whether each pattern already carries a global flag.
+function matchAllPositions(content, patterns) {
+  const positions = [];
+  for (const p of patterns) {
+    const flags = p.flags.includes('g') ? p.flags : p.flags + 'g';
+    const re = new RegExp(p.source, flags);
+    let m;
+    while ((m = re.exec(content)) !== null) {
+      positions.push(m.index);
+      if (re.lastIndex === m.index) re.lastIndex++; // guard against zero-length matches
+    }
+  }
+  return positions;
+}
+
+// Does there exist a contiguous character span of at most `windowChars` that contains at least
+// one position from EVERY group in `positionGroups`? Positions are always measured against the
+// same coordinate space (raw module `content`) across every signal, so a rule combining three
+// signal types requires all three to genuinely co-occur, not just any two of them.
+//
+// Standard "smallest window containing every group" two-pointer sweep, stopped at the first
+// window that satisfies the requirement (the caller only needs existence, not the minimum).
+function withinProximity(positionGroups, windowChars) {
+  if (positionGroups.some(g => g.length === 0)) return false;
+  const points = [];
+  positionGroups.forEach((positions, groupIndex) => {
+    for (const pos of positions) points.push([pos, groupIndex]);
+  });
+  points.sort((a, b) => a[0] - b[0]);
+
+  const counts = new Array(positionGroups.length).fill(0);
+  let filled = 0;
+  let left = 0;
+  for (let right = 0; right < points.length; right++) {
+    const rightGroup = points[right][1];
+    if (counts[rightGroup]++ === 0) filled++;
+    while (points[right][0] - points[left][0] > windowChars) {
+      const leftGroup = points[left][1];
+      if (--counts[leftGroup] === 0) filled--;
+      left++;
+    }
+    if (filled === positionGroups.length) return true;
+  }
+  return false;
+}
+
 // Literal substrings that are a superset of all SIGNAL_PATTERN regexes.
 // Used as a fast pre-screener: if none appear in content, all signal checks are
 // guaranteed false and the expensive scanSrc normalization + regex loop can be
@@ -297,10 +405,13 @@ class BehaviorTracker {
 
     // Hardcoded-URL call sites, e.g. fetch('http://evil.example/...'). Extracted (not just
     // matched) so the escalation rule below can tell a hardcoded exfil host apart from a
-    // hardcoded reference to the real npm registry (see hardcodedEgressNonRegistry).
+    // hardcoded reference to the real npm registry (see hardcodedEgressNonRegistry). Position
+    // captured alongside the URL so proximity checks below can use it too.
     const hardcodedEgressUrls = [];
+    const hardcodedEgressCallSites = [];
     for (const m of content.matchAll(HARDCODED_EGRESS_CALL)) {
       hardcodedEgressUrls.push(m[1]);
+      hardcodedEgressCallSites.push({ url: m[1], pos: m.index });
     }
 
     const signals = {
@@ -327,25 +438,63 @@ class BehaviorTracker {
 
     const found = [];
 
+    // F-43/F-68: every whole-file multi-signal correlation below now additionally requires the
+    // combined signals to occur within PROXIMITY_WINDOW_CHARS characters of each other (see the
+    // comment on withinProximity() above) -- not just "each signal appears SOMEWHERE in this
+    // file". Position arrays are computed lazily and cached per call, since several rules below
+    // reuse the same signal's positions (dynamicCode and networkEgress each feed three rules).
+    let _dynamicCodePositions = null;
+    const dynamicCodePositions = () => _dynamicCodePositions || (_dynamicCodePositions = matchAllPositions(content, SIGNAL_PATTERNS.DYNAMIC_CODE));
+    let _networkEgressPositions = null;
+    const networkEgressPositions = () => _networkEgressPositions || (_networkEgressPositions = matchAllPositions(content, SIGNAL_PATTERNS.NETWORK_EGRESS));
+    const hardcodedEgressNonRegistryPositions = () => hardcodedEgressCallSites
+      .filter(c => !/^https?:\/\/registry\.npmjs\.org\b/i.test(c.url))
+      .map(c => c.pos);
+
     // Intra-module rule: credential file read OR sensitive path + network egress → CRITICAL exfiltration.
     // Bare process.env reads are intentionally excluded here (F-16: false-positive on axios, dotenv, etc.)
     // and handled by the ENV_NETWORK_EGRESS WARN rule below.
     if (signals.sensitivePath && signals.networkEgress) {
-      found.push({
-        rule: 'CREDENTIAL_EXFILTRATION',
-        severity: 'CRITICAL',
-        description: 'Module reads sensitive credentials and makes network calls',
-      });
+      const proximate = withinProximity([
+        matchAllPositions(content, SIGNAL_PATTERNS.SENSITIVE_PATH),
+        networkEgressPositions(),
+      ], PROXIMITY_WINDOW_CHARS);
+      if (proximate) {
+        found.push({
+          rule: 'CREDENTIAL_EXFILTRATION',
+          severity: 'CRITICAL',
+          description: 'Module reads sensitive credentials and makes network calls',
+        });
+      }
     }
 
     // Intra-module rule: .npmrc read + network egress. CRITICAL when there's a concrete
     // theft signal -- an actual token/password field reference, an explicit host override, or
-    // a hardcoded destination that isn't the real npm registry. A hardcoded call-site URL that
-    // IS registry.npmjs.org (some legit tools hardcode it instead of building it from config)
-    // is downgraded to WARN rather than blocked, same as the config-built-URL case -- the
-    // registry host itself isn't a theft signal, only an unusual one.
+    // a hardcoded destination that isn't the real npm registry -- AND all three (the .npmrc
+    // read, the network call, and the theft signal itself) occur within the proximity window of
+    // each other. A hardcoded call-site URL that IS registry.npmjs.org (some legit tools
+    // hardcode it instead of building it from config) is downgraded to WARN rather than
+    // blocked, same as the config-built-URL case -- the registry host itself isn't a theft
+    // signal, only an unusual one. Not-proximate (theft signal present but far from the actual
+    // egress call, or absent entirely) downgrades to the same WARN rather than being dropped
+    // silently -- this is exactly the vite@8.2.1 false positive: npmrc and a coincidental
+    // `host:` object key sit 312 characters apart, but the real network call is 68,519
+    // characters from either.
     if (signals.npmrcRead && signals.networkEgress) {
-      if (signals.npmrcToken || signals.hostOption || signals.hardcodedEgressNonRegistry) {
+      const theftSignalPresent = signals.npmrcToken || signals.hostOption || signals.hardcodedEgressNonRegistry;
+      let proximate = false;
+      if (theftSignalPresent) {
+        const theftPositions = []
+          .concat(signals.npmrcToken ? matchAllPositions(content, SIGNAL_PATTERNS.NPMRC_TOKEN) : [])
+          .concat(signals.hostOption ? matchAllPositions(content, SIGNAL_PATTERNS.HOST_OPTION) : [])
+          .concat(signals.hardcodedEgressNonRegistry ? hardcodedEgressNonRegistryPositions() : []);
+        proximate = withinProximity([
+          matchAllPositions(content, SIGNAL_PATTERNS.NPMRC_READ),
+          networkEgressPositions(),
+          theftPositions,
+        ], PROXIMITY_WINDOW_CHARS);
+      }
+      if (proximate) {
         found.push({
           rule: 'CREDENTIAL_EXFILTRATION',
           severity: 'CRITICAL',
@@ -361,20 +510,33 @@ class BehaviorTracker {
     }
 
     // Intra-module rule: infra/browser credential store read + network egress WITH a deliberate
-    // exfil destination → CRITICAL. The destination gate (hardcoded non-registry host or explicit
-    // {host:...} override) is what separates theft from legitimate k8s/docker/browser tooling,
-    // which reads these files and connects to a config-derived (not hardcoded-attacker) endpoint.
+    // exfil destination, all within the proximity window → CRITICAL. The destination gate
+    // (hardcoded non-registry host or explicit {host:...} override) is what separates theft from
+    // legitimate k8s/docker/browser tooling, which reads these files and connects to a
+    // config-derived (not hardcoded-attacker) endpoint.
     if (signals.sensitiveConfigPath && signals.networkEgress &&
         (signals.hardcodedEgressNonRegistry || signals.hostOption)) {
-      found.push({
-        rule: 'CREDENTIAL_EXFILTRATION',
-        severity: 'CRITICAL',
-        description: 'Module reads an infrastructure/browser credential store and sends it to a hardcoded or overridden destination',
-      });
+      const theftPositions = []
+        .concat(signals.hardcodedEgressNonRegistry ? hardcodedEgressNonRegistryPositions() : [])
+        .concat(signals.hostOption ? matchAllPositions(content, SIGNAL_PATTERNS.HOST_OPTION) : []);
+      const proximate = withinProximity([
+        matchAllPositions(content, SIGNAL_PATTERNS.SENSITIVE_CONFIG_PATH),
+        networkEgressPositions(),
+        theftPositions,
+      ], PROXIMITY_WINDOW_CHARS);
+      if (proximate) {
+        found.push({
+          rule: 'CREDENTIAL_EXFILTRATION',
+          severity: 'CRITICAL',
+          description: 'Module reads an infrastructure/browser credential store and sends it to a hardcoded or overridden destination',
+        });
+      }
     }
 
     // Intra-module rule: bare env read + network egress → WARN only (common in normal apps).
     // Escalates to CRITICAL only if a sensitive credential path is also detected (handled above).
+    // WARN-tier never blocks (see detector.js), so this is intentionally left whole-file: it
+    // carries no false-positive-block risk the way the CRITICAL/HIGH rules below do.
     if (signals.envRead && signals.networkEgress && !signals.sensitiveRead && !signals.sensitivePath) {
       found.push({
         rule: 'ENV_NETWORK_EGRESS',
@@ -383,45 +545,65 @@ class BehaviorTracker {
       });
     }
 
-    // Intra-module rule: dynamic code generation + process execution → code injection chain
+    // Intra-module rule: dynamic code generation + process execution, within the proximity
+    // window → code injection chain.
     if (signals.dynamicCode && signals.processExec) {
-      found.push({
-        rule: 'DYNAMIC_CODE_EXEC_CHAIN',
-        severity: 'CRITICAL',
-        description: 'Module generates code dynamically and executes system processes',
-      });
+      const proximate = withinProximity([
+        dynamicCodePositions(),
+        matchAllPositions(content, SIGNAL_PATTERNS.PROCESS_EXEC),
+      ], PROXIMITY_WINDOW_CHARS);
+      if (proximate) {
+        found.push({
+          rule: 'DYNAMIC_CODE_EXEC_CHAIN',
+          severity: 'CRITICAL',
+          description: 'Module generates code dynamically and executes system processes',
+        });
+      }
     }
 
-    // Intra-module rule: decode an encoded blob + evaluate it as code → the classic
-    // "unpack an opaque payload, then eval/Function it" obfuscation (F-31). Bare eval and
-    // Buffer.from are WARN-only (F-20 — both appear in legitimate build tools), so neither
-    // primitive blocks alone; it's the *decode-then-execute* combination that is the strong
-    // malicious signal. HIGH → hard block in index.js (detector.js escalates HIGH to a
+    // Intra-module rule: decode an encoded blob + evaluate it as code, within the proximity
+    // window → the classic "unpack an opaque payload, then eval/Function it" obfuscation (F-31).
+    // Bare eval and Buffer.from are WARN-only (F-20 — both appear in legitimate build tools), so
+    // neither primitive blocks alone; it's the *decode-then-execute* combination that is the
+    // strong malicious signal. HIGH → hard block in index.js (detector.js escalates HIGH to a
     // non-warnOnly block detection). This closes the base64→eval gap where a comment-free
     // `Buffer.from(b64,'base64').toString(); eval(x)` previously fell through as OBSERVE.
     if (signals.dynamicCode && signals.codeDecode) {
-      found.push({
-        rule: 'OBFUSCATED_CODE_EXECUTION',
-        severity: 'HIGH',
-        description: 'Module decodes an encoded blob (base64/hex) and evaluates it as code',
-      });
+      const proximate = withinProximity([
+        dynamicCodePositions(),
+        matchAllPositions(content, SIGNAL_PATTERNS.CODE_DECODE),
+      ], PROXIMITY_WINDOW_CHARS);
+      if (proximate) {
+        found.push({
+          rule: 'OBFUSCATED_CODE_EXECUTION',
+          severity: 'HIGH',
+          description: 'Module decodes an encoded blob (base64/hex) and evaluates it as code',
+        });
+      }
     }
 
-    // Intra-module rule: network egress + dynamic code generation → fetch-and-execute. The
-    // "download a second stage from a remote host and eval/new Function it" pattern (red-team
-    // sc-fetch-eval-generic-host / sc-githubusercontent-eval / sc-transfer-sh /
-    // sc-s3-remote-config-eval). Both signals are required and neither blocks alone (bare eval is
-    // WARN-only per F-20; bare fetch is benign), so this only fires when a module both reaches the
-    // network AND evaluates code — a combination that is implausible in reputable packages.
-    // HIGH → hard block. Kept below CREDENTIAL_EXFILTRATION/OBFUSCATED so a payload that already
-    // matched a more specific rule is not double-reported here (dedup is not required, but the
-    // ordering keeps the most descriptive rule first).
+    // Intra-module rule: network egress + dynamic code generation, within the proximity window
+    // → fetch-and-execute. The "download a second stage from a remote host and eval/new
+    // Function it" pattern (red-team sc-fetch-eval-generic-host / sc-githubusercontent-eval /
+    // sc-transfer-sh / sc-s3-remote-config-eval). Both signals are required and neither blocks
+    // alone (bare eval is WARN-only per F-20; bare fetch is benign), so this only fires when a
+    // module both reaches the network AND evaluates code, close together — a combination that is
+    // implausible in reputable packages. HIGH → hard block. Kept below
+    // CREDENTIAL_EXFILTRATION/OBFUSCATED so a payload that already matched a more specific rule
+    // is not double-reported here (dedup is not required, but the ordering keeps the most
+    // descriptive rule first).
     if (signals.networkEgress && signals.dynamicCode) {
-      found.push({
-        rule: 'REMOTE_FETCH_EXEC',
-        severity: 'HIGH',
-        description: 'Module makes a network request and evaluates code at runtime (remote fetch-and-execute)',
-      });
+      const proximate = withinProximity([
+        networkEgressPositions(),
+        dynamicCodePositions(),
+      ], PROXIMITY_WINDOW_CHARS);
+      if (proximate) {
+        found.push({
+          rule: 'REMOTE_FETCH_EXEC',
+          severity: 'HIGH',
+          description: 'Module makes a network request and evaluates code at runtime (remote fetch-and-execute)',
+        });
+      }
     }
 
     // Standalone rule: dynamic require with non-literal path → module injection risk
