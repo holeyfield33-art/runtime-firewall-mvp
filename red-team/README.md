@@ -60,7 +60,7 @@ A machine-readable `results/redteam-summary.json` is written on every run
 
 ## Corpus
 
-**151 payloads** across 6 threat categories (125 malicious, 26 benign), each
+**152 payloads** across 6 threat categories (125 malicious, 27 benign), each
 category split into a core catalog and an `-extended` catalog under `corpus/`,
 all aggregated by `corpus/index.js` (which validates every entry and rejects
 duplicate ids):
@@ -72,7 +72,7 @@ duplicate ids):
 | `credential-exfil`  |  28   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require evasions |
 | `dynamic-code-exec` |  30   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions |
 | `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
-| `benign-controls`   |  24   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers — must **not** block |
+| `benign-controls`   |  25   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress — must **not** block |
 
 Files: `corpus/<category>.js` (core) and `corpus/<category>-extended.js` (the
 100+ added variants).
@@ -102,7 +102,7 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 ## Known gaps this suite documents
 
 The current run catches **95/125** malicious payloads (**76%**) with **zero false
-positives** on the 26 benign controls, after two hardening phases (see
+positives** on the 27 benign controls, after two hardening phases (see
 `docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline before Phase 1
 was 69/125 ≈ 55%). The remaining **30** documented bypasses are fundamental
 limits of static/signature analysis and require runtime/AST instrumentation

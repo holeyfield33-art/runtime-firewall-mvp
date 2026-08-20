@@ -8,6 +8,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Cache-substitution enforcement — `require.cache` pre-seeding (F-58)**: `Module._load()` (the
+  real `require()` entry point) checks `require.cache` *before* `Module.prototype._compile` runs,
+  so wrapping only `_compile` left a gap — allowed code could insert a forged module (or a bare
+  `{ exports }` object) directly into `require.cache[resolvedPath]` and `require()` returned the
+  forged exports unscanned. `Module._load` is now wrapped with a three-state
+  verified/unknown/blocked model, policy-controlled via `FW_CACHE_POLICY=block|audit|allow`
+  (default `block` under `FW_MODE=enforce`, `audit` otherwise). Scope: closes `require.cache`
+  pre-seeding that bypasses the scan path; does **not** close reassignment of the loader functions
+  themselves — see F-70 below.
+
+- **Scan CommonJS loaded through the ESM loader (F-79)**: `import x from 'some-cjs-package'` uses
+  Node's CJS-through-ESM interop — the ESM `load` hook fires with `result.format === 'commonjs'`,
+  `Module._cache` is populated, but `Module.prototype._compile` is never called. The hook
+  previously early-returned for that case, which was **both** a detection gap (a malicious CJS
+  module imported via ESM ran unscanned — blocked via `require()`, free via `import`) and a false
+  positive (the later `require()` of the same package — e.g. `vite`/`astro` referencing
+  `picomatch` as both `import` and `__require` — hit F-58's cache gate as "unverified" and was
+  refused under `FW_CACHE_POLICY=block`). The interop-CJS source is now run through the **same**
+  scan-and-policy path as `_compile` (shared implementation) and only then marked verified,
+  closing both. Verified with a true-positive test (malicious CJS via `import` now blocked), a
+  false-positive test (benign CJS imported-then-required loads clean under `block`), the unchanged
+  cache-poisoning matrix, a full red-team run (0 regressions / 0 false positives), and a
+  51-package popular-package soak under `FW_CACHE_POLICY=block` (0 false positives).
+
+- **Pristine crypto method capture + dev-key rotation (F-62)**: `crypto.verify` / `crypto.createHash`
+  are captured at each file's module top level, before any later-loaded code can monkeypatch the
+  shared `crypto` module object, and used exclusively thereafter. The committed dev private key
+  `scripts/dev-private-key.pem` was **deleted from `HEAD`** and `DEV_PUBLIC_KEY_PEM` rotated to a
+  public key whose private half was never committed; there is no shared dev private key any more
+  (see `SECURITY.md` → "Key revocation record").
+
+- **Pristine byte-building primitives for policy verification (F-71)**: `canonicalPayload()` in
+  `policy-watcher.js` builds the exact bytes the Ed25519 signature is checked against, using
+  ambient globals (`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`).
+  Monkeypatching any of them after load could decouple the bytes verified from the `rules` object
+  applied, letting a stale-but-genuine signature (e.g. one issued for an empty-rules policy)
+  validate forged rules. All four are now captured pristine at module load; a regression test
+  monkeypatches each after `require()` and confirms the forged policy stays rejected.
+
+- **Read-only enforcement/telemetry state (F-57, F-74)**: `policyMap` and `quarantinedModules` are
+  no longer exported as live mutable `Map`/`Set` — replaced with read-only query functions
+  (`hasPolicy`, `getPolicyDecision`, `isQuarantined`) so allowed code cannot mutate live
+  enforcement state (F-57). `compileMetrics` is likewise no longer exported as the live object;
+  a `getCompileMetrics()` accessor returns a frozen snapshot (F-74).
+
+- **Quarantine Proxy `defineProperty` trap (F-63)**: added a pretend-success `defineProperty` trap
+  matching the pattern already used by the other traps, so a subsequent enumeration no longer
+  throws on a quarantined module's proxy.
+
+- **Same-process loader-reassignment ceiling disclosed (F-70)**: `Module._load` (F-58's own
+  enforcement point), `Module.prototype._compile`, and `module.registerHooks()` are writable by
+  same-privilege code, which can capture the wrapped version and install a replacement that skips
+  the check. Freezing them is neither cheap nor low-risk and does not escape the same-privilege
+  domain, so it is **disclosed rather than "fixed"** — this is the inherent same-process ceiling,
+  not a closable gap. See `SECURITY.md` → "F-70" and the strengthened same-process-ceiling note in
+  `README.md`.
+
+### Changed
+
+- **Multi-signal behavioral correlation is now structural and padding-resistant (F-43/F-68 + F-69,
+  F-73)**: the correlation rules (`CREDENTIAL_EXFILTRATION` sensitive-path/`.npmrc`/config-store
+  variants, `DYNAMIC_CODE_EXEC_CHAIN`, `OBFUSCATED_CODE_EXECUTION`, `REMOTE_FETCH_EXEC`) no longer
+  fire on whole-file signal co-occurrence — they require the constituent signals to be genuinely
+  correlated, eliminating false positives on large bundled/minified files (confirmed on the real
+  `vite`/`astro` chunk and a multi-thousand-file real-corpus sweep, 0 false positives, 100%
+  true-positive retention). Correlation was first a fixed 200-character window (F-43/F-68); because
+  any fixed character distance is defeatable by inserting that many characters of comment/whitespace
+  padding between a payload's halves (F-69), it is now **separator distance** — the number of
+  statement/block separators (`; { }`) between signals, measured on a length-preserving sanitized
+  view of the source. Comment and whitespace padding contain no separators, so correlation is
+  invariant to arbitrarily large such padding; only real intervening code (≥5 statements at the
+  selected threshold) breaks it, which is documented as the honest evasion limit. Position sources
+  were also made consistent with each signal's match source (F-73), so a comment-only mention a
+  boolean signal correctly ignores can no longer contribute a spurious position.
+
 ## [0.5.0] - 2026-08-18
 
 ### Security
