@@ -129,4 +129,33 @@ check('FW_REQUIRE_ESM_COVERAGE unset (default) leaves ESM-unavailable behavior u
   assert.strictEqual(res.status, 0, 'agent must start cleanly regardless of registerHooks() availability when the flag is unset: ' + res.status + '\nstderr:\n' + res.stderr);
 });
 
+// ── F-79: CommonJS loaded THROUGH the ESM loader (import of a CJS package) ────────────────────
+// `import x from 'cjs-pkg'` uses Node's CJS-through-ESM interop: the load hook fires with
+// result.format === 'commonjs', Module._cache is populated, but Module.prototype._compile is never
+// called. The load hook now runs that interop-CJS source through the SAME scan-and-policy path as
+// _compile and only THEN marks it verified. This closes a detection gap (malicious CJS imported via
+// ESM previously ran unscanned) and a false positive (the later require() of the same CJS package
+// was refused by the F-58 cache gate as an "unverified" entry -- the real vite/astro-picomatch FP).
+// The scan path lives entirely in the registerHooks() load hook, so these assertions are gated on
+// its availability; below the floor, ESM interception is a documented UNSUPPORTED bypass anyway.
+check(REGISTER_HOOKS_AVAILABLE
+  ? 'F-79 TP: malicious CJS imported via ESM (interop) is BLOCKED -- previously ran unscanned'
+  : `F-79 TP: skipped -- registerHooks() unavailable on ${process.version} (ESM-interop scan path not present)`, () => {
+  if (!REGISTER_HOOKS_AVAILABLE) return;
+  const res = spawnFixture('import-interop-cjs-malicious.mjs');
+  assert.notStrictEqual(res.status, 0, 'expected non-zero exit (interop-CJS import blocked), got ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.ok(res.stderr.includes('[Firewall]'), 'expected a [Firewall] detection on stderr:\n' + res.stderr);
+  assert.ok(!res.stdout.includes('INTEROP_CJS_MALICIOUS_RAN'), 'the malicious CJS body must never have run:\n' + res.stdout);
+});
+
+check(REGISTER_HOOKS_AVAILABLE
+  ? 'F-79 FP: benign CJS imported via ESM then require()d loads clean under FW_CACHE_POLICY=block'
+  : `F-79 FP: skipped -- registerHooks() unavailable on ${process.version} (ESM-interop scan path not present)`, () => {
+  if (!REGISTER_HOOKS_AVAILABLE) return;
+  const res = spawnFixture('import-then-require-benign-cjs.mjs', { FW_CACHE_POLICY: 'block' });
+  assert.strictEqual(res.status, 0, 'expected exit 0 (no cache-substitution false positive), got ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.ok(res.stdout.includes('INTEROP_CJS_BENIGN_OK'), 'expected the benign interop-CJS to import and require() cleanly:\n' + res.stdout);
+  assert.ok(!/cache-substitution|Refused to load/.test(res.stderr), 'must not trip the F-58 cache gate on the now-verified interop-CJS entry:\n' + res.stderr);
+});
+
 console.log(`\n${passed} ESM loader checks passed.`);
