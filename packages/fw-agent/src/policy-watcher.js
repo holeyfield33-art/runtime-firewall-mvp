@@ -68,14 +68,51 @@ const PUBLIC_KEY_PEM = process.env.FW_POLICY_PUBKEY || DEV_PUBLIC_KEY_PEM;
 // Fail loud in start() unless explicitly opted in via FW_ALLOW_DEV_POLICY_KEY=1.
 const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim();
 
+// ── F-71: pristine byte-building primitive capture ─────────────────────────────
+// canonicalPayload() below builds the EXACT byte sequence that pristineVerify() checks a
+// signature against. Every ambient global it uses to build those bytes is therefore a
+// trust-gating primitive: allowed code that runs after this module loads can monkeypatch any
+// of them so the bytes handed to pristineVerify no longer correspond to the `rules` object
+// that _loadAndVerify() actually returns and the agent applies. That decoupling lets a
+// stale-but-genuine signature (e.g. one that was validly issued for an empty-rules policy)
+// validate a forged rules object. Captured here, at module top level, before any later-loaded
+// code has a chance to run — a later `JSON.stringify = ...` then mutates the global, not this
+// binding, so canonicalPayload keeps building honest bytes regardless. Each capture, and why
+// it gates the decision:
+//   - JSON.stringify (the reported F-71 vector): patched to emit fixed bytes (the empty-rules
+//     payload) makes a stale empty-rules signature validate the forged rules verbatim.
+//   - Object.keys AND Array.prototype.sort: together they produce the key set that gets
+//     serialized (`Object.keys(rules).sort()`). Either one patched to drop keys or return an
+//     empty/short array makes the canonical bytes omit the forged keys while the returned
+//     object keeps them — the same stale-signature bypass. (A patched sort can `return []`
+//     ignoring its receiver, so it is as much a drop vector as Object.keys.)
+//   - Buffer.from: canonicalPayload wraps the JSON string in a Buffer; patched to return fixed
+//     bytes it is byte-for-byte equivalent to patching JSON.stringify.
+// NOT captured, having been checked and found NOT to gate the decision:
+//   - JSON.parse — the object it produces in _loadAndVerify is the SAME object canonicalPayload
+//     serializes AND the same object _loadAndVerify returns for enforcement, so the signature
+//     is always verified against exactly the bytes of the object that will be applied. A
+//     patched parse changes which object is under scrutiny but cannot decouple bytes-verified
+//     from object-returned; the worst it can do is cause a fail-closed rejection, never a
+//     forgery. (crypto.verify/createHash are already pristine-captured above under F-62.)
+// The signing side (scripts/sign-policy.js) runs offline in a trusted process and keeps its own
+// byte-identical canonicalPayload; these captures are the running-firewall verification side.
+const pristineStringify = JSON.stringify;
+const pristineKeys = Object.keys;
+const pristineSort = Array.prototype.sort;
+const pristineBufferFrom = Buffer.from;
+
 /**
  * Build the canonical signed payload buffer from a policy object.
  * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
+ * Uses pristine byte-building primitives (see F-71 note above) so a post-load monkeypatch of
+ * JSON.stringify / Object.keys / Array.prototype.sort / Buffer.from cannot decouple the bytes
+ * verified here from the rules object the agent applies.
  */
 function canonicalPayload(version, rules, signedAt) {
   const sorted = {};
-  for (const k of Object.keys(rules).sort()) sorted[k] = rules[k];
-  return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
+  for (const k of pristineSort.call(pristineKeys(rules))) sorted[k] = rules[k];
+  return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));
 }
 
 /**
@@ -189,9 +226,14 @@ class PolicyWatcher {
 
   /**
    * Hash the rules for change detection (not security-critical — just diffing).
+   * Uses pristineStringify to match the pristineCreateHash capture already on this line: this
+   * is NOT a forgery gate (every tick re-verifies the signature via pristineVerify before this
+   * runs), only staleness-hardening — a monkeypatched stringify here could at most collide two
+   * distinct rule sets and suppress a legitimate hot-reload, the same downgrade concern the
+   * F-62 createHash capture already addresses. Pristine on both inputs removes the ambiguity.
    */
   _hashRules(rules) {
-    return pristineCreateHash('sha256').update(JSON.stringify(rules)).digest('hex');
+    return pristineCreateHash('sha256').update(pristineStringify(rules)).digest('hex');
   }
 
   /**

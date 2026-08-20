@@ -88,7 +88,7 @@ function parseResult(stdout) {
     // Node's own "-e" inline-script wrapping counts as one _compile pass by itself (confirmed:
     // present identically on the pre-PR5 baseline, unrelated to this fix) -- capture it here so
     // the assertion below is about the DELTA caused by the forged target, not an absolute count.
-    const baselineCompilations = fw.compileMetrics.filesCompiled;
+    const baselineCompilations = fw.getCompileMetrics().filesCompiled;
     const target = ${JSON.stringify(target)};
     const forged = new Module(target, null);
     forged.filename = target;
@@ -97,7 +97,7 @@ function parseResult(stdout) {
     require.cache[target] = forged;
     let result, threw = null;
     try { result = require(target); } catch (e) { threw = e.message; }
-    console.log('RESULT:' + JSON.stringify({ result, threw, compilationsDelta: fw.compileMetrics.filesCompiled - baselineCompilations }));
+    console.log('RESULT:' + JSON.stringify({ result, threw, compilationsDelta: fw.getCompileMetrics().filesCompiled - baselineCompilations }));
   `;
 
   check('attack + FW_CACHE_POLICY=block: refuses the forged entry, Compilations does not increment, audit log records CACHE_SUBSTITUTION_DETECTED/BLOCK', () => {
@@ -157,7 +157,7 @@ function parseResult(stdout) {
     const fw = require(${JSON.stringify(AGENT_PATH)});
     // See the attack-case comment above: Node's own "-e" wrapping counts as one _compile pass
     // on its own, unrelated to this fix -- measure the delta instead of an absolute count.
-    const baselineCompilations = fw.compileMetrics.filesCompiled;
+    const baselineCompilations = fw.getCompileMetrics().filesCompiled;
     const target = ${JSON.stringify(target)};
     const jsonTarget = ${JSON.stringify(jsonTarget)};
     const r1 = require(target);
@@ -167,7 +167,7 @@ function parseResult(stdout) {
     console.log('RESULT:' + JSON.stringify({
       sameRef: r1 === r2,
       jsonSameRef: j1 === j2,
-      compilationsDelta: fw.compileMetrics.filesCompiled - baselineCompilations,
+      compilationsDelta: fw.getCompileMetrics().filesCompiled - baselineCompilations,
     }));
   `;
 

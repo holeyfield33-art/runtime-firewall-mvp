@@ -958,5 +958,17 @@ function isQuarantined(filename) {
   return quarantinedModules.has(filename);
 }
 
-const _exports = { compileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
+// ── F-74: compileMetrics read-only accessor ──────────────────────────────────────────────────
+// compileMetrics was exported as the live mutable object — the same shape F-57 fixed for
+// policyMap/quarantinedModules. It's telemetry only (no enforcement branch reads it, so mutating
+// it is not a security bypass), but any allowed code could do `fw.compileMetrics.filesCompiled = 0`
+// and corrupt the monitoring/shutdown summary the operator relies on. Same treatment: export a
+// read-only accessor, not the live object. compileMetrics is flat (all-number counters), so a
+// frozen shallow copy is a complete, tamper-proof snapshot; each call returns a fresh frozen copy
+// reflecting the counters at call time.
+function getCompileMetrics() {
+  return Object.freeze({ ...compileMetrics });
+}
+
+const _exports = { getCompileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
 module.exports = _exports;

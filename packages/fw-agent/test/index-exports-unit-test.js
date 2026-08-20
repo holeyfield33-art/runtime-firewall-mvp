@@ -115,6 +115,30 @@ check('isQuarantined() reflects real quarantine state before and after a require
   assert.strictEqual(fw.isQuarantined(targetFile), true, 'must be true once the module has been quarantined');
 });
 
+// ── F-74: compileMetrics must not be exported as the live mutable object ────────────────────────
+check('F-74: compileMetrics is not exported as a live mutable object', () => {
+  assert.strictEqual(fw.compileMetrics, undefined, 'compileMetrics must not be present on the exports object');
+});
+
+check('F-74: getCompileMetrics() accessor is exported and returns a frozen snapshot', () => {
+  assert.strictEqual(typeof fw.getCompileMetrics, 'function');
+  const snap = fw.getCompileMetrics();
+  assert.ok(snap && typeof snap === 'object', 'getCompileMetrics() must return an object');
+  assert.ok(Object.isFrozen(snap), 'the returned snapshot must be frozen');
+  for (const k of ['filesCompiled', 'lockdownsEnforced', 'quarantined']) {
+    assert.strictEqual(typeof snap[k], 'number', `snapshot must expose numeric ${k}`);
+  }
+});
+
+check('F-74: mutating a returned snapshot does not corrupt internal metrics state', () => {
+  const before = fw.getCompileMetrics().filesCompiled;
+  const snap = fw.getCompileMetrics();
+  try { snap.filesCompiled = 999999; } catch (e) { /* frozen: assignment may throw in strict mode */ }
+  assert.strictEqual(snap.filesCompiled, before, 'the frozen snapshot must ignore writes');
+  assert.strictEqual(fw.getCompileMetrics().filesCompiled, before,
+    'a subsequent snapshot must reflect real state, unaffected by mutating a prior copy');
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(`\n${passed} index-exports checks passed.`);
