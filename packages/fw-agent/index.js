@@ -715,6 +715,32 @@ Module._load = function (request, parent, isMain) {
   return originalModuleLoad.apply(this, arguments);
 };
 
+// ── Narrow _compile freeze (opt-in via FW_HARDEN_MODULE_PRIMITIVES=1) ──────────────────────────
+// Freezes Module.prototype._compile to the (already-patched, by this point) function value
+// currently installed, raising the cost of the classic "monkeypatch Module.prototype._compile to
+// something else" bypass specifically. Complementary to, not a substitute for, the Module._load
+// hardening above: this does nothing against require.cache poisoning (F-58's target), which never
+// touches _compile at all -- a cache-substitution attack returns before _compile would ever run.
+//
+// Default-on was considered and rejected, matching FW_FREEZE_PROTOTYPES' existing opt-in posture
+// for the same class of change (see primitiveLockdown() above): freezing a foundational Node
+// internal can break loaders, instrumentation agents, and some test frameworks that legitimately
+// re-patch _compile (source-map support, coverage instrumentation, ts-node-style transpilers).
+// Even without throwing, silently changing this mutability is a real compatibility risk a
+// try/catch around the freeze call does not address -- making a narrower version of this same
+// hardening default-on while the broader FW_FREEZE_PROTOTYPES stays opt-in would be inconsistent
+// with this project's own established risk posture for this exact class of change.
+(function freezeCompilePrimitive() {
+  if (process.env.FW_HARDEN_MODULE_PRIMITIVES !== '1') return;
+  try {
+    Object.defineProperty(Module.prototype, '_compile', {
+      value: Module.prototype._compile,
+      writable: false,
+      configurable: false,
+    });
+  } catch (_) {}
+})();
+
 // ── P2-01: ESM static/dynamic import interception ────────────────────────────────────────────
 // Module.prototype._compile (above) is never invoked for ES module evaluation — Node's ESM
 // loader is an entirely separate pipeline. module.registerHooks() (the SYNCHRONOUS Module
