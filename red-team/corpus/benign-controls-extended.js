@@ -116,4 +116,33 @@ module.exports = [
     description: 'Media library invoking ffprobe via execFile — WARN-only, no dynamic-code chain',
     code: `const { execFile } = require('child_process'); module.exports.probe = (f, cb) => execFile('ffprobe', ['-show_format', f], cb);`,
   },
+  {
+    id: 'benign-bundled-npmrc-host-far-egress',
+    category: 'benign-controls', technique: 'bundled-npmrc-mention-near-unrelated-host-key', severity: 'NONE',
+    expected: 'PASS',
+    description: 'F-43/F-68 regression: mirrors the real vite@8.2.1 dist/node/chunks/node.js false ' +
+      'positive. A genuine .npmrc string reference sits a few dozen characters from an unrelated ' +
+      'dev-server `host:` config key -- coincidental, unrelated code, exactly like the real bundle ' +
+      '-- while the actual network call is tens of thousands of characters away in the same file. ' +
+      'Neither signal pair is proximate to the other, so CREDENTIAL_EXFILTRATION must not fire.',
+    code: `
+      const path = require('path');
+      const fs = require('fs');
+      function loadRegistryConfig(dir) {
+        const configPath = path.join(dir, '.npmrc');
+        return fs.existsSync(configPath) ? fs.readFileSync(configPath, 'utf8') : null;
+      }
+      const devServerDefaults = { host: 'localhost', port: 5173, strictPort: false };
+      ` +
+      '\n      // unrelated bundled code filling the space between the config schema above and\n' +
+      '      // the real network call below, mirroring how far apart these land in a real chunk\n' +
+      '      const _bundledFiller = ' + JSON.stringify('x'.repeat(20000)) + ';\n' +
+      `
+      const https = require('https');
+      function fetchManifest(url) {
+        return https.request(url, (res) => res.resume());
+      }
+      module.exports = { loadRegistryConfig, devServerDefaults, fetchManifest };
+    `,
+  },
 ];
