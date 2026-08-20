@@ -62,6 +62,21 @@ Deferred to Phase 3+ (out of scope for 0.2.0):
 | F-11: Postinstall shim for pre-firewall hooks | MEDIUM | Architectural; hooks run before the firewall loads |
 | F-12: Runtime taint tracking | LOW | Requires dynamic analysis infrastructure |
 
+## August 2026 P0 Hardening Pass — Resolution Status
+
+The following findings, from a two-session TMRP deliberation (strategic decision + technical
+review) with orchestrator-verified evidence at every disputed point, have been addressed:
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-57: `policyMap`/`quarantinedModules` exported as live, mutable state | HIGH | ✅ Fixed | The live `Map`/`Set` are no longer exported at all; replaced with read-only query functions (`hasPolicy`, `getPolicyDecision`, `isQuarantined`). Any allowed code could previously call `.set()`/`.delete()`/`.clear()` on the real object and mutate enforcement state directly. |
+| F-62: `crypto.verify`/`crypto.createHash` called fresh each time (monkeypatchable) | HIGH | ✅ Fixed | Pristine references captured at each file's own module top level, before any later-loaded code can run; used exclusively from then on. Verified with a regression test that monkeypatches `crypto.verify`/`crypto.createHash` *after* the module has loaded and confirms tamper detection, valid-signature acceptance, and hot-reload change-detection are all unaffected. |
+| Dev key: `scripts/dev-private-key.pem` committed to the public repo | HIGH | ✅ Fixed | Deleted from `HEAD`; `DEV_PUBLIC_KEY_PEM` rotated to a freshly generated public key whose private half has never been committed anywhere. History was **not** rewritten (separate, explicit decision) — see "Policy signing key management" below for the full revocation record. |
+| F-63: Quarantine Proxy's untrapped `defineProperty` throws on subsequent enumeration | MEDIUM | ✅ Fixed | Added a `defineProperty` trap matching the pretend-success pattern already used by every other trap in `quarantine.js`; never forwards to the real target, so `ownKeys`'s "no keys" invariant stays satisfied. `preventExtensions`/`isExtensible` deliberately left untrapped — confirmed by direct testing that the same pretend pattern breaks the Proxy invariant for those two specifically. |
+| F-43/F-68: `CREDENTIAL_EXFILTRATION` and related behavioral rules false-positive on large bundled files | HIGH | ✅ Fixed | `behavior-tracker.js`'s multi-signal correlation rules (`CREDENTIAL_EXFILTRATION` — both the sensitive-path and `.npmrc` variants —, `DYNAMIC_CODE_EXEC_CHAIN`, `OBFUSCATED_CODE_EXECUTION`, `REMOTE_FETCH_EXEC`) now require their constituent signals to co-occur within a 200-character window, not just appear anywhere in the same file. Confirmed on the real `vite@8.2.1`/`astro` false positive and validated against a 15,728-file real-world corpus (0 false positives) with 100% true-positive retention. See `docs/THREAT-COVERAGE.md` §2 for details. |
+| F-58: `require.cache` pre-seeding bypasses `Module.prototype._compile` scanning | HIGH | ✅ Fixed (specific mechanism only — see scope note) | `Module._load` is now wrapped with a three-state verified/unknown/blocked model; policy-controlled via `FW_CACHE_POLICY=block\|audit\|allow` (default `block` under `FW_MODE=enforce`, `audit` otherwise). **Scope:** this closes the specific mechanism — a forged or bare-object `require.cache` entry bypassing `_compile` — confirmed with a live repro before the fix and a full test matrix after. It does **not** claim to close the broader same-process ceiling: code already running inside a protected process that finds some other way to install or return forged state, not via `require.cache`, is a different, broader problem this change does not address. |
+| PR6: opt-in `Module.prototype._compile` freeze | — | Shipped (opt-in) | `FW_HARDEN_MODULE_PRIMITIVES=1`, default-off — complementary hardening against the classic `_compile` monkeypatch specifically; does nothing against `require.cache` poisoning (F-58's target). Not default-on for the same compatibility reasons `FW_FREEZE_PROTOTYPES` already isn't. |
+
 ### Policy signing key management
 
 There is **no shared dev private key committed to this repository.** `DEV_PUBLIC_KEY_PEM` in

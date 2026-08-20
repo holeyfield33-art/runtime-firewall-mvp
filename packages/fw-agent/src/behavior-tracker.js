@@ -181,12 +181,16 @@ function matchesAny(content, patterns) {
 // regardless of formatting.
 //
 // PROXIMITY_WINDOW_CHARS was chosen empirically, not by intuition: swept 50/100/200/400/800/
-// 1200/2000 characters against (a) the full red-team suite (red-team/run.js: 125 malicious
-// fixtures + 26 benign controls) plus the full fw-control adversarial suite (52 cases,
-// including a new synthetic npmrc-read-token-exfiltration true positive added for this fix --
-// see credential-exfil-extended.js), and (b) a real false-positive corpus: every package in
-// corpus-top100.json (100 packages, ~1100 with transitive deps, 15,728 .js/.mjs/.cjs files)
-// plus vite@8.2.1 and astro@7.2.4 at the exact versions that previously false-positived.
+// 1200/2000 characters against (a) the red-team suite (red-team/run.js: 125 malicious fixtures +
+// 26 benign controls at sweep time) plus the fw-control adversarial suite (52 cases at sweep
+// time), and (b) a real false-positive corpus: every package in corpus-top100.json (100
+// packages, ~1100 with transitive deps, 15,728 .js/.mjs/.cjs files) plus vite@8.2.1 and
+// astro@7.2.4 at the exact versions that previously false-positived. A new synthetic
+// npmrc-read-token-exfiltration true positive (adversarial.test.js, "F-43/F-68: new TP") and a
+// new benign control mirroring the exact vite npmrc/host:/far-egress shape
+// (benign-controls-extended.js, "benign-bundled-npmrc-host-far-egress") were added after the
+// sweep and re-confirmed passing at the selected window -- the corpus below reflects those
+// (125 malicious + 27 benign red-team; 53 adversarial).
 //
 //   window(chars)  red-team        adversarial    real-corpus FP files (of 15,728)
 //   50             FAIL (2 new bypasses, exfil-passwd-createReadStream +

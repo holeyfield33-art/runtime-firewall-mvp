@@ -24,6 +24,7 @@ API) for the ES module loader. This means:
 | `.json` requires | ❌ handled by Node core, bypasses `_compile` |
 | Native addons (`.node`) | ❌ not JS, not scanned |
 | Dependency npm lifecycle scripts (preinstall/postinstall) | ❌ run before the firewall loads |
+| `require.cache` pre-seeding (a forged module or bare `{ exports }` object inserted directly into `require.cache`, bypassing `_compile` entirely) | ✅ policy-controlled via `FW_CACHE_POLICY` (see Environment Variables) — `Module._load` itself is wrapped, not just `_compile` |
 
 **ESM version floor:** `module.registerHooks()` — the non-deprecated, synchronous ESM hook API —
 requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`>=18.0.0`) covers
@@ -33,6 +34,17 @@ never silently claimed as covered. ESM policy `QUARANTINE` also has no equivalen
 export-stub substitution (there's no module object to swap mid-evaluation from inside a load
 hook) and degrades to `BLOCK` instead — the module still never runs, it just isn't handed a
 fake, inert replacement export the way CJS `QUARANTINE` is.
+
+**`require.cache` pre-seeding:** `Module._load()` — the real `require()` entry point — checks
+`require.cache` *before* `Module.prototype._compile` ever runs, so wrapping only `_compile` left
+a gap: allowed code could insert a forged module (or even a bare `{ exports }` object) directly
+into `require.cache[resolvedPath]` and `require()` would return the forged exports without the
+target's real code ever executing or being scanned. `Module._load` is now wrapped too, with a
+three-state model (verified / unknown / blocked) — see `FW_CACHE_POLICY` in Environment
+Variables. This closes that *specific* mechanism. It does not claim to close the broader
+same-process ceiling: code already running inside a protected process that finds some other way
+to install or return forged state — not via `require.cache` — is a different, broader problem
+this does not address.
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your require/import graph, after `npm install` has finished. It is not an
@@ -260,7 +272,9 @@ and troubleshooting.
 | `FW_MODE` | `dev` | `enforce` fails closed (exits) when not preloaded via `--require`; `dev` warns and continues. See "Enforcement mode vs Development mode" above. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze `Object/Array/Function/Promise/RegExp` prototypes on load (hardens against prototype pollution; may break libraries that extend built-ins) |
-| `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key used to verify `policy.signed.json`. **Must be set to your own key in production** — the bundled dev key's private half is public. |
+| `FW_HARDEN_MODULE_PRIMITIVES` | `0` | Set to `1` to freeze `Module.prototype._compile` non-writable/non-configurable after the agent patches it, raising the cost of a later monkeypatch. Complementary to `FW_CACHE_POLICY` below, not a substitute — does nothing against `require.cache` poisoning. Same compatibility caveat as `FW_FREEZE_PROTOTYPES`: may break loaders/instrumentation/transpilers that legitimately re-patch `_compile`. |
+| `FW_CACHE_POLICY` | `block` under `FW_MODE=enforce`, `audit` otherwise | Controls what happens when `require()` finds a `require.cache` entry for a `.js`/`.cjs` path the firewall never verified via `_compile` (possible cache-substitution attack, or legitimate cache pre-seeding by test-mocking/HMR tooling — cache state alone can't tell these apart). `block` refuses the load; `audit` allows it but logs a visible `CACHE_SUBSTITUTION_DETECTED` event (console + persistent audit log); `allow` allows it silently to the console (still logged to disk). |
+| `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key used to verify `policy.signed.json`. **Must be set to your own key in production** — there is no shared, committed dev key any more (see `SECURITY.md`); generate your own with `node scripts/generate-policy-key.js`. |
 | `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the bundled dev key when `FW_POLICY_PUBKEY` is unset (local dev / CI only). The agent refuses to start with a policy file and no production key unless this flag is explicitly set. |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint (fw-control only) |

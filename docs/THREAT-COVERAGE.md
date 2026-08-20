@@ -40,10 +40,25 @@ that individual signatures miss.
 
 | Rule | Fires when | Severity → action | Test |
 |---|---|---|---|
-| `CREDENTIAL_EXFILTRATION` | sensitive path (`.env`, `.ssh`, `id_rsa`, `.aws`, `.netrc`, `secret`, `passwd`, `shadow`, `credentials`) read **AND** network egress | CRITICAL → block | behavior-tracker unit: ".env read + egress", "id_rsa/.ssh/.aws" |
-| `CREDENTIAL_EXFILTRATION` (.npmrc) | `.npmrc` read + egress **AND** (`_authToken`/`_auth`/`_password` field, or `{host:…}` override, or hardcoded non-registry destination) | CRITICAL → block | behavior-tracker unit: ".npmrc → non-registry host", "_authToken + host override" |
-| `DYNAMIC_CODE_EXEC_CHAIN` | dynamic code (`eval`/`new Function`/`vm`) **AND** process exec (`child_process`/`execSync`/`spawnSync`/…) | CRITICAL → block | detector unit; adversarial "eval + child_process" |
-| `OBFUSCATED_CODE_EXECUTION` **(F-31)** | decode (`Buffer.from(…,'base64'/'hex')` / `atob`) **AND** dynamic code (`eval`/`new Function`/`vm`) | HIGH → block | adversarial "Buffer.from base64 decode + eval"; behavior-tracker unit (base64/atob/hex) |
+| `CREDENTIAL_EXFILTRATION` | sensitive path (`.env`, `.ssh`, `id_rsa`, `.aws`, `.netrc`, `secret`, `passwd`, `shadow`, `credentials`) read **AND** network egress, **within 200 characters of each other** | CRITICAL → block | behavior-tracker unit: ".env read + egress", "id_rsa/.ssh/.aws" |
+| `CREDENTIAL_EXFILTRATION` (.npmrc) | `.npmrc` read + egress **AND** (`_authToken`/`_auth`/`_password` field, or `{host:…}` override, or hardcoded non-registry destination), **all three within 200 characters of each other** | CRITICAL → block | behavior-tracker unit: ".npmrc → non-registry host", "_authToken + host override"; adversarial "F-43/F-68: new TP" |
+| `DYNAMIC_CODE_EXEC_CHAIN` | dynamic code (`eval`/`new Function`/`vm`) **AND** process exec (`child_process`/`execSync`/`spawnSync`/…), **within 200 characters of each other** | CRITICAL → block | detector unit; adversarial "eval + child_process" |
+| `OBFUSCATED_CODE_EXECUTION` **(F-31)** | decode (`Buffer.from(…,'base64'/'hex')` / `atob`) **AND** dynamic code (`eval`/`new Function`/`vm`), **within 200 characters of each other** | HIGH → block | adversarial "Buffer.from base64 decode + eval"; behavior-tracker unit (base64/atob/hex) |
+| `REMOTE_FETCH_EXEC` | network egress **AND** dynamic code, **within 200 characters of each other** | HIGH → block | adversarial "fetch(...).then(eval)" (F-39) |
+
+**Proximity requirement (F-43/F-68, 2026-08):** every rule above used to check these signals as
+whole-file booleans with no requirement that they actually occur near each other — correct for a
+small hand-written malicious snippet, but false-positived hard on large bundled/minified files,
+where a single chunk routinely contains a credential-path-shaped string, a network call, an
+`eval()`, and a decode call somewhere in hundreds of KB of unrelated legitimate code. Confirmed on
+the real `vite@8.2.1` `dist/node/chunks/node.js` chunk: a `.npmrc` reference and an unrelated
+`host:` object key sit 312 characters apart by coincidence, while the real network call is 68,519
+characters away — and the same file independently false-positived three more of the rules above.
+Each rule now additionally requires its constituent signals to fall within 200 characters of each
+other (swept empirically against the full red-team + adversarial corpus and a real-world
+false-positive corpus of 15,728 files across the soak-100 packages plus `vite@8.2.1`/`astro`; see
+the fix's commit message for the full sweep table). `astro` inherits the same fix transitively,
+since it depends on the identical `vite@^8.0.13` chunk.
 
 ### Deliberate WARN-only (not blocked) — true-negative protection
 
@@ -80,7 +95,7 @@ against them. Each is asserted as an **expected bypass** in the adversarial suit
 the boundary ever shifts.
 
 Detection has been raised from **55.2% → 76.0%** (69 → **95 / 125** malicious payloads caught,
-**0** false positives on the 26 benign controls and the top-100 soak) across two hardening
+**0** false positives on the 27 benign controls and the top-100 soak) across two hardening
 phases — see the roadmap below. The **30** payloads that still bypass, grouped by root cause:
 
 | Technique | Example | Why it bypasses | Would need |
@@ -153,6 +168,7 @@ answer, re-run on every change to either hook:
 | `worker_threads -> new Worker`, `child_process.fork()`, `child_process.spawn('node', ...)` — child's own `require()`/`import()` calls | `INTERCEPTED` | P0-4 `NODE_OPTIONS` / `execArgv` re-injection + `_compile` |
 | `child_process.spawn('node', ['-e', src])` / `execSync('node -e ...')` — inline `-e` source itself | **`BYPASS`**, regardless of preload state | `node -e`'s inline eval path never calls `Module.prototype._compile` or the `registerHooks()` load hook — re-injection makes the child *preloaded*, but "preloaded" only covers what that child subsequently `require()`s/`import()`s, not code passed via `-e` |
 | Module cached/loaded before the firewall preloads | `INTERCEPTED` | Content-hash re-scan on cache hit |
+| `require.cache` pre-seeded/forged directly (bypassing `_compile` entirely — a forged `Module` or bare `{ exports }` object dropped into `require.cache[resolvedPath]`) | `INTERCEPTED`, policy-controlled | `Module._load` wrap (F-58) — three-state verified/unknown/blocked model, `FW_CACHE_POLICY=block\|audit\|allow` (default: `block` under `FW_MODE=enforce`, `audit` otherwise) |
 | `import` (static) / `import()` (dynamic) of a `file://` module URL | `INTERCEPTED` on Node ≥22.15.0/≥23.5.0; **`BYPASS`** below that floor | `module.registerHooks()` (P2-01) — see root `README.md`'s Coverage table for the version-floor detail |
 | `import()` of a `data:`, `http:`, `https:`, or `blob:` module URL | **`BYPASS`**, on every Node version, floor or no floor | The `registerHooks()` load hook returns before the detector runs for any non-`file://` scheme (`packages/fw-agent/index.js:623`) — a separate, independent gap from the version-floor one above |
 | `vm.runInNewContext()` | `BYPASS` | Executes source directly via V8, never calls `require()`/`_compile` |
