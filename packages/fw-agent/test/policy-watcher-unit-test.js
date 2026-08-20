@@ -1,9 +1,20 @@
 // packages/fw-agent/test/policy-watcher-unit-test.js
 // Unit tests for PolicyWatcher: Ed25519 signature verification, hot-reload, tamper detection.
-// Tests legitimately sign with the bundled dev key — opt in explicitly so the F-02a guard
-// (which rejects dev-key policy in production) does not block the test run.
+//
+// F-62: there is no shared, committed dev private key any more (see SECURITY.md "Policy
+// signing key management" for the revocation record of the old one). These general functional
+// tests don't care WHICH key is used, only that verification is internally consistent, so they
+// generate a fresh Ed25519 keypair in-memory for this process only (never written to disk,
+// never committed anywhere) and point the watcher at it via FW_POLICY_PUBKEY -- the same
+// explicit-trusted-key path a real production deployment uses. FW_POLICY_PUBKEY must be set
+// BEFORE policy-watcher.js is first required, since it reads the env var once at module load.
 'use strict';
-process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
+const crypto = require('crypto');
+const { publicKey: TEST_PUBLIC_KEY, privateKey: TEST_PRIVATE_KEY } = crypto.generateKeyPairSync('ed25519', {
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
+process.env.FW_POLICY_PUBKEY = TEST_PUBLIC_KEY;
 
 const assert = require('assert');
 const fs = require('fs');
@@ -12,10 +23,7 @@ const os = require('os');
 const { PolicyWatcher } = require('../src/policy-watcher');
 const { signPolicy } = require('../../../scripts/sign-policy');
 
-// Dev private key (CI/test only - see scripts/dev-private-key.pem)
-const DEV_PRIVATE_KEY = fs.readFileSync(
-  path.join(__dirname, '../../../scripts/dev-private-key.pem'), 'utf8'
-);
+const DEV_PRIVATE_KEY = TEST_PRIVATE_KEY;
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -148,6 +156,84 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     assert.strictEqual(lockdownFired, false, 'No lockdown for untampered file');
     assert.strictEqual(hotReloadCount, 1, 'onValidChange fires only once (initial load)');
     console.log('  ok No spurious lockdown or hot-reload for unchanged signed file');
+  }
+
+  // Test 8: F-62 regression -- crypto.verify/createHash captured at module load resist a
+  // monkeypatch installed AFTER the module has already loaded. This is the real F-62 threat:
+  // require('crypto') returns the same cached module object to every caller, so allowed code
+  // that runs after policy-watcher.js has already required('crypto') can patch .verify /
+  // .createHash on that shared object. If policy-watcher.js were still calling crypto.verify(...)
+  // fresh on every check (rather than a pristine reference captured at its own module top level),
+  // this monkeypatch would make every forged signature pass.
+  {
+    const crypto = require('crypto');
+    const realVerify = crypto.verify;
+    const realCreateHash = crypto.createHash;
+
+    try {
+      // Forge crypto.verify to always report "valid".
+      crypto.verify = () => true;
+      // Forge crypto.createHash to always report the same digest, which would defeat
+      // _hashRules()'s change-detection if it were using the live (monkeypatched) crypto object.
+      crypto.createHash = () => ({
+        update() { return this; },
+        digest() { return 'forged-constant-hash'; },
+      });
+
+      // 8a. A TAMPERED policy (signed, then mutated without re-signing) must still be REJECTED --
+      // proves _loadAndVerify() uses the pristine crypto.verify captured at module load, not the
+      // monkeypatched one that would otherwise rubber-stamp it.
+      const tamperedPath = freshPolicyPath();
+      writeSignedPolicy(tamperedPath, { 'forged-test-pkg': 'OBSERVE' });
+      const rawTampered = JSON.parse(fs.readFileSync(tamperedPath, 'utf8'));
+      rawTampered.rules['forged-test-pkg'] = 'BLOCK'; // mutate without re-signing
+      fs.writeFileSync(tamperedPath, JSON.stringify(rawTampered));
+      const tamperedWatcher = new PolicyWatcher(tamperedPath, {});
+      assert.strictEqual(
+        tamperedWatcher.verify(), false,
+        'forged signature must still be rejected even with crypto.verify monkeypatched to always return true'
+      );
+
+      // 8b. A genuinely, correctly-signed policy must still verify true (the fix must not break
+      // the legitimate path).
+      const validPath = freshPolicyPath();
+      writeSignedPolicy(validPath, { 'valid-test-pkg': 'OBSERVE' });
+      const validWatcher = new PolicyWatcher(validPath, {});
+      assert.strictEqual(
+        validWatcher.verify(), true,
+        'a genuinely valid signature must still verify true under a crypto.verify monkeypatch'
+      );
+
+      // 8c. Hot-reload change-detection must still work -- proves _hashRules() uses the pristine
+      // crypto.createHash, not the monkeypatched one that would otherwise make every rule set
+      // hash identically and silently suppress hot-reload.
+      const reloadPath = freshPolicyPath();
+      writeSignedPolicy(reloadPath, { 'reload-pkg': 'OBSERVE' });
+      let reloadCount = 0;
+      let lastRules = null;
+      const reloadWatcher = new PolicyWatcher(reloadPath, {
+        onTamperDetected: () => { throw new Error('Unexpected lockdown in test 8c'); },
+        onValidChange: (r) => { reloadCount++; lastRules = r; },
+      }, { intervalMs: 50 });
+      reloadWatcher.start();
+      assert.strictEqual(reloadCount, 1, 'initial onValidChange must fire once');
+
+      await sleep(100);
+      writeSignedPolicy(reloadPath, { 'reload-pkg': 'OBSERVE', 'reload-pkg-2': 'BLOCK' });
+      await sleep(200);
+      reloadWatcher.stop();
+
+      assert.strictEqual(
+        reloadCount, 2,
+        'onValidChange must still fire for a real rule change even with crypto.createHash monkeypatched to a constant digest'
+      );
+      assert.strictEqual(lastRules['reload-pkg-2'], 'BLOCK');
+
+      console.log('  ok F-62: crypto.verify/createHash monkeypatched AFTER module load do not affect policy-watcher decisions');
+    } finally {
+      crypto.verify = realVerify;
+      crypto.createHash = realCreateHash;
+    }
   }
 
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}

@@ -88,12 +88,14 @@ an unsigned `{ "rules": … }` object fails verification on startup and triggers
 Author a plain rules file and sign it:
 
 ```bash
+node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only, never commit it
 echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
-node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
 ```
 
-For the bundled dev key you must run with `FW_ALLOW_DEV_POLICY_KEY=1`; in production sign with your
-own key (`scripts/generate-policy-key.js`) and set `FW_POLICY_PUBKEY`.
+There is no bundled/committed dev private key (see `SECURITY.md`). If your key matches the
+bundled `DEV_PUBLIC_KEY_PEM` default you must also run with `FW_ALLOW_DEV_POLICY_KEY=1`; in
+production, set `FW_POLICY_PUBKEY` to your own public key instead.
 
 - **BLOCK**: Module never runs.
 - **QUARANTINE**: Exports replaced with a logging Proxy; child requires blocked.

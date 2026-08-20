@@ -13,7 +13,17 @@
 // each test file already runs as its own `node` process via the test:unit script.
 'use strict';
 process.env.FW_ENABLE_DETECTION = '1';
-process.env.FW_ALLOW_DEV_POLICY_KEY = '1';
+
+// F-62: no shared, committed dev private key exists any more (see SECURITY.md). Generate a
+// fresh Ed25519 keypair in-memory for this process only, and use FW_POLICY_PUBKEY (the real
+// explicit-trusted-key production path) instead of the FW_ALLOW_DEV_POLICY_KEY convenience
+// gate. Must be set before the agent (and its policy-watcher) is required below.
+const crypto = require('crypto');
+const { publicKey: TEST_PUBLIC_KEY, privateKey: TEST_PRIVATE_KEY } = crypto.generateKeyPairSync('ed25519', {
+  publicKeyEncoding: { type: 'spki', format: 'pem' },
+  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+});
+process.env.FW_POLICY_PUBKEY = TEST_PUBLIC_KEY;
 
 const assert = require('assert');
 const fs = require('fs');
@@ -21,9 +31,7 @@ const os = require('os');
 const path = require('path');
 const { signPolicy } = require('../../../scripts/sign-policy');
 
-const DEV_PRIVATE_KEY = fs.readFileSync(
-  path.join(__dirname, '../../../scripts/dev-private-key.pem'), 'utf8'
-);
+const DEV_PRIVATE_KEY = TEST_PRIVATE_KEY;
 
 let passed = 0;
 function check(name, fn) {

@@ -6,6 +6,17 @@ const crypto = require('crypto');
 const { Worker } = require('worker_threads');
 const { fileURLToPath } = require('url');
 
+// ── F-62: pristine crypto.createHash capture ──────────────────────────────────────────────────
+// require('crypto') returns the same cached module object to every caller in the process,
+// including any allowed code that runs after this file loads. Every createHash() call below
+// participates in a real trust/integrity decision (self-integrity tamper detection, and the
+// verified-compilation content-hash cache that decides whether a file gets re-scanned) rather
+// than diagnostic output, so a monkeypatch on crypto.createHash installed later by allowed code
+// must not be able to defeat them. Captured here, at the very top of the module, before any
+// later-loaded code has had a chance to run — a later `crypto.createHash = () => fakeHash`
+// mutates the crypto module's OWN property, not this local binding.
+const pristineCreateHash = crypto.createHash;
+
 // Exit early and export nothing if detection is not enabled - zero overhead for baseline runs
 if (process.env.FW_ENABLE_DETECTION !== '1') {
   module.exports = {};
@@ -175,7 +186,7 @@ const fwMode = resolveFwMode();
   ];
 
   function computeSelfHash() {
-    const hash = crypto.createHash('sha256');
+    const hash = pristineCreateHash('sha256');
     for (const f of selfFiles) {
       try {
         const content = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
@@ -535,7 +546,7 @@ Module.prototype._compile = function (content, filename) {
   }
 
   if (configuredRule === 'OBSERVE') {
-    const contentHash = crypto.createHash('sha256').update(content).digest('hex');
+    const contentHash = pristineCreateHash('sha256').update(content).digest('hex');
     if (verifiedCompilationsCache.get(filename) === contentHash) {
       return originalCompile.apply(this, arguments);
     }
@@ -653,7 +664,7 @@ if (typeof Module.registerHooks === 'function') {
         }
 
         const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
-        const contentHash = crypto.createHash('sha256').update(source).digest('hex');
+        const contentHash = pristineCreateHash('sha256').update(source).digest('hex');
         if (verifiedCompilationsCache.get(filename) === contentHash) {
           return result;
         }

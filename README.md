@@ -91,10 +91,12 @@ plain rules file and sign it:
 # rules.json — just the rule map
 echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
 
-# Sign it into policy.signed.json. For local/dev/CI you may use the bundled dev key
-# (and must set FW_ALLOW_DEV_POLICY_KEY=1 at runtime to accept it); in production, sign with
-# your own key generated via scripts/generate-policy-key.js and set FW_POLICY_PUBKEY.
-node scripts/sign-policy.js scripts/dev-private-key.pem rules.json policy.signed.json
+# Sign it into policy.signed.json. There is no bundled/committed dev private key -- generate
+# your own local-only key first (never commit it), then sign with it. For local/dev/CI you
+# must also set FW_ALLOW_DEV_POLICY_KEY=1 at runtime to accept a key matching the bundled
+# DEV_PUBLIC_KEY_PEM default; in production, set FW_POLICY_PUBKEY to your own public key instead.
+node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
+node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
 ```
 
 The resulting `policy.signed.json` is a signed envelope: `{ version, rules, signedAt, signature }`.
