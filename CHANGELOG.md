@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Independent-pentest follow-up fixes (F-80, F-81, F-82)**: an independent pentest (PENTEST-003,
+  no memory of the implementation work, isolated worktree) of the F-69/F-71/F-73/F-74/F-79/F-70
+  work below found and live-reproduced three real gaps before merge, all independently re-verified
+  and then fixed:
+  - **F-80** — `canonicalPayload()`'s key-sort copy loop (`sorted[k] = rules[k]` onto a fresh `{}`)
+    was interceptable via `Object.prototype` (the literal key `'__proto__'`, or any key an
+    already-running dependency polluted an accessor for), letting a policy tampered post-signing
+    still verify while the forged rule reached the applied rules — despite every F-71 primitive
+    staying untouched. Fixed with a null-prototype copy target (`Object.create(null)`), in both
+    `policy-watcher.js` and `scripts/sign-policy.js`'s matching copy.
+  - **F-81** — the separator-distance correlation (F-69) counted only literal `;`/`{`/`}`, so
+    arbitrarily many real statements written without semicolons/braces (relying on Automatic
+    Semicolon Insertion) accumulated zero separators, silently defeating the documented "falls off
+    at ≥5 real statements" limit. Fixed: newlines terminating real (non-comment/whitespace) content
+    now also count, closing the many-statements case. A narrower, structurally distinct case — one
+    single arbitrarily long statement, bounded only by the 8000-character backstop — is a
+    mathematically inherent limit of any fixed-threshold text-scanning correlation (proven, not
+    assumed: a first attempt at closing it was shown, by construction, unable to work) and is
+    disclosed rather than silently missed, with an explicit test asserting the exact boundary.
+    See `SECURITY.md` for the full writeup and a correction to this pass's original "invariant to
+    arbitrarily large padding" claim, which was itself an overclaim.
+  - **F-82** — `getCompileMetrics()` called the ambient global `Object.freeze()` directly (no
+    pristine capture, unlike every other byte-building/integrity primitive in this codebase), so a
+    post-load monkeypatch defeated the snapshot's immutability. Fixed with the same pristine-capture
+    pattern (`pristineFreeze`). Low impact: telemetry-only, no enforcement path reads it.
+
 - **Cache-substitution enforcement — `require.cache` pre-seeding (F-58)**: `Module._load()` (the
   real `require()` entry point) checks `require.cache` *before* `Module.prototype._compile` runs,
   so wrapping only `_compile` left a gap — allowed code could insert a forged module (or a bare

@@ -139,6 +139,31 @@ check('F-74: mutating a returned snapshot does not corrupt internal metrics stat
     'a subsequent snapshot must reflect real state, unaffected by mutating a prior copy');
 });
 
+// ── F-82 (PENTEST-003 finding, F-74 follow-on) ──────────────────────────────────────────────────
+// getCompileMetrics() previously called the AMBIENT global Object.freeze directly (no pristine
+// capture, unlike crypto.createHash/crypto.verify/JSON.stringify etc. elsewhere in this codebase),
+// so allowed code that runs AFTER this module has loaded -- the same threat model F-62/F-71
+// already established a fix for -- could monkeypatch Object.freeze to a no-op and defeat the
+// snapshot's immutability guarantee entirely. Distinct from the mutation test above (which proves
+// the snapshot resists writes under an UNTAMPERED Object.freeze); this proves it resists a
+// monkeypatched Object.freeze specifically, installed after require() (pristine capture only ever
+// defends post-load tampering -- pre-load tampering is the same disclosed FW_MODE=dev gap every
+// other pristine capture in this codebase already carries, not a new claim here).
+check('F-82: getCompileMetrics() snapshot stays frozen even with Object.freeze monkeypatched AFTER module load', () => {
+  const realFreeze = Object.freeze;
+  try {
+    Object.freeze = (x) => x; // no-op monkeypatch, installed after fw was already required above
+    const snap = fw.getCompileMetrics();
+    assert.strictEqual(Object.isFrozen(snap), true,
+      'F-82: the returned snapshot must still be genuinely frozen (Object.isFrozen true) despite a monkeypatched global Object.freeze');
+    let mutated = false;
+    try { snap.filesCompiled = 999999; mutated = (snap.filesCompiled === 999999); } catch (e) { /* frozen: throws in strict mode, also acceptable */ }
+    assert.strictEqual(mutated, false, 'F-82: the snapshot must reject mutation even under the monkeypatch');
+  } finally {
+    Object.freeze = realFreeze;
+  }
+});
+
 fs.rmSync(tmp, { recursive: true, force: true });
 
 console.log(`\n${passed} index-exports checks passed.`);

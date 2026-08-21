@@ -339,6 +339,84 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('  ok F-71: JSON.stringify/Object.keys/Array.prototype.sort/Buffer.from monkeypatched AFTER module load do not forge a policy past verification');
   }
 
+  // Test 10: F-80 regression (PENTEST-003 finding) -- canonicalPayload's key-sort copy loop
+  // (`sorted[k] = rules[k]` onto a fresh {}) is bracket assignment, a [[Set]] operation subject to
+  // prototype-chain interception -- distinct from Tests 8/9, which patch whole functions/globals.
+  // No monkeypatch of crypto.verify/createHash or any F-71 primitive is used here; the vector is
+  // the copy loop's own target object. Two scenarios, both must be REJECTED after the F-80 fix
+  // (Object.create(null) as the copy target):
+  //   (a) the literal key '__proto__' -- Object.prototype's own built-in accessor silently no-ops
+  //       a bracket-assignment of a non-object value, dropping the key from the signed bytes while
+  //       JSON.parse's `rules` (CreateDataProperty, accessor-immune) keeps it as a real own
+  //       property -- pure stock JS semantics, no pollution needed.
+  //   (b) an ORDINARY key name (an npm-package-shaped string), forged via Object.prototype
+  //       pollution simulating an already-running lower-privileged allowed dependency -- proves
+  //       the bug generalizes past '__proto__' to any policy key.
+  // Attack shape: sign a policy that does NOT include the target key, then TAMPER THE RAW JSON
+  // TEXT (never touch the private key, never mutate a JS object pre-serialization -- text-level
+  // editing is what actually reaches JSON.parse's safe CreateDataProperty path) to inject the
+  // target key, and confirm verify() now correctly returns false.
+  {
+    // Scenario (a): literal '__proto__' key.
+    {
+      const policyPath = freshPolicyPath();
+      writeSignedPolicy(policyPath, { 'left-pad': 'OBSERVE' });
+      let text = fs.readFileSync(policyPath, 'utf8');
+      text = text.replace('"left-pad": "OBSERVE"', '"left-pad": "OBSERVE",\n    "__proto__": "BLOCK"');
+      fs.writeFileSync(policyPath, text);
+
+      const parsedCheck = JSON.parse(text);
+      assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(parsedCheck.rules, '__proto__'), true,
+        'sanity: JSON.parse must produce a real own "__proto__" property (CreateDataProperty) for this test to be meaningful'
+      );
+
+      const watcher = new PolicyWatcher(policyPath, {});
+      assert.strictEqual(
+        watcher.verify(), false,
+        'F-80: a policy tampered post-signing to inject a "__proto__" rule (no private key, no JS object mutation, raw text edit only) must be REJECTED'
+      );
+    }
+
+    // Scenario (b): an ordinary key name, forged via Object.prototype pollution (simulating an
+    // already-running allowed dependency), proving the bug is not '__proto__'-specific.
+    {
+      const TARGET_KEY = 'totally-normal-pkg-name';
+      let swallowed = null;
+      Object.defineProperty(Object.prototype, TARGET_KEY, {
+        configurable: true,
+        set(v) { swallowed = v; },
+        get() { return undefined; },
+      });
+      try {
+        const policyPath = freshPolicyPath();
+        writeSignedPolicy(policyPath, { 'some-other-pkg': 'OBSERVE' });
+        let text = fs.readFileSync(policyPath, 'utf8');
+        text = text.replace('"some-other-pkg": "OBSERVE"', `"some-other-pkg": "OBSERVE",\n    "${TARGET_KEY}": "BLOCK"`);
+        fs.writeFileSync(policyPath, text);
+
+        const watcher = new PolicyWatcher(policyPath, {});
+        assert.strictEqual(
+          watcher.verify(), false,
+          'F-80: a policy tampered post-signing to inject an ordinary package-name rule, while Object.prototype is polluted for that exact key, must be REJECTED'
+        );
+      } finally {
+        delete Object.prototype[TARGET_KEY];
+      }
+    }
+
+    // The legitimate path must still work: signing/verifying a policy whose rules genuinely
+    // include a tricky key must succeed end-to-end (the fix must not break real usage).
+    {
+      const policyPath = freshPolicyPath();
+      writeSignedPolicy(policyPath, { 'left-pad': 'OBSERVE', 'a-real-pkg': 'BLOCK' });
+      const watcher = new PolicyWatcher(policyPath, {});
+      assert.strictEqual(watcher.verify(), true, 'F-80: an honestly-signed, untampered policy must still verify true');
+    }
+
+    console.log('  ok F-80: canonicalPayload\'s copy-loop target is prototype-pollution-immune (Object.create(null)) -- forged "__proto__" and arbitrary-key rules are rejected');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

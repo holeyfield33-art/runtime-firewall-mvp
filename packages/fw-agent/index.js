@@ -17,6 +17,19 @@ const { fileURLToPath } = require('url');
 // mutates the crypto module's OWN property, not this local binding.
 const pristineCreateHash = crypto.createHash;
 
+// ── F-82 (PENTEST-003 finding, F-74 follow-on): pristine Object.freeze capture ──────────────────
+// getCompileMetrics() (below) returns Object.freeze({...compileMetrics}) as a tamper-proof
+// snapshot. Object.freeze is an ambient global exactly like crypto.createHash above: allowed code
+// running after this module loads can monkeypatch it to a no-op (`Object.freeze = (x) => x`),
+// which silently defeats the snapshot's immutability guarantee -- Object.isFrozen() on the
+// returned object then reports false, and it is fully mutable. Confirmed live (PENTEST-003).
+// Low impact (compileMetrics is telemetry-only; no enforcement decision reads getCompileMetrics()'s
+// return value -- shutdown()/the exit handler read the private, non-exported compileMetrics object
+// directly), but it breaks the one guarantee this accessor exists to provide, via the exact same
+// ambient-global class of bug F-62/F-71 already established the fix for. Captured here, at the
+// very top of the module, before any later-loaded code has a chance to run.
+const pristineFreeze = Object.freeze;
+
 // Exit early and export nothing if detection is not enabled - zero overhead for baseline runs
 if (process.env.FW_ENABLE_DETECTION !== '1') {
   module.exports = {};
@@ -960,9 +973,10 @@ function isQuarantined(filename) {
 // and corrupt the monitoring/shutdown summary the operator relies on. Same treatment: export a
 // read-only accessor, not the live object. compileMetrics is flat (all-number counters), so a
 // frozen shallow copy is a complete, tamper-proof snapshot; each call returns a fresh frozen copy
-// reflecting the counters at call time.
+// reflecting the counters at call time. Uses pristineFreeze (F-82 above) so a post-load
+// monkeypatch of the global Object.freeze cannot defeat the snapshot's immutability.
 function getCompileMetrics() {
-  return Object.freeze({ ...compileMetrics });
+  return pristineFreeze({ ...compileMetrics });
 }
 
 const _exports = { getCompileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
