@@ -1,0 +1,106 @@
+name: Publish to npm
+
+# Publishes packages/fw-agent (npm name: aletheia-firewall) using npm Trusted Publishing (OIDC) --
+# no long-lived NPM_TOKEN secret is stored in this repo. Authentication is a short-lived,
+# workflow-specific credential negotiated at run time, tied to this exact org/repo/workflow
+# filename, configured as a "trusted publisher" on the package's npmjs.com settings page.
+#
+# Manual, one-time setup required on npmjs.com (cannot be done from this workflow):
+#   1. On the aletheia-firewall package's Settings > Trusted Publisher, add a GitHub Actions
+#      trusted publisher: organization/user = repository owner, repository = this repo,
+#      workflow filename = "publish.yml" (filename only, not the full path), environment name =
+#      "npm-publish" (must match the `environment:` below), allowed actions = "npm publish".
+#   2. fw-control (@fw/control) and the workspace root are both `private: true` and are never
+#      published -- this workflow only ever touches packages/fw-agent.
+#
+# Triggered by pushing a tag matching v*.*.* (e.g. v0.5.1). No workflow_dispatch trigger, by
+# design -- a real npm publish should only ever follow from a real, reviewed release tag, not an
+# ad-hoc manual run. Re-run by re-pushing the tag (delete + recreate) if a run fails transiently.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish aletheia-firewall to npm
+    runs-on: ubuntu-latest
+    # A GitHub Environment gives this job a distinct identity npm's trusted-publisher config can
+    # be scoped to, and lets required-reviewer / branch protections be layered on later without
+    # touching this file. Must match the "environment name" configured on npmjs.com (see above).
+    environment: npm-publish
+    permissions:
+      id-token: write # required: npm CLI negotiates the OIDC token from this
+      contents: write # required: to create the GitHub Release below
+
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the tag points at a commit that is actually on main
+        run: |
+          git fetch origin main --quiet
+          if ! git merge-base --is-ancestor "${{ github.sha }}" origin/main; then
+            echo "::error::Tag ${{ github.ref_name }} (${{ github.sha }}) is not an ancestor of origin/main. Refusing to publish from a commit that never went through the normal PR/merge path."
+            exit 1
+          fi
+          echo "OK: ${{ github.sha }} is on main."
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted Publishing requires npm CLI >=11.5.1. Node 22's bundled npm version drifts by
+      # patch release, so pin the floor explicitly rather than trusting whatever setup-node ships.
+      - name: Ensure npm >= 11.5.1 (required for Trusted Publishing)
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify the tag version matches packages/fw-agent/package.json
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./packages/fw-agent/package.json').version")
+          if [ "$TAG_VERSION" != "$PKG_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match packages/fw-agent/package.json version ($PKG_VERSION). Refusing to publish a mismatched version."
+            exit 1
+          fi
+          echo "OK: tag $GITHUB_REF_NAME matches package.json version $PKG_VERSION."
+
+      - name: Full test suite (unit + adversarial + integration + auth + matrix + agent-graph + self-integrity + baseline check)
+        run: npm test
+
+      - name: Red-team regression suite
+        run: npm run redteam
+
+      - name: Sanity-check the published tarball contents
+        working-directory: packages/fw-agent
+        run: npm pack --dry-run
+
+      - name: Publish to npm (Trusted Publishing -- no token; npm auto-detects the OIDC context and attaches provenance)
+        working-directory: packages/fw-agent
+        run: npm publish --access public
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            Published to npm as [`aletheia-firewall@${{ github.ref_name }}`](https://www.npmjs.com/package/aletheia-firewall).
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md) for details.
