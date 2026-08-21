@@ -236,6 +236,109 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     }
   }
 
+  // Test 9: F-71 regression -- canonicalPayload's byte-building primitives (JSON.stringify,
+  // Object.keys, Array.prototype.sort, Buffer.from) are captured pristine at module load, so a
+  // monkeypatch of any of them installed AFTER the module loaded cannot decouple the bytes
+  // pristineVerify checks from the rules object that gets applied. Distinct from Test 8 (F-62),
+  // which patches crypto.verify/createHash. The attack: reuse a genuine signature issued for a
+  // benign (here: empty-rules) policy, ship it alongside forged malicious rules, and patch a
+  // byte-building primitive so the forged rules' canonical bytes collapse back to the empty-rules
+  // bytes the signature actually covers. Each captured primitive is a distinct way to do that.
+  {
+    // A genuine signature over an EMPTY-rules policy -- the "previously-valid payload" whose
+    // signature the attacker reuses.
+    const signedEmpty = signPolicy({}, DEV_PRIVATE_KEY);
+    const forged = {
+      version: 1,
+      rules: { 'evil.js': 'ALLOW' },
+      signedAt: signedEmpty.signedAt,
+      signature: signedEmpty.signature, // stale-but-genuine empty-rules signature
+    };
+    const forgedPath = freshPolicyPath();
+    fs.writeFileSync(forgedPath, JSON.stringify(forged, null, 2), 'utf8');
+
+    // Real primitives captured before any patch, so patches can delegate to them (keeping the
+    // test harness working) and so we can restore them afterwards.
+    const realStringify = JSON.stringify;
+    const realKeys = Object.keys;
+    const realSort = Array.prototype.sort;
+    const realBufferFrom = Buffer.from;
+
+    // The exact bytes the forged canonical payload must collapse to for the empty signature to
+    // validate it.
+    const emptyCanonicalStr = realStringify({ version: 1, rules: {}, signedAt: signedEmpty.signedAt });
+    const emptyCanonicalBuf = realBufferFrom(emptyCanonicalStr);
+    const evilCanonicalStr = realStringify({ version: 1, rules: { 'evil.js': 'ALLOW' }, signedAt: signedEmpty.signedAt });
+
+    // Sanity: with NO patch, the forged policy is rejected (its true canonical bytes don't match
+    // the empty-rules signature).
+    assert.strictEqual(new PolicyWatcher(forgedPath, {}).verify(), false,
+      'sanity: forged policy (evil rules + empty-rules signature) must be rejected with no monkeypatch');
+
+    // 9a. JSON.stringify patched to emit the empty-rules bytes for the forged canonical shape.
+    JSON.stringify = function (value, ...rest) {
+      if (value && value.rules && realKeys(value.rules).includes('evil.js') && value.signedAt === signedEmpty.signedAt) {
+        return emptyCanonicalStr;
+      }
+      return realStringify.call(this, value, ...rest);
+    };
+    try {
+      // The patch really is live -- it WOULD fool a global-JSON.stringify canonicalizer:
+      assert.strictEqual(
+        JSON.stringify({ version: 1, rules: { 'evil.js': 'ALLOW' }, signedAt: signedEmpty.signedAt }),
+        emptyCanonicalStr,
+        'scaffolding: the JSON.stringify patch must collapse the forged canonical to empty-rules bytes');
+      assert.strictEqual(new PolicyWatcher(forgedPath, {}).verify(), false,
+        'F-71: forged policy must stay REJECTED with JSON.stringify monkeypatched to empty-rules bytes');
+      // The legitimate path must still verify true under the patch (fix must not break it).
+      const validPath = freshPolicyPath();
+      writeSignedPolicy(validPath, { 'valid-71': 'OBSERVE' });
+      assert.strictEqual(new PolicyWatcher(validPath, {}).verify(), true,
+        'F-71: a genuinely valid signature must still verify true under the JSON.stringify patch');
+    } finally {
+      JSON.stringify = realStringify;
+    }
+
+    // 9b. Object.keys patched to drop the forged key (collapsing rules to {} in the canonical).
+    Object.keys = function (o) {
+      const ks = realKeys(o);
+      return ks.includes('evil.js') ? [] : ks;
+    };
+    try {
+      assert.strictEqual(new PolicyWatcher(forgedPath, {}).verify(), false,
+        'F-71: forged policy must stay REJECTED with Object.keys monkeypatched to drop the forged key');
+    } finally {
+      Object.keys = realKeys;
+    }
+
+    // 9c. Array.prototype.sort patched to return [] for the forged key list.
+    // eslint-disable-next-line no-extend-native
+    Array.prototype.sort = function (...args) {
+      if (Array.isArray(this) && this.includes('evil.js')) return [];
+      return realSort.apply(this, args);
+    };
+    try {
+      assert.strictEqual(new PolicyWatcher(forgedPath, {}).verify(), false,
+        'F-71: forged policy must stay REJECTED with Array.prototype.sort monkeypatched to empty the key list');
+    } finally {
+      Array.prototype.sort = realSort;
+    }
+
+    // 9d. Buffer.from patched to return the empty-rules bytes for the forged canonical string.
+    Buffer.from = function (v, ...rest) {
+      if (typeof v === 'string' && v === evilCanonicalStr) return emptyCanonicalBuf;
+      return realBufferFrom(v, ...rest);
+    };
+    try {
+      assert.strictEqual(new PolicyWatcher(forgedPath, {}).verify(), false,
+        'F-71: forged policy must stay REJECTED with Buffer.from monkeypatched to empty-rules bytes');
+    } finally {
+      Buffer.from = realBufferFrom;
+    }
+
+    console.log('  ok F-71: JSON.stringify/Object.keys/Array.prototype.sort/Buffer.from monkeypatched AFTER module load do not forge a policy past verification');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

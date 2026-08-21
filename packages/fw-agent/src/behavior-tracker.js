@@ -157,66 +157,91 @@ function matchesAny(content, patterns) {
   return patterns.some(p => p.test(content));
 }
 
-// ── F-43/F-68: proximity-based correlation ──────────────────────────────────────────────────
-// A multi-signal correlation rule (e.g. "reads a credential path AND makes a network call")
-// used to check whole-file boolean flags with no requirement that the two things actually
-// happen near each other. That is correct for a small hand-written malicious module (where
-// everything is naturally close together) but false-positives hard on large bundled/minified
-// files: a single-file rollup/webpack chunk routinely contains a credential-path-shaped string
-// literal, a network call, an eval(), a base64 decode, and a child_process reference SOMEWHERE
-// in tens or hundreds of KB of unrelated legitimate code, with no relationship between them at
-// all. Confirmed on the real vite@8.2.1 dist/node/chunks/node.js chunk (1.35MB): a `.npmrc`
-// reference and an unrelated `host:` object key are a coincidental 312 characters apart, while
-// the actual network-egress call is 68,519 characters from either -- and the same file
-// independently trips CREDENTIAL_EXFILTRATION (via the unrelated sensitivePath path), remote
-// fetch-and-exec, and decode-then-eval, each pairing signals tens of thousands of characters
-// apart. A window-based proximity requirement -- do the SPECIFIC signals a rule combines all
-// occur within some bounded span of each other -- keeps the same small hand-written malicious
-// snippets caught (their signals are inherently adjacent) while no longer treating "this string
-// exists somewhere in a 1MB bundle" as evidence of anything.
+// Length-preserving blank: replace every non-newline character with a space (newlines kept, so
+// line structure and any line-anchored regex behaviour survive). Used to sanitize comments /
+// module specifiers / URLs OUT of scanSrc while keeping scanSrc EXACTLY the same length as the
+// raw content it was derived from. That length invariant is what makes F-73 sound: a match's
+// character offset in the sanitized scanSrc is the identical offset in raw content, so proximity
+// and structural correlation can measure distances across sanitized-derived signals (positions
+// taken from scanSrc) and raw-derived signals (positions taken from content) in ONE coherent
+// coordinate space. The previous scanSrc collapsed those spans to shorter strings, which shifted
+// every subsequent offset and is why positions had to be recomputed against raw content — the
+// exact source/position mismatch F-73 describes.
+function blankKeep(s) {
+  return s.replace(/[^\n]/g, ' ');
+}
+
+// ── F-43/F-68 + F-69: structural, padding-resistant multi-signal correlation ─────────────────
+// A multi-signal rule (e.g. "reads a credential path AND makes a network call") must not fire on
+// whole-file boolean co-occurrence alone. That is correct for a small hand-written malicious
+// module (everything is naturally adjacent) but false-positives hard on large bundled/minified
+// files: a single rollup/webpack/vite chunk routinely contains a credential-path-shaped literal,
+// a network call, an eval(), a base64 decode, and a child_process reference SOMEWHERE in tens or
+// hundreds of KB of unrelated legitimate code. Confirmed on the real vite dist/node chunk
+// (1.35MB): a `.npmrc` reference and an unrelated `host:` object key are a coincidental ~312
+// characters apart while the actual network call is 68,519 characters from either. So the rules
+// require the SPECIFIC signals a rule combines to be genuinely CORRELATED, not merely co-present.
 //
-// Character distance (not line distance) is the chosen primitive: minified/bundled files are
-// frequently near-single-line, where a line-based window would be meaningless (the entire
-// 1.35MB vite chunk is a handful of lines), while character distance degrades gracefully
-// regardless of formatting.
+// F-69: correlation was originally a fixed CHARACTER window (200). That is padding-defeatable BY
+// CONSTRUCTION -- an attacker inserts ~100-150 characters of comment/whitespace between the two
+// halves of a payload and the signals fall outside the window, flipping a real credential-exfil /
+// fetch-and-exec from a CRITICAL block to a WARN that loads (confirmed: the pre-fix engine misses
+// every contextual detector at >=200 chars of comment padding). Widening the window is explicitly
+// rejected -- any fixed character distance is defeatable by adding that many characters.
 //
-// PROXIMITY_WINDOW_CHARS was chosen empirically, not by intuition: swept 50/100/200/400/800/
-// 1200/2000 characters against (a) the red-team suite (red-team/run.js: 125 malicious fixtures +
-// 26 benign controls at sweep time) plus the fw-control adversarial suite (52 cases at sweep
-// time), and (b) a real false-positive corpus: every package in corpus-top100.json (100
-// packages, ~1100 with transitive deps, 15,728 .js/.mjs/.cjs files) plus vite@8.2.1 and
-// astro@7.2.4 at the exact versions that previously false-positived. A new synthetic
-// npmrc-read-token-exfiltration true positive (adversarial.test.js, "F-43/F-68: new TP") and a
-// new benign control mirroring the exact vite npmrc/host:/far-egress shape
-// (benign-controls-extended.js, "benign-bundled-npmrc-host-far-egress") were added after the
-// sweep and re-confirmed passing at the selected window -- the corpus below reflects those
-// (125 malicious + 27 benign red-team; 53 adversarial).
+// The primitive is therefore SEPARATOR distance, measured on the sanitized length-preserving
+// scanSrc (comments already blanked to spaces, so their braces/semicolons do not count): the
+// number of statement/block separators ( ; { } ) between two signal offsets. Comment and
+// whitespace padding contain NO separators, so they add ZERO separator distance -- correlation is
+// INVARIANT to arbitrarily large comment/whitespace padding. Real intervening CODE is what adds
+// separators, so an attacker can only push two signals apart by inserting real statements between
+// them (the honest, documented evasion limit), and the coincidental pairings in minified
+// megabundles -- thousands of statements apart -- stay uncorrelated exactly as before.
 //
-//   window(chars)  red-team        adversarial    real-corpus FP files (of 15,728)
-//   50             FAIL (2 new bypasses, exfil-passwd-createReadStream +
-//                   sc-fetch-eval-generic-host missed; 5 adversarial cases also regress)
-//   100            FAIL (same 2 red-team bypasses)                        0
-//   200            PASS                            52/52                 0   <- selected
-//   400            PASS                            52/52                 1  (babel-core lib/api/browser.js,
-//                                                                             REMOTE_FETCH_EXEC, distance 337)
-//   800            PASS                            52/52                 1  (same)
-//   1200           PASS                            52/52                 1  (same)
-//   2000           PASS                            52/52                 2  (+ a second, unrelated
-//                                                                             DYNAMIC_CODE_EXEC_CHAIN pairing)
+// Separator distance is the primary (padding-immune) discriminator. A generous CHARACTER backstop
+// is kept as one additional, weakest precision signal (design hierarchy: same statement/block >
+// bounded proximity > whole-file) to bound the pathological case of a single enormous
+// separator-free span; it sits far above any real true-positive char distance, so it never limits
+// ordinary padded attacks. Both caps must hold in the SAME window (withinContext).
 //
-// 200 is the smallest tested window that preserves 100% of required true positives while
-// eliminating every observed false positive. Below 200, two genuine hand-written attack
-// fixtures whose constituent signals sit 100-200 characters apart (a credential read piped
-// into a stream a few statements later, and a fetch-then-eval separated by a handful of
-// intervening lines) stop being caught. At 400 and above, babel-core's legitimate (if risky)
-// browser API -- which fetches a remote script via XHR and executes it with `new Function(...)`
-// 337 characters later, in `lib/api/browser.js` -- starts false-positiving again; at 2000, a
-// second, unrelated pairing in the real corpus does too. The smallest false-positive-causing
-// distance found anywhere in the real corpus (excluding babel-core's genuine fetch-and-eval
-// pattern) was 13,236 characters -- 200 sits two orders of magnitude below that with room to
-// spare, while still safely above every true-positive distance actually observed (worst case:
-// the sc-fetch-eval-generic-host fixture at ~150 characters).
-const PROXIMITY_WINDOW_CHARS = 200;
+// CORRELATION_MAX_SEPARATORS swept empirically (same method that chose the old 200 window),
+// holding the char backstop at 8000, against the red-team suite (125 malicious + 27 benign), the
+// fw-control adversarial suite (53 cases), and a real false-positive corpus of 4,532 .js/.mjs/.cjs
+// files from vite/astro/babel-core/@babel/webpack/rollup/esbuild/typescript/eslint/knex/sequelize/
+// mongodb/express/got/undici/axios/ws/execa/tar/... (incl. transitive deps):
+//
+//   maxSep  red-team(regr,fp)  adversarial  real-corpus FP files
+//   2       1 regression        FAIL         0     (a genuine 2-statement-apart TP stops being caught)
+//   3       0, 0                PASS         0
+//   4       0, 0                PASS         0
+//   5       0, 0                PASS         0   <- selected (midpoint of the safe window)
+//   6       0, 0                PASS         0
+//   7       0, 0                PASS         0
+//   8       0, 0                PASS         1   (babel-core lib/api/browser.js: a genuine XHR-fetch +
+//                                                 `new Function`, 337 chars / 8 separators apart --
+//                                                 the SAME file the old char sweep FP'd at window>=400)
+//
+// The safe window is [3,7]; 5 is its midpoint, catching every true positive with two separators of
+// margin above the TP floor and three below the babel-core false-positive ceiling. Padding-adversary
+// coverage: with maxSep=5, every contextual detector stays caught through 1000+ chars of comment AND
+// whitespace padding (behavior-tracker-unit-test.js), and detection falls off only once >=5 real
+// intervening statements are added -- the documented structural evasion limit.
+const CORRELATION_MAX_SEPARATORS = 5;
+const CORRELATION_MAX_CHARS = 8000;
+
+// Prefix sum of statement/block separators ( ; { } ) over scanSrc, so the separator count in any
+// half-open offset range [a, b) is sep[b] - sep[a] in O(1). Built once per analyzeModule() call.
+function buildSeparatorPrefix(scanSrc) {
+  const n = scanSrc.length;
+  const sep = new Int32Array(n + 1);
+  let count = 0;
+  for (let i = 0; i < n; i++) {
+    const c = scanSrc.charCodeAt(i);
+    if (c === 59 /* ; */ || c === 123 /* { */ || c === 125 /* } */) count++;
+    sep[i + 1] = count;
+  }
+  return sep;
+}
 
 // Collect every match START INDEX (character offset into `content`) for every pattern in
 // `patterns`, regardless of whether each pattern already carries a global flag.
@@ -234,19 +259,20 @@ function matchAllPositions(content, patterns) {
   return positions;
 }
 
-// Does there exist a contiguous character span of at most `windowChars` that contains at least
-// one position from EVERY group in `positionGroups`? Positions are always measured against the
-// same coordinate space (raw module `content`) across every signal, so a rule combining three
-// signal types requires all three to genuinely co-occur, not just any two of them.
-//
-// Standard "smallest window containing every group" two-pointer sweep, stopped at the first
-// window that satisfies the requirement (the caller only needs existence, not the minimum).
-function withinProximity(positionGroups, windowChars) {
+// F-69 structural correlation: does there exist a window (one position from EVERY group) whose
+// extent satisfies BOTH the separator cap AND the character cap simultaneously? A smallest-window
+// two-pointer sweep whose shrink condition is "either cap exceeded". Both
+// the separator span (sepPrefix[hi] - sepPrefix[lo], padding-immune) and the character span
+// (hi - lo, the weak backstop) are monotonic in window width, so advancing `left` until both hold
+// is a valid sliding window. `positions` are offsets in the shared length-preserving coordinate
+// (scanSrc for sanitized-derived signals, content for raw-derived signals -- they share offsets).
+function withinContext(positionGroups, sepPrefix, maxSeparators, maxChars) {
   if (positionGroups.some(g => g.length === 0)) return false;
   const points = [];
   positionGroups.forEach((positions, groupIndex) => {
     for (const pos of positions) points.push([pos, groupIndex]);
   });
+  if (points.length === 0) return false;
   points.sort((a, b) => a[0] - b[0]);
 
   const counts = new Array(positionGroups.length).fill(0);
@@ -255,7 +281,10 @@ function withinProximity(positionGroups, windowChars) {
   for (let right = 0; right < points.length; right++) {
     const rightGroup = points[right][1];
     if (counts[rightGroup]++ === 0) filled++;
-    while (points[right][0] - points[left][0] > windowChars) {
+    while (
+      (points[right][0] - points[left][0]) > maxChars ||
+      (sepPrefix[points[right][0]] - sepPrefix[points[left][0]]) > maxSeparators
+    ) {
       const leftGroup = points[left][1];
       if (--counts[leftGroup] === 0) filled--;
       left++;
@@ -394,14 +423,26 @@ class BehaviorTracker {
     // boundaries so adjoining code doesn't fuse); line comments are dropped up to the
     // newline, guarded by a negative lookbehind on ':' so the "//" in "https://" is never
     // mistaken for a comment start and real code following a same-line URL survives.
+    // Every replacement below is LENGTH-PRESERVING (blanks to equal-length spaces, or blanks only
+    // the specifier span between the kept quotes) so scanSrc.length === content.length and offsets
+    // stay aligned to raw content -- see blankKeep() and F-73. Semantically identical to the prior
+    // collapse-to-shorter version for the boolean signal checks (none of the SIGNAL_PATTERNS match
+    // whitespace), but now positions taken from scanSrc share content's coordinate space.
     const scanSrc = content
-      .replace(/\/\*[\s\S]*?\*\//g, ' ')             // block comments
-      .replace(/(?<!:)\/\/[^\n]*/g, '')              // line comments
-      .replace(/(\brequire\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')  // require('spec')
-      .replace(/(\bfrom\s+)(['"`])(?:\\.|(?!\2)[^\\])*\2/g, '$1$2$2')                    // import ... from 'spec'
-      .replace(/(\bimport\s*\(\s*)(['"`])(?:\\.|(?!\2)[^\\])*\2(\s*\))/g, '$1$2$2$3')    // import('spec')
-      .replace(/https?:\/\/[^\s'"`]+/g, '')          // URLs
-      .replace(/`[^`]*\$\{[^`]*`/g, '');             // template-literal URL builders
+      .replace(/\/\*[\s\S]*?\*\//g, blankKeep)       // block comments
+      .replace(/(?<!:)\/\/[^\n]*/g, blankKeep)       // line comments
+      .replace(/(\brequire\s*\(\s*)(['"`])((?:\\.|(?!\2)[^\\])*)\2(\s*\))/g,
+               (m, pre, q, spec, tail) => pre + q + blankKeep(spec) + q + tail)  // require('spec')
+      .replace(/(\bfrom\s+)(['"`])((?:\\.|(?!\2)[^\\])*)\2/g,
+               (m, pre, q, spec) => pre + q + blankKeep(spec) + q)               // import ... from 'spec'
+      .replace(/(\bimport\s*\(\s*)(['"`])((?:\\.|(?!\2)[^\\])*)\2(\s*\))/g,
+               (m, pre, q, spec, tail) => pre + q + blankKeep(spec) + q + tail)  // import('spec')
+      .replace(/https?:\/\/[^\s'"`]+/g, blankKeep)   // URLs
+      .replace(/`[^`]*\$\{[^`]*`/g, blankKeep);      // template-literal URL builders
+
+    // F-69: separator prefix-sum over the sanitized scanSrc, used by withinContext() below to
+    // measure padding-immune structural distance between correlated signals.
+    const sepPrefix = buildSeparatorPrefix(scanSrc);
 
     // Hardcoded-URL call sites, e.g. fetch('http://evil.example/...'). Extracted (not just
     // matched) so the escalation rule below can tell a hardcoded exfil host apart from a
@@ -438,11 +479,20 @@ class BehaviorTracker {
 
     const found = [];
 
-    // F-43/F-68: every whole-file multi-signal correlation below now additionally requires the
-    // combined signals to occur within PROXIMITY_WINDOW_CHARS characters of each other (see the
-    // comment on withinProximity() above) -- not just "each signal appears SOMEWHERE in this
-    // file". Position arrays are computed lazily and cached per call, since several rules below
-    // reuse the same signal's positions (dynamicCode and networkEgress each feed three rules).
+    // F-43/F-68 + F-69: every whole-file multi-signal correlation below additionally requires the
+    // combined signals to be STRUCTURALLY correlated (withinContext: within
+    // CORRELATION_MAX_SEPARATORS statement/block separators AND CORRELATION_MAX_CHARS characters of
+    // each other) -- not just "each signal appears SOMEWHERE in this file".
+    //
+    // F-73 position-source rule (INVARIANT): each signal's positions are taken from the SAME
+    // string its boolean flag was derived from -- scanSrc for the sanitized-derived signals
+    // (SENSITIVE_PATH, SENSITIVE_CONFIG_PATH, NPMRC_READ, NPMRC_TOKEN, CODE_DECODE), raw content
+    // for the raw-derived signals (NETWORK_EGRESS, DYNAMIC_CODE, PROCESS_EXEC, HOST_OPTION,
+    // hardcoded egress). scanSrc is length-preserving, so both live in one coordinate space and
+    // distances stay coherent; but sourcing a sanitized signal's positions from raw content (the
+    // pre-F-73 bug) would let a comment/URL mention the boolean correctly ignored still contribute
+    // a spurious position and satisfy the proximity check. Position arrays are computed lazily and
+    // cached, since several rules reuse the same signal's positions.
     let _dynamicCodePositions = null;
     const dynamicCodePositions = () => _dynamicCodePositions || (_dynamicCodePositions = matchAllPositions(content, SIGNAL_PATTERNS.DYNAMIC_CODE));
     let _networkEgressPositions = null;
@@ -455,10 +505,10 @@ class BehaviorTracker {
     // Bare process.env reads are intentionally excluded here (F-16: false-positive on axios, dotenv, etc.)
     // and handled by the ENV_NETWORK_EGRESS WARN rule below.
     if (signals.sensitivePath && signals.networkEgress) {
-      const proximate = withinProximity([
-        matchAllPositions(content, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      const proximate = withinContext([
+        matchAllPositions(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
         networkEgressPositions(),
-      ], PROXIMITY_WINDOW_CHARS);
+      ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
           rule: 'CREDENTIAL_EXFILTRATION',
@@ -485,14 +535,14 @@ class BehaviorTracker {
       let proximate = false;
       if (theftSignalPresent) {
         const theftPositions = []
-          .concat(signals.npmrcToken ? matchAllPositions(content, SIGNAL_PATTERNS.NPMRC_TOKEN) : [])
+          .concat(signals.npmrcToken ? matchAllPositions(scanSrc, SIGNAL_PATTERNS.NPMRC_TOKEN) : [])
           .concat(signals.hostOption ? matchAllPositions(content, SIGNAL_PATTERNS.HOST_OPTION) : [])
           .concat(signals.hardcodedEgressNonRegistry ? hardcodedEgressNonRegistryPositions() : []);
-        proximate = withinProximity([
-          matchAllPositions(content, SIGNAL_PATTERNS.NPMRC_READ),
+        proximate = withinContext([
+          matchAllPositions(scanSrc, SIGNAL_PATTERNS.NPMRC_READ),
           networkEgressPositions(),
           theftPositions,
-        ], PROXIMITY_WINDOW_CHARS);
+        ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       }
       if (proximate) {
         found.push({
@@ -519,11 +569,11 @@ class BehaviorTracker {
       const theftPositions = []
         .concat(signals.hardcodedEgressNonRegistry ? hardcodedEgressNonRegistryPositions() : [])
         .concat(signals.hostOption ? matchAllPositions(content, SIGNAL_PATTERNS.HOST_OPTION) : []);
-      const proximate = withinProximity([
-        matchAllPositions(content, SIGNAL_PATTERNS.SENSITIVE_CONFIG_PATH),
+      const proximate = withinContext([
+        matchAllPositions(scanSrc, SIGNAL_PATTERNS.SENSITIVE_CONFIG_PATH),
         networkEgressPositions(),
         theftPositions,
-      ], PROXIMITY_WINDOW_CHARS);
+      ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
           rule: 'CREDENTIAL_EXFILTRATION',
@@ -548,10 +598,10 @@ class BehaviorTracker {
     // Intra-module rule: dynamic code generation + process execution, within the proximity
     // window → code injection chain.
     if (signals.dynamicCode && signals.processExec) {
-      const proximate = withinProximity([
+      const proximate = withinContext([
         dynamicCodePositions(),
         matchAllPositions(content, SIGNAL_PATTERNS.PROCESS_EXEC),
-      ], PROXIMITY_WINDOW_CHARS);
+      ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
           rule: 'DYNAMIC_CODE_EXEC_CHAIN',
@@ -569,10 +619,10 @@ class BehaviorTracker {
     // non-warnOnly block detection). This closes the base64→eval gap where a comment-free
     // `Buffer.from(b64,'base64').toString(); eval(x)` previously fell through as OBSERVE.
     if (signals.dynamicCode && signals.codeDecode) {
-      const proximate = withinProximity([
+      const proximate = withinContext([
         dynamicCodePositions(),
-        matchAllPositions(content, SIGNAL_PATTERNS.CODE_DECODE),
-      ], PROXIMITY_WINDOW_CHARS);
+        matchAllPositions(scanSrc, SIGNAL_PATTERNS.CODE_DECODE),
+      ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
           rule: 'OBFUSCATED_CODE_EXECUTION',
@@ -593,10 +643,10 @@ class BehaviorTracker {
     // is not double-reported here (dedup is not required, but the ordering keeps the most
     // descriptive rule first).
     if (signals.networkEgress && signals.dynamicCode) {
-      const proximate = withinProximity([
+      const proximate = withinContext([
         networkEgressPositions(),
         dynamicCodePositions(),
-      ], PROXIMITY_WINDOW_CHARS);
+      ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
           rule: 'REMOTE_FETCH_EXEC',

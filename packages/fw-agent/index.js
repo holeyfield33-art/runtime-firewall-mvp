@@ -492,6 +492,68 @@ function resolveModuleIdentity(filename) {
   return String(filename).replace(/\\/g, '/');
 }
 
+// ── F-79: shared scan-and-policy core (CJS _compile, ESM load, ESM-interop-CJS) ────────────────
+// One implementation for all three so the hook sites cannot drift (the engine-sync discipline).
+// resolveModulePolicy() does the identical policy lookup; scanModuleAndEnforce() does the identical
+// OBSERVE-tier detector scan and the identical detection-triggered throw. The callers keep only
+// their path-specific actions (CJS's silent stub, ESM's throw, plain compile/return), which
+// genuinely differ.
+function resolveModulePolicy(filename) {
+  const requestName = path.basename(filename);
+  const canonicalIdentity = resolveModuleIdentity(filename);
+  const packageKey = packageKeyForFilename(filename);
+  // Policy lookup precedence (first hit wins, default OBSERVE):
+  //   (a) canonical identity "name@version:relPath" — disambiguates packages sharing a basename
+  //   (b) package-key form ("@scope/name" or "name") — same rule for every file in a package
+  //   (c) bare basename — compat shim so any hand-written basename-keyed policy still resolves
+  let configuredRule = 'OBSERVE';
+  if (policyMap.has(canonicalIdentity)) {
+    configuredRule = policyMap.get(canonicalIdentity);
+  } else if (packageKey && policyMap.has(packageKey)) {
+    configuredRule = policyMap.get(packageKey);
+  } else if (policyMap.has(requestName)) {
+    configuredRule = policyMap.get(requestName);
+  }
+  return { requestName, canonicalIdentity, packageKey, configuredRule };
+}
+
+// Runs the OBSERVE-tier detector scan on `source` and enforces block-tier findings by throwing the
+// identical compilation-lockdown error both hooks use (`esm` only tags the audit/telemetry event).
+// Honors the per-content verified-hash cache: on identical, already-scanned content it returns
+// without re-scanning or re-counting; on a fresh clean scan it records the content hash. It never
+// touches verifiedModulePaths — the CALLER adds that on its non-throwing return, exactly as before,
+// because "verified" means "this specific hook reached a definitive non-throwing outcome".
+function scanModuleAndEnforce(filename, source, meta, esm) {
+  const { requestName, canonicalIdentity, packageKey } = meta;
+  const contentHash = pristineCreateHash('sha256').update(source).digest('hex');
+  if (verifiedCompilationsCache.get(filename) === contentHash) return;
+
+  compileMetrics.filesCompiled++;
+  const scanResult = detector.scanModuleSync(requestName, source, filename, packageKey);
+  // WARN-tier and MEDIUM findings are marked warnOnly by the detector and never hard-block; only
+  // CRITICAL/HIGH reach blockDetections. See detector.js and the removed F-34 dead branch.
+  const blockDetections = scanResult.detections.filter((d) => !d.warnOnly);
+  const warnDetections = scanResult.detections.filter((d) => d.warnOnly);
+
+  if (warnDetections.length > 0) {
+    emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map((d) => d.matched) });
+  }
+
+  if (blockDetections.length > 0) {
+    compileMetrics.lockdownsEnforced++;
+    const event = { eventType: 'DETECTION_TRIGGERED', packageName: canonicalIdentity, detections: blockDetections, timestamp: Date.now() };
+    if (esm) event.esm = true;
+    auditLog.write(event);
+    emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
+
+    const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map((d) => d.rule || d.type).join(', ')}`;
+    console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
+    throw new Error(msg);
+  }
+
+  verifiedCompilationsCache.set(filename, contentHash);
+}
+
 Module.prototype._compile = function (content, filename) {
   // Reset cross-module behavioral state at each new dependency-tree root so that
   // benign modules in one tree cannot poison detection in an unrelated tree.
@@ -513,22 +575,7 @@ Module.prototype._compile = function (content, filename) {
     throw new Error(`[Firewall] Quarantined module "${path.basename(this.parent.filename)}" cannot load "${requestName}"`);
   }
 
-  const requestName = path.basename(filename);
-  const canonicalIdentity = resolveModuleIdentity(filename);
-  const packageKey = packageKeyForFilename(filename);
-
-  // Policy lookup precedence (first hit wins, default OBSERVE):
-  //   (a) canonical identity "name@version:relPath" — disambiguates packages sharing a basename
-  //   (b) package-key form ("@scope/name" or "name") — same rule for every file in a package
-  //   (c) bare basename — compat shim so any hand-written basename-keyed policy still resolves
-  let configuredRule = 'OBSERVE';
-  if (policyMap.has(canonicalIdentity)) {
-    configuredRule = policyMap.get(canonicalIdentity);
-  } else if (packageKey && policyMap.has(packageKey)) {
-    configuredRule = policyMap.get(packageKey);
-  } else if (policyMap.has(requestName)) {
-    configuredRule = policyMap.get(requestName);
-  }
+  const { requestName, canonicalIdentity, packageKey, configuredRule } = resolveModulePolicy(filename);
 
   if (configuredRule === 'BLOCK') {
     const event = { eventType: 'BLOCK', packageName: canonicalIdentity, timestamp: Date.now() };
@@ -552,49 +599,10 @@ Module.prototype._compile = function (content, filename) {
   }
 
   if (configuredRule === 'OBSERVE') {
-    const contentHash = pristineCreateHash('sha256').update(content).digest('hex');
-    if (verifiedCompilationsCache.get(filename) === contentHash) {
-      // F-58: this exact content was already scanned by a prior call -- verified.
-      verifiedModulePaths.add(filename);
-      return originalCompile.apply(this, arguments);
-    }
-
-    compileMetrics.filesCompiled++;
-    const scanResult = detector.scanModuleSync(requestName, content, filename, packageKey);
-
-    // Split block-tier detections from WARN-only observations. WARN-tier matches (e.g.
-    // https.request, buffer.from) and MEDIUM behavioral findings never reach blockDetections:
-    // the detector marks anything below HIGH as warnOnly (see detector.js — only CRITICAL/HIGH
-    // behavioral violations are pushed as non-warnOnly). So blockDetections holds exactly the
-    // HIGH/CRITICAL findings, which hard-block. DYNAMIC_MODULE_LOAD (MEDIUM, require(variable))
-    // is intentionally NOT quarantined here — non-literal require() is pervasive in legitimate
-    // code (lazy loads, plugin systems, require(path.join(...))), so it surfaces as an OBSERVE
-    // telemetry signal only. (F-34: removed a dead `hasMediumOnly` quarantine branch that could
-    // never fire because no non-warnOnly MEDIUM detection is ever produced.)
-    const blockDetections = scanResult.detections.filter(d => !d.warnOnly);
-    const warnDetections  = scanResult.detections.filter(d => d.warnOnly);
-
-    if (warnDetections.length > 0) {
-      emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map(d => d.matched) });
-    }
-
-    if (blockDetections.length > 0) {
-      compileMetrics.lockdownsEnforced++;
-      const event = {
-        eventType: 'DETECTION_TRIGGERED',
-        packageName: canonicalIdentity,
-        detections: blockDetections,
-        timestamp: Date.now(),
-      };
-      auditLog.write(event);
-      emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
-
-      const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map(d => d.rule || d.type).join(', ')}`;
-      console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
-      throw new Error(msg);
-    }
-
-    verifiedCompilationsCache.set(filename, contentHash);
+    // Shared scan-and-enforce (identical for CJS/ESM/ESM-interop-CJS): throws on a block-tier
+    // detection, no-ops on an already-verified identical-content cache hit, records the hash
+    // otherwise. DYNAMIC_MODULE_LOAD (MEDIUM, require(variable)) is warnOnly and never blocks here.
+    scanModuleAndEnforce(filename, content, { requestName, canonicalIdentity, packageKey }, false);
   }
 
   // F-58: reached only on a definitive, non-throwing outcome (OBSERVE-pass, or an unrecognized
@@ -660,6 +668,13 @@ for (const cachedPath of Object.keys(Module._cache)) {
   verifiedModulePaths.add(cachedPath);
 }
 
+// F-70 scope (disclosure, see SECURITY.md): this wrap closes require.cache PRE-SEEDING that
+// bypasses the scan path. It does NOT close reassignment of the loader functions themselves --
+// `Module._load` (this very property), `Module.prototype._compile`, and `module.registerHooks()`
+// are all writable/installable by same-privilege code running after this patch, which can capture
+// the wrapped version and install a replacement that skips the check. Freezing them is neither
+// cheap nor low-risk (it recreates the opt-in `_compile`-freeze compatibility problem) and does
+// not escape the same-privilege domain. That is the same-process ceiling, not a closable gap.
 const originalModuleLoad = Module._load;
 Module._load = function (request, parent, isMain) {
   let resolvedPath;
@@ -774,10 +789,23 @@ if (typeof Module.registerHooks === 'function') {
       load(url, context, nextLoad) {
         const result = nextLoad(url, context);
 
-        // Only scan actual ES module source loaded from a local file. Non-'module' formats
-        // (builtins, JSON, wasm, CJS-interop) either carry no usable text or already route
-        // through the _compile hook above.
-        if (result.format !== 'module' || typeof result.source === 'undefined' || result.source === null) {
+        // F-79: scan BOTH real ES modules ('module') AND CommonJS loaded THROUGH the ESM loader
+        // ('commonjs' -- Node's `import x from "some-cjs-package"` CJS-through-ESM interop). The
+        // interop populates Module._cache as a side effect but NEVER calls Module.prototype._compile,
+        // so this load hook is the only place the interop-CJS source is ever seen. Skipping it (the
+        // old `format !== 'module'` early return) had two consequences, both closed here:
+        //   1. Detection gap: a genuinely malicious CJS module imported via ESM ran UNSCANNED (it
+        //      was blocked via require() but ran free via import). Marking it "verified" without
+        //      scanning -- the naive fix -- would cement that gap, so we SCAN, then mark verified.
+        //   2. False positive: because the interop path never added the file to verifiedModulePaths,
+        //      the later require() of that same CJS package (vite/astro reference picomatch as both
+        //      `import pm from "picomatch"` and `__require("picomatch")`) hit F-58's cache gate as an
+        //      "unverified" entry and was refused under FW_CACHE_POLICY=block. Scanning here marks it
+        //      verified, so the subsequent require() is a clean verified cache hit.
+        // Formats with no scannable source (builtins, JSON, wasm, or source absent) keep their
+        // existing pass-through. Interop-CJS does provide result.source (a Buffer) -- confirmed live.
+        const scannable = result.format === 'module' || result.format === 'commonjs';
+        if (!scannable || typeof result.source === 'undefined' || result.source === null) {
           return result;
         }
         if (!url.startsWith('file://')) {
@@ -789,22 +817,12 @@ if (typeof Module.registerHooks === 'function') {
         }
 
         const filename = fileURLToPath(url);
-        const requestName = path.basename(filename);
-        const canonicalIdentity = resolveModuleIdentity(filename);
-        const packageKey = packageKeyForFilename(filename);
-
-        // Same policy lookup precedence as _compile above.
-        let configuredRule = 'OBSERVE';
-        if (policyMap.has(canonicalIdentity)) {
-          configuredRule = policyMap.get(canonicalIdentity);
-        } else if (packageKey && policyMap.has(packageKey)) {
-          configuredRule = policyMap.get(packageKey);
-        } else if (policyMap.has(requestName)) {
-          configuredRule = policyMap.get(requestName);
-        }
+        const meta = resolveModulePolicy(filename);
+        const { requestName, canonicalIdentity, configuredRule } = meta;
 
         if (configuredRule === 'BLOCK' || configuredRule === 'QUARANTINE') {
-          // See KNOWN LIMITATIONS above: QUARANTINE degrades to BLOCK for ESM.
+          // A load hook cannot do CJS's silent stub substitution, so QUARANTINE degrades to BLOCK
+          // here (see KNOWN LIMITATIONS above) -- for real ESM and for interop-CJS alike.
           const eventType = configuredRule === 'BLOCK' ? 'BLOCK' : 'QUARANTINE_ACTIVE';
           const event = { eventType, packageName: canonicalIdentity, timestamp: Date.now(), esm: true };
           auditLog.write(event);
@@ -813,32 +831,9 @@ if (typeof Module.registerHooks === 'function') {
         }
 
         const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
-        const contentHash = pristineCreateHash('sha256').update(source).digest('hex');
-        if (verifiedCompilationsCache.get(filename) === contentHash) {
-          verifiedModulePaths.add(filename);
-          return result;
-        }
-
-        compileMetrics.filesCompiled++;
-        const scanResult = detector.scanModuleSync(requestName, source, filename, packageKey);
-        const blockDetections = scanResult.detections.filter((d) => !d.warnOnly);
-        const warnDetections = scanResult.detections.filter((d) => d.warnOnly);
-
-        if (warnDetections.length > 0) {
-          emitTelemetry('OBSERVE', canonicalIdentity, null, { warnMatches: warnDetections.map((d) => d.matched) });
-        }
-
-        if (blockDetections.length > 0) {
-          compileMetrics.lockdownsEnforced++;
-          const event = { eventType: 'DETECTION_TRIGGERED', packageName: canonicalIdentity, detections: blockDetections, timestamp: Date.now(), esm: true };
-          auditLog.write(event);
-          emitTelemetry('DETECTION_TRIGGERED', canonicalIdentity, null, { detections: blockDetections });
-          const msg = `[Firewall] Detection in "${requestName}": ${blockDetections.map((d) => d.rule || d.type).join(', ')}`;
-          console.error(`\n[COMPILATION LOCKDOWN] Threat detected in "${requestName}"`);
-          throw new Error(msg);
-        }
-
-        verifiedCompilationsCache.set(filename, contentHash);
+        // Same scan-and-enforce path as CJS _compile (esm=true only tags the audit event); throws
+        // on a block-tier detection, no-ops on a verified identical-content cache hit.
+        scanModuleAndEnforce(filename, source, meta, true);
         verifiedModulePaths.add(filename);
         return result;
       },
@@ -958,5 +953,17 @@ function isQuarantined(filename) {
   return quarantinedModules.has(filename);
 }
 
-const _exports = { compileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
+// ── F-74: compileMetrics read-only accessor ──────────────────────────────────────────────────
+// compileMetrics was exported as the live mutable object — the same shape F-57 fixed for
+// policyMap/quarantinedModules. It's telemetry only (no enforcement branch reads it, so mutating
+// it is not a security bypass), but any allowed code could do `fw.compileMetrics.filesCompiled = 0`
+// and corrupt the monitoring/shutdown summary the operator relies on. Same treatment: export a
+// read-only accessor, not the live object. compileMetrics is flat (all-number counters), so a
+// frozen shallow copy is a complete, tamper-proof snapshot; each call returns a fresh frozen copy
+// reflecting the counters at call time.
+function getCompileMetrics() {
+  return Object.freeze({ ...compileMetrics });
+}
+
+const _exports = { getCompileMetrics, resolveModuleIdentity, packageKeyForFilename, hasPolicy, getPolicyDecision, isQuarantined };
 module.exports = _exports;

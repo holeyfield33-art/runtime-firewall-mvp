@@ -415,7 +415,8 @@ test('F-30 redo: .npmrc _authToken extraction with a {host: ...} override is blo
 // adjacent statements). This is the realistic shape of an actual .npmrc-token-stealing payload
 // and must stay CRITICAL-blocked once CREDENTIAL_EXFILTRATION requires the npmrcRead,
 // networkEgress, and theft-signal (here: npmrcToken, the literal `_authToken=` match) positions
-// to fall within PROXIMITY_WINDOW_CHARS of each other -- unlike test 21 above (which uses an
+// to be structurally correlated (F-69 withinContext: within CORRELATION_MAX_SEPARATORS
+// statement/block separators of each other) -- unlike test 21 above (which uses an
 // explicit {host:...} override as its theft signal), this uses the extracted token value itself
 // sent directly, the single most direct real-world token-exfiltration shape.
 test('F-43/F-68: new TP -- .npmrc read + _authToken extraction + direct exfil, all proximate, is blocked', () => {

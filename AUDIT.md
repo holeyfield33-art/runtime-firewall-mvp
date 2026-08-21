@@ -104,6 +104,8 @@ No regex exceeded 100ms on any input; full pipeline scans completed in 4.5–18.
 
 $ /tmp/.../gitleaks detect --source . -v   (installed via `go install` for this audit; 73 commits scanned)
 1 finding: scripts/dev-private-key.pem (Ed25519 PRIVATE KEY, committed intentionally — see below)
+  [SUPERSEDED 2026-08-20: this key was deleted from HEAD and DEV_PUBLIC_KEY_PEM rotated to a key
+   with no committed private half (F-62). The finding below is the 2026-07-25 audit-time state.]
 No other secrets/tokens/API keys found in history or working tree.
 
 $ npm audit fix   (non-force)
@@ -117,16 +119,27 @@ environment noise, not reproduced against the repo's own EPYC evidence files)
 
 ### Note on `scripts/dev-private-key.pem`
 
-This IS a private key committed to the repo, but it is **intentional and correctly gated**, not
-an accidental leak — verified by reading the code, not just trusting the README:
+> **SUPERSEDED (2026-08-20, F-62 key rotation).** This note describes the state at the audited
+> commit `1d60552` (2026-07-25). The committed dev private key `scripts/dev-private-key.pem` was
+> **deleted from `HEAD`** and `DEV_PUBLIC_KEY_PEM` was **rotated** to a public key whose private
+> half has never been committed anywhere; there is no longer any shared dev private key in the
+> repository. History was deliberately not rewritten (see SECURITY.md → "Key revocation record
+> (F-62)"). The present-tense wording and the `policy-watcher.js`/`index.js` line-number citations
+> below are the audit-time record and no longer point at current source — the gating functions
+> (`start()`'s dev-key guard, `assertProductionKeyConfig()`) still exist, but at different lines.
 
-- `packages/fw-agent/src/policy-watcher.js:177` refuses to start (`process.exit(1)`) if a policy
-  file is present and signed with this key, unless `FW_ALLOW_DEV_POLICY_KEY=1` is explicitly set —
+At the time of this audit this WAS a private key committed to the repo, but it was **intentional
+and correctly gated**, not an accidental leak — verified by reading the code, not just trusting the
+README (line numbers are as of commit `1d60552`):
+
+- `packages/fw-agent/src/policy-watcher.js:177` refused to start (`process.exit(1)`) if a policy
+  file was present and signed with this key, unless `FW_ALLOW_DEV_POLICY_KEY=1` was explicitly set —
   regardless of `NODE_ENV`.
 - `assertProductionKeyConfig()` (`policy-watcher.js:68`, called from `index.js:145`) additionally
-  refuses to start under `NODE_ENV=production` with this key even with no policy file present yet.
+  refused to start under `NODE_ENV=production` with this key even with no policy file present yet.
 - Confirmed live: `FW_ENABLE_DETECTION=1 node --require=./packages/fw-agent app.js` with the repo's
-  committed `policy.signed.json` (signed with this key) and no `FW_ALLOW_DEV_POLICY_KEY` set exits
-  with `[CRITICAL] ... Refusing to run.`
-No action taken per the stop-on-secret rule other than confirming it is not exploitable as shipped;
-this is a documented dev/CI convenience key, not a production credential.
+  then-committed `policy.signed.json` (signed with this key) and no `FW_ALLOW_DEV_POLICY_KEY` set
+  exited with `[CRITICAL] ... Refusing to run.`
+No action was taken at audit time per the stop-on-secret rule other than confirming it was not
+exploitable as shipped; it was a documented dev/CI convenience key, not a production credential.
+It has since been removed and rotated (above).

@@ -41,10 +41,14 @@ a gap: allowed code could insert a forged module (or even a bare `{ exports }` o
 into `require.cache[resolvedPath]` and `require()` would return the forged exports without the
 target's real code ever executing or being scanned. `Module._load` is now wrapped too, with a
 three-state model (verified / unknown / blocked) — see `FW_CACHE_POLICY` in Environment
-Variables. This closes that *specific* mechanism. It does not claim to close the broader
-same-process ceiling: code already running inside a protected process that finds some other way
-to install or return forged state — not via `require.cache` — is a different, broader problem
-this does not address.
+Variables. This closes that *specific* mechanism — `require.cache` **pre-seeding** that bypasses
+the scan path. It does **not** close reassignment of the loader functions themselves, and does not
+claim to close the broader same-process ceiling: sufficiently-privileged code already running
+inside a protected process can manipulate Node's runtime module-loading mechanisms (`Module._load`,
+`Module.prototype._compile`, `module.registerHooks()`) — the firewall's own enforcement points —
+in ways the firewall cannot reliably prevent, because it runs at the same privilege level as the
+code it inspects. This is an inherent limit of same-process defense, not a closable gap; see
+[SECURITY.md](SECURITY.md) for the detailed mechanics.
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your require/import graph, after `npm install` has finished. It is not an
