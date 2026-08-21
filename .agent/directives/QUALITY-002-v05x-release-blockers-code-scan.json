@@ -1,0 +1,27 @@
+{
+  "phase_id": "QUALITY-002",
+  "title": "Code quality scan of the v0.5.x release-blocker candidate (F-69/F-71/F-73/F-74/F-79/F-70)",
+  "target": "aletheia-firewall",
+  "track": "quality",
+  "objective": "Review exactly the fourteen quality dimensions (per .agent/agents/quality-reviewer.md) against the diff introduced by commits 032a5f9, bef5e3e, e42cf8b, 4858b88 on branch claude/v0-5-x-release-blockers-42y9av (base 8d28958, candidate 4858b88). Not a security review (see PENTEST-003, run independently and in parallel) and not a review of whether the fixes were the right design choice -- only whether the code implementing them is sound by the fourteen dimensions.",
+  "base_sha": "8d289581a192bc38e7584c6630bf48ab13f3a3db",
+  "candidate_sha": "4858b88e417c1031389241ecb11898fe2075d4dc",
+  "scope": [
+    "packages/fw-agent/index.js: the new resolveModulePolicy()/scanModuleAndEnforce() shared helpers and the refactor of Module.prototype._compile and the ESM load hook to use them",
+    "packages/fw-agent/src/behavior-tracker.js: blankKeep(), buildSeparatorPrefix(), withinContext(), the length-preserving scanSrc rewrite, and the six call-site changes to use scanSrc vs content per signal",
+    "packages/fw-agent/src/policy-watcher.js: the pristine primitive captures in canonicalPayload() and _hashRules()",
+    "all touched test files: behavior-tracker-unit-test.js, policy-watcher-unit-test.js, index-exports-unit-test.js, cache-poisoning-test.js, esm-loader-test.js + new esm-fixtures/*",
+    "docs touched by the candidate: README.md, SECURITY.md, CHANGELOG.md, AUDIT.md, red-team/README.md (api_consistency / backwards_compatibility / maintainability lens only -- prose quality is not one of the fourteen dimensions)"
+  ],
+  "out_of_scope": [
+    "any of the fourteen dimensions applied to code the candidate did not touch",
+    "security/adversarial findings (that is PENTEST-003's job, not this track's)",
+    "whether F-69's structural correlation or F-79's shared-scan-path design was the right approach -- only whether the code implementing that design is sound"
+  ],
+  "success_criteria": [
+    "all fourteen dimensions addressed (PASS/FAIL/N/A each) with N/A only where the diff genuinely doesn't touch that dimension",
+    "any blocking finding traces to a concrete file/line, not a design preference",
+    "explicit attention to: whether resolveModulePolicy()/scanModuleAndEnforce() actually eliminated the CJS/ESM drift risk they claim to (duplication/maintainability), whether withinContext()'s Int32Array prefix-sum has any off-by-one/edge-case risk on empty or tiny scanSrc (complexity/testability), whether the four pristine-primitive captures in policy-watcher.js are consistently used everywhere they should be (api_consistency/maintainability), whether getCompileMetrics()'s shallow-copy-and-freeze is a genuinely complete accessor given compileMetrics' actual shape (api_consistency/backwards_compatibility)"
+  ],
+  "status": "NOT STARTED"
+}
