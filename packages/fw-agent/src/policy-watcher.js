@@ -102,15 +102,47 @@ const pristineKeys = Object.keys;
 const pristineSort = Array.prototype.sort;
 const pristineBufferFrom = Buffer.from;
 
+// ── F-80: null-prototype copy target (PENTEST-003 finding, F-71 follow-on) ─────────────────────
+// F-71 captured the byte-building PRIMITIVES pristine, but canonicalPayload's own key-sort copy
+// loop below still built `sorted` as a plain `{}` and populated it via bracket assignment
+// (`sorted[k] = rules[k]`). Plain-object bracket assignment is NOT a primitive call -- it is a
+// [[Set]] operation that walks the object's prototype chain, so it is interceptable independent
+// of every F-71 capture: (1) the literal key '__proto__' has a built-in Object.prototype accessor
+// that silently no-ops for a non-object value -- `sorted['__proto__'] = 'BLOCK'` sets nothing, no
+// monkeypatch or pollution required, pure stock JS semantics; (2) allowed code with EARLIER
+// execution in the process (e.g. an OBSERVE-tier dependency) can define an accessor on
+// Object.prototype for ANY ordinary key name (a ordinary npm package name), which the same
+// bracket-assignment then silently swallows too. `rules` itself (from JSON.parse, which uses
+// CreateDataProperty and is immune to both) keeps the injected key as a real own property, so an
+// attacker with filesystem write access to policy.signed.json can add a forged rule for that key
+// via a raw TEXT edit post-signing -- no private key, no F-71 primitive touched -- and
+// canonicalPayload's signed bytes silently omit it while _loadAndVerify() still returns and
+// applies a `rules` object that has it. Live-reproduced both cases (PENTEST-003) with a real
+// generated Ed25519 keypair, the project's own sign-policy.js, and the unmodified pre-fix
+// _loadAndVerify(): a policy signed WITHOUT a '__proto__'/target rule still verified VALID after
+// the key was injected, and the forged rule was present in the applied rules object.
+//
+// Fix: build the copy target with Object.create(null) instead of `{}`. A null-prototype object
+// has no inherited accessor anywhere in its chain (there is no chain), so bracket assignment on
+// it is always a plain own-data-property write, immune to both the '__proto__' special case and
+// arbitrary-key Object.prototype pollution -- for every key, not just ones enumerated in advance.
+// JSON.stringify serializes a null-prototype object's own enumerable properties identically to a
+// plain object (verified: it never consults the prototype chain), so this changes nothing about
+// the produced bytes for any rules object that does NOT hit this bug -- i.e. every ordinary
+// policy signs and verifies exactly as before. scripts/sign-policy.js's own separate
+// canonicalPayload copy has the identical bug and is fixed identically (see that file) --
+// required for the two to stay byte-compatible: an honestly-signed policy containing a
+// '__proto__'-shaped or currently-polluted-name key must still verify.
 /**
  * Build the canonical signed payload buffer from a policy object.
  * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
  * Uses pristine byte-building primitives (see F-71 note above) so a post-load monkeypatch of
  * JSON.stringify / Object.keys / Array.prototype.sort / Buffer.from cannot decouple the bytes
- * verified here from the rules object the agent applies.
+ * verified here from the rules object the agent applies. Uses a null-prototype copy target (see
+ * F-80 note above) so the copy loop itself cannot be defeated via prototype-chain interception.
  */
 function canonicalPayload(version, rules, signedAt) {
-  const sorted = {};
+  const sorted = Object.create(null);
   for (const k of pristineSort.call(pristineKeys(rules))) sorted[k] = rules[k];
   return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));
 }

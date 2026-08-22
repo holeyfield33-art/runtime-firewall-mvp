@@ -192,17 +192,30 @@ function blankKeep(s) {
 // The primitive is therefore SEPARATOR distance, measured on the sanitized length-preserving
 // scanSrc (comments already blanked to spaces, so their braces/semicolons do not count): the
 // number of statement/block separators ( ; { } ) between two signal offsets. Comment and
-// whitespace padding contain NO separators, so they add ZERO separator distance -- correlation is
-// INVARIANT to arbitrarily large comment/whitespace padding. Real intervening CODE is what adds
-// separators, so an attacker can only push two signals apart by inserting real statements between
-// them (the honest, documented evasion limit), and the coincidental pairings in minified
-// megabundles -- thousands of statements apart -- stay uncorrelated exactly as before.
+// whitespace padding contain NO separators, so they add ZERO separator distance to the SEPARATOR
+// cap below -- real intervening CODE is what adds separators (further hardened by F-81, see
+// buildSeparatorPrefix, to also count Automatic-Semicolon-Insertion statement boundaries that
+// carry no literal ';{}' at all), so an attacker can only exhaust the separator budget by
+// inserting real statements between the two signals (the honest, documented evasion limit for
+// that cap specifically), and the coincidental pairings in minified megabundles -- thousands of
+// statements apart -- stay uncorrelated exactly as before.
 //
-// Separator distance is the primary (padding-immune) discriminator. A generous CHARACTER backstop
-// is kept as one additional, weakest precision signal (design hierarchy: same statement/block >
-// bounded proximity > whole-file) to bound the pathological case of a single enormous
-// separator-free span; it sits far above any real true-positive char distance, so it never limits
-// ordinary padded attacks. Both caps must hold in the SAME window (withinContext).
+// CORRECTED CLAIM (PENTEST-003 finding): separator-count is unconditionally immune to
+// comment/whitespace padding, at ANY size -- but withinContext() ANDs that cap with a second,
+// independent CHARACTER cap (below), and either cap alone excludes a window. So the overall
+// correlation is NOT literally "invariant to arbitrarily large" padding of any kind, as an
+// earlier version of this comment claimed -- it is bounded by CORRELATION_MAX_CHARS regardless of
+// padding composition, comment/whitespace included. In practice this ceiling is rarely the
+// binding constraint: real intervening CODE (the only thing that can defeat the separator cap)
+// exhausts the SEPARATOR budget at ~5 real statements, which is virtually always far fewer than
+// 8000 characters, so the separator cap is what actually stops a realistic attack. The character
+// cap only becomes the sole constraint for padding that is deliberately shaped to add zero
+// separators regardless of size -- comments, whitespace, or (see F-81's residual-limit note on
+// buildSeparatorPrefix) a single very long statement -- where it is a hard, disclosed ceiling at
+// CORRELATION_MAX_CHARS, not a "generous, never-the-limiting-factor" backstop as originally
+// described. See the padding-adversary tests in behavior-tracker-unit-test.js, which now assert
+// the honest boundary (immune well past 1000 chars, falls off at the 8000-char cap) instead of
+// only testing sizes safely below it.
 //
 // CORRELATION_MAX_SEPARATORS swept empirically (same method that chose the old 200 window),
 // holding the char backstop at 8000, against the red-team suite (125 malicious + 27 benign), the
@@ -229,15 +242,78 @@ function blankKeep(s) {
 const CORRELATION_MAX_SEPARATORS = 5;
 const CORRELATION_MAX_CHARS = 8000;
 
-// Prefix sum of statement/block separators ( ; { } ) over scanSrc, so the separator count in any
-// half-open offset range [a, b) is sep[b] - sep[a] in O(1). Built once per analyzeModule() call.
+// ── F-81 (PENTEST-003 finding, F-69 follow-on) ────────────────────────────────────────────────
+// Counting only literal ';' '{' '}' characters misses a real-code shape that contains genuine
+// statement structure but zero literal separator characters: MANY statements relying on
+// Automatic Semicolon Insertion (no ';') and no blocks/object literals (no '{'/'}') -- e.g. a
+// sequence of `const x1 = 1` / `const x2 = 1` / ... each on its own line. Arbitrarily many such
+// statements between two signals previously counted as ZERO separators, so the "falls off at
+// >=5 real intervening statements" invariant this file documents did not actually hold for
+// semicolon-free code -- it held for NO count of ASI-style statements at all.
+//
+// Fixed here, in the same single forward pass that already counts ';{}', without weakening
+// padding immunity for comment/whitespace filler (verified: the padding-adversary test matrix is
+// unchanged in outcome, including at sizes far larger than previously tested): a newline is ALSO
+// counted as a separator if the line it terminates contains real (non-whitespace) content AND
+// that content did not already end in ';'/'{'/'}' (avoiding double-counting an ordinary
+// `stmt;\n` line, which already credited the ';'). A blanked comment/whitespace-padding line has
+// no real content (blankKeep() reduces it to spaces -- see F-73), so it is correctly never
+// credited, however many such lines a padding block spans: arbitrarily many blank/comment-only
+// lines still contribute zero, at any size.
+//
+// ── Known, disclosed residual limit: a SINGLE arbitrarily long statement ───────────────────────
+// This fix does NOT close, and CANNOT close, the narrower case PENTEST-003 actually demonstrated
+// live: a single real statement (e.g. one huge string-literal assignment, no internal newline, no
+// ';{}' anywhere) between two signals. That is genuinely one statement, zero real intervening
+// separators, no matter how many characters it spans -- padding-statement COUNT is not the
+// vulnerable dimension there, raw CHARACTER LENGTH of that one statement is. A first attempt at
+// closing it here (crediting an extra separator every N characters of unbroken non-whitespace
+// content, regardless of statement count) was tried and is NOT included: it cannot work, by
+// construction of withinContext() below. Both of withinContext's caps (separator span, character
+// span) point the SAME direction -- a window only counts as correlated (fires the rule) when it
+// is SMALL in both -- so adding synthetic separators to a long single statement only ever makes
+// two signals look FURTHER apart, never closer; it cannot flip a window from invalid to valid.
+// And for this exact case, CORRELATION_MAX_CHARS already independently excludes the window before
+// separator-count is even relevant (a 9000-char single statement already exceeds the 8000-char
+// backstop on its own). Raising CORRELATION_MAX_CHARS does not help either: it is the SAME "any
+// fixed character distance is defeatable by adding that many characters" argument this file's own
+// F-69 design comment already makes about the outer (200-char) mechanism, recursed one level down
+// onto the backstop -- an attacker can always construct a statement one character longer than
+// whatever threshold is chosen. This is a mathematically inherent limit of a zero-AST,
+// character/separator-distance correlation primitive, not an oversight: distinguishing "one very
+// long but semantically ordinary statement" (a big embedded JSON/base64 blob, a large lookup
+// table -- real code this engine must not false-positive on) from "one very long but ENTIRELY
+// INERT padding statement constructed purely to evade detection" requires understanding what the
+// statement actually DOES, which is out of reach for text-scanning alone. Disclosed, not silently
+// missed -- see the dedicated evasion-limit test in behavior-tracker-unit-test.js and SECURITY.md.
 function buildSeparatorPrefix(scanSrc) {
   const n = scanSrc.length;
   const sep = new Int32Array(n + 1);
   let count = 0;
+  let lineHasContent = false;     // real (non-whitespace) content seen since the last line start
+  let lastWasBoundary = false;    // the last real character seen was ';', '{', or '}'
   for (let i = 0; i < n; i++) {
     const c = scanSrc.charCodeAt(i);
-    if (c === 59 /* ; */ || c === 123 /* { */ || c === 125 /* } */) count++;
+    if (c === 59 /* ; */ || c === 123 /* { */ || c === 125 /* } */) {
+      count++;
+      lineHasContent = true;
+      lastWasBoundary = true;
+    } else if (c === 10 /* \n */) {
+      // F-81: an ASI-plausible statement boundary -- this line had real content and did not
+      // already end in a literal separator (which would have credited it above already).
+      if (lineHasContent && !lastWasBoundary) {
+        count++;
+        lastWasBoundary = true;
+      }
+      lineHasContent = false;
+    } else if (c !== 32 /* space */ && c !== 9 /* tab */ && c !== 13 /* \r */) {
+      // A real, non-whitespace character (blanked comment/URL/specifier content is all spaces,
+      // by construction of blankKeep() -- see F-73 -- so it never reaches this branch).
+      lineHasContent = true;
+      lastWasBoundary = false;
+    }
+    // Whitespace (space/tab/CR) neither breaks nor extends line-content tracking -- it is
+    // invisible to both signals, matching ordinary intra-statement spacing.
     sep[i + 1] = count;
   }
   return sep;
