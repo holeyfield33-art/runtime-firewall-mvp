@@ -115,7 +115,26 @@ fixed, the same independent-reproduction discipline applied to every finding abo
 
 | Finding | Severity | Status | Notes |
 | ------- | -------- | ------ | ----- |
-| F-83: `canonicalPayload()`'s key-sort copy loop reads its key array with `for...of`, which is `Symbol.iterator`-interceptable | CRITICAL | ✅ Fixed | F-71 pristine-captured `Object.keys` and `Array.prototype.sort` themselves; F-80 hardened the copy loop's *target* (`Object.create(null)`). Neither touches `Array.prototype[Symbol.iterator]` — a distinct, uncaptured property that `for (const k of keysArray)` dispatches through. Allowed code with earlier execution in the process can replace it with a generator that yields every legitimate key while silently skipping one forged key of its choice; `Object.keys`/`sort` still return the real, complete list, so F-71's captures see nothing wrong — only the loop *consuming* that list is redirected. Live-reproduced: a policy signed without a target key, tampered post-signing (raw JSON-text edit, same technique as F-80) to add it, with a **targeted** `Symbol.iterator` installed that filters out exactly that key — `verify()` returned `true` and the forged rule was present in the applied `rules`, with F-80's fix still in place (the bypass is in the iteration source, not the assignment target, so F-80 does not gate it). Fixed by reading the sorted key array by index (`.length` + indexed access) instead of `for...of` — indexed access and `.length` are direct property reads, not `Symbol.iterator` dispatch, so no new pristine capture is needed. `scripts/sign-policy.js`'s two separate copies of the same loop were fixed identically, required to stay byte-compatible with the verify side. |
+| F-83: `canonicalPayload()`'s key-sort copy loop reads its key array with `for...of`, which is `Symbol.iterator`-interceptable | CRITICAL | ✅ Fixed | F-71 pristine-captured `Object.keys` and `Array.prototype.sort` themselves; F-80 hardened the copy loop's *target* (`Object.create(null)`). Neither touches `Array.prototype[Symbol.iterator]` — a distinct, uncaptured property that `for (const k of keysArray)` dispatches through. Allowed code with earlier execution in the process can replace it with a generator that yields every legitimate key while silently skipping one forged key of its choice; `Object.keys`/`sort` still return the real, complete list, so F-71's captures see nothing wrong — only the loop *consuming* that list is redirected. Live-reproduced: a policy signed without a target key, tampered post-signing (raw JSON-text edit, same technique as F-80) to add it, with a **targeted** `Symbol.iterator` installed that filters out exactly that key — `verify()` returned `true` and the forged rule was present in the applied `rules`, with F-80's fix still in place (the bypass is in the iteration source, not the assignment target, so F-80 does not gate it). Fixed by reading the sorted key array by index (`.length` + indexed access) instead of `for...of` — indexed access and `.length` are direct property reads, not `Symbol.iterator` dispatch, so no new pristine capture is needed. |
+
+**Correction — F-83's first fix pass only fixed one of `scripts/sign-policy.js`'s two copies of
+this loop.** The row above originally claimed both copies were "fixed identically." That was
+inaccurate: `canonicalPayload()` in that file was switched to index-based iteration, but
+`signPolicy()`'s own, separate copy (which builds the `sorted` object that becomes *both*
+`canonicalPayload`'s input and the output `rules` field written to `policy.signed.json`) was left
+on `for...of`. Caught by **PENTEST-005**'s Threat Modeler — a formal, isolated-worktree,
+schema-validated run, unlike the informal, rate-limited PENTEST-004 run below that originally
+surfaced F-83 — during the pre-merge gate for PR #73, before the fix was merged. Now fixed
+identically (index-based iteration). The practical exposure is narrower than the verify-side bug:
+because `signPolicy()`'s `sorted` feeds both the signed bytes and the returned `rules` field, a
+`Symbol.iterator` pollution there drops a key from both *consistently* — it cannot decouple
+signed-bytes from applied-rules the way the verify-side bug could, so it was not by itself a
+forgery vector. It was a correctness and supply-chain-on-the-signing-tool concern: an operator
+signing a policy meant to include a `BLOCK` rule, in an already-compromised offline signing
+environment, could have silently gotten back a validly-signed policy missing that exact rule, with
+no error. A new regression test (`policy-watcher-unit-test.js` Test 12) proves `signPolicy()`
+itself — not just `canonicalPayload()` — resists this pollution, and that the resulting policy
+still round-trips through `verify()` with the complete rule set intact.
 
 **Scope check on the rest of the codebase**: `index.js` has several other `for...of` loops
 (`intrinsicPrototypes` in `primitiveLockdown()`, `selfFiles` in the self-integrity hash, and

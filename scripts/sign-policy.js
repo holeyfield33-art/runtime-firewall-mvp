@@ -61,8 +61,22 @@ function signPolicy(rules, privateKeyPem, signedAt) {
   // signing operation too (a correctness bug, not by itself an attacker-exploitable one, since
   // this runs only in the trusted offline signer -- but it must match the verify side or an
   // honestly-signed policy containing such a key would sign successfully yet fail to verify).
+  //
+  // F-83 follow-up: this loop was missed in the first F-83 pass -- canonicalPayload() a few lines
+  // up was switched to index-based iteration, but this SEPARATE copy (which builds the `sorted`
+  // object that becomes BOTH the signed payload's input AND the output `rules` field) was left on
+  // `for...of`. Caught by PENTEST-005's Threat Modeler before merge, not by the original fix.
+  // The practical exposure differs from the verify-side bug: because this same `sorted` object
+  // feeds both canonicalPayload() and the returned `rules` field, a Symbol.iterator pollution here
+  // drops a key from BOTH consistently -- it cannot decouple signed-bytes from applied-rules the
+  // way F-83's verify-side bug could, so it is not by itself a forgery vector. It IS a correctness
+  // and supply-chain-on-the-signing-tool concern: an operator signing a policy that is SUPPOSED to
+  // include a BLOCK rule, in a compromised or already-polluted offline signing environment, could
+  // get back a validly-signed policy.signed.json silently missing that exact rule, with no error.
+  // Fixed identically to canonicalPayload() -- index-based iteration, immune to Symbol.iterator.
   const sorted = Object.create(null);
-  for (const k of Object.keys(rules).sort()) sorted[k] = rules[k];
+  const keys = Object.keys(rules).sort();
+  for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   const payload = canonicalPayload(version, sorted, ts);
   const sigBuffer = crypto.sign(null, payload, { key: privateKeyPem, format: 'pem', type: 'pkcs8' });
   return {

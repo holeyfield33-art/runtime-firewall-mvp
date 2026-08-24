@@ -496,6 +496,61 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('  ok F-83: canonicalPayload\'s copy loop reads the sorted key array by index, not for...of -- Symbol.iterator monkeypatched AFTER module load does not forge a policy past verification');
   }
 
+  // Test 12: F-83 follow-up regression (PENTEST-005's Threat Modeler finding, caught before merge)
+  // -- signPolicy()'s OWN key-sort copy loop (a separate loop from canonicalPayload's, used to
+  // build the `sorted` object that becomes both the signed payload's input and the output `rules`
+  // field) was missed by the first F-83 fix pass: it still used `for...of` after canonicalPayload
+  // itself had already been switched to index-based iteration. Different failure shape from Test
+  // 11: because signPolicy's `sorted` feeds BOTH canonicalPayload and the returned `rules` field,
+  // a Symbol.iterator pollution here cannot decouple signed-bytes from applied-rules the way the
+  // verify-side bug could -- instead it silently drops the SAME key from a legitimate SIGNING
+  // operation, a correctness/supply-chain-on-the-signing-tool concern, not a forgery vector on its
+  // own. Confirms both that the drop no longer happens, and that the resulting policy still
+  // round-trips through verify() with the complete rule set intact.
+  {
+    const TARGET_KEY = 'dropped-during-signing';
+    const realArrayIterator = Array.prototype[Symbol.iterator];
+    // eslint-disable-next-line no-extend-native
+    Array.prototype[Symbol.iterator] = function () {
+      const arr = this;
+      if (Array.isArray(arr) && arr.includes(TARGET_KEY) && arr.includes('left-pad')) {
+        let i = 0;
+        return {
+          next() {
+            while (i < arr.length) {
+              const v = arr[i++];
+              if (v === TARGET_KEY) continue;
+              return { value: v, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+          [Symbol.iterator]() { return this; },
+        };
+      }
+      return realArrayIterator.call(arr);
+    };
+    try {
+      const signed = signPolicy({ 'left-pad': 'OBSERVE', [TARGET_KEY]: 'BLOCK' }, DEV_PRIVATE_KEY);
+
+      assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(signed.rules, TARGET_KEY), true,
+        'F-83 follow-up: signPolicy()\'s OWN copy loop must not silently drop a key under active Symbol.iterator pollution -- the output `rules` field must contain every key that was actually passed in'
+      );
+      assert.strictEqual(signed.rules[TARGET_KEY], 'BLOCK', 'F-83 follow-up: the surviving key\'s value must be correct, not just its presence');
+
+      const policyPath = freshPolicyPath();
+      fs.writeFileSync(policyPath, JSON.stringify(signed, null, 2) + '\n', 'utf8');
+      assert.strictEqual(
+        new PolicyWatcher(policyPath, {}).verify(), true,
+        'F-83 follow-up: a policy signed while Symbol.iterator is polluted must still verify true with the complete rule set (signPolicy\'s output and canonicalPayload\'s signed bytes must stay consistent with each other)'
+      );
+    } finally {
+      Array.prototype[Symbol.iterator] = realArrayIterator;
+    }
+
+    console.log('  ok F-83 follow-up: signPolicy()\'s own copy loop (separate from canonicalPayload\'s) also reads its sorted key array by index, not for...of');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

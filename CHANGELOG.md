@@ -22,11 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     one forged key of its choice, so a policy tampered post-signing to add that key still
     verified, with F-80's fix still in place. Fixed by reading the sorted key array by index
     (`.length` + indexed access) instead of `for...of` — neither dispatches through
-    `Symbol.iterator`, so no new pristine capture is needed. `scripts/sign-policy.js`'s two
-    matching copies were fixed identically. See `SECURITY.md` for the full writeup, including a
-    scope check confirming the other `for...of`/spread usages in `index.js` are not exposed to
-    this vector (bootstrap-only loops that run before any application code can execute, or object
-    spread which never uses the iterator protocol).
+    `Symbol.iterator`, so no new pristine capture is needed. See `SECURITY.md` for the full
+    writeup, including a scope check confirming the other `for...of`/spread usages in `index.js`
+    are not exposed to this vector (bootstrap-only loops that run before any application code can
+    execute, or object spread which never uses the iterator protocol).
+
+- **F-83 follow-up (caught by PENTEST-005's pre-merge gate)**: the F-83 fix above only fixed one
+  of `scripts/sign-policy.js`'s two copies of the key-sort loop — `canonicalPayload()` was switched
+  to index-based iteration, but `signPolicy()`'s own separate copy (which builds the object that
+  becomes both the signed payload's input and the output `rules` field) was missed and still used
+  `for...of`. Found by PENTEST-005's Threat Modeler during the pre-merge review gate for PR #73,
+  before merge. Narrower exposure than the original F-83 bug (drops a key from signed-bytes and
+  applied-rules *consistently*, so it isn't a forgery vector by itself) but a real correctness/
+  supply-chain-on-the-signing-tool concern: a compromised offline signing environment could
+  silently produce a validly-signed policy missing a rule the operator meant to include. Fixed
+  identically; new regression test (`policy-watcher-unit-test.js` Test 12) proves `signPolicy()`
+  itself resists the pollution and that its output still round-trips through `verify()` intact.
 
 - **Independent-pentest follow-up fixes (F-80, F-81, F-82)**: an independent pentest (PENTEST-003,
   no memory of the implementation work, isolated worktree) of the F-69/F-71/F-73/F-74/F-79/F-70
