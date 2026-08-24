@@ -105,6 +105,33 @@ this rarely matters for real attacks — genuine intervening code exhausts the s
 unlimited one, and the padding-adversary tests now assert it explicitly rather than only
 testing sizes safely below it.
 
+## Second Independent Pentest (PENTEST-004) — F-83
+
+A follow-up independent pentest (PENTEST-004) re-checked the F-80/F-81/F-82 fixes above once they
+landed on `main`. The background reviewer hit a rate limit mid-run, but its partial output left a
+lead — a suspected gap near `Array.prototype.sort` in the F-71 pristine-capture logic — that was
+independently investigated and confirmed by the orchestrator with a live reproduction before being
+fixed, the same independent-reproduction discipline applied to every finding above.
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-83: `canonicalPayload()`'s key-sort copy loop reads its key array with `for...of`, which is `Symbol.iterator`-interceptable | CRITICAL | ✅ Fixed | F-71 pristine-captured `Object.keys` and `Array.prototype.sort` themselves; F-80 hardened the copy loop's *target* (`Object.create(null)`). Neither touches `Array.prototype[Symbol.iterator]` — a distinct, uncaptured property that `for (const k of keysArray)` dispatches through. Allowed code with earlier execution in the process can replace it with a generator that yields every legitimate key while silently skipping one forged key of its choice; `Object.keys`/`sort` still return the real, complete list, so F-71's captures see nothing wrong — only the loop *consuming* that list is redirected. Live-reproduced: a policy signed without a target key, tampered post-signing (raw JSON-text edit, same technique as F-80) to add it, with a **targeted** `Symbol.iterator` installed that filters out exactly that key — `verify()` returned `true` and the forged rule was present in the applied `rules`, with F-80's fix still in place (the bypass is in the iteration source, not the assignment target, so F-80 does not gate it). Fixed by reading the sorted key array by index (`.length` + indexed access) instead of `for...of` — indexed access and `.length` are direct property reads, not `Symbol.iterator` dispatch, so no new pristine capture is needed. `scripts/sign-policy.js`'s two separate copies of the same loop were fixed identically, required to stay byte-compatible with the verify side. |
+
+**Scope check on the rest of the codebase**: `index.js` has several other `for...of` loops
+(`intrinsicPrototypes` in `primitiveLockdown()`, `selfFiles` in the self-integrity hash, and
+`Object.entries(pkg.scripts)` in the npm-lifecycle scan) and one `Object.keys(Module._cache)`
+loop seeding `verifiedModulePaths`. All four run once, synchronously, during the agent's own
+top-level bootstrap — before any application or dependency code has had a chance to execute in the
+process, since the firewall is designed to be `--require`-preloaded ahead of everything else. That
+timing, not a missing capture, is what closes the same `Symbol.iterator` vector here: there is no
+window in which allowed code could have polluted `Array.prototype` before these loops run. This is
+architecturally different from `canonicalPayload()`, which `PolicyWatcher` invokes repeatedly over
+the life of a long-running process (on every file-watch-triggered policy reload), long after
+application dependencies have executed. The two remaining spread usages (`{...metadata}` in
+`emitTelemetry()`, `{...compileMetrics}` in `getCompileMetrics()`) are *object* spread, which
+copies own-enumerable properties directly and never dispatches through `Symbol.iterator` at all.
+None of these needed the F-83 fix; noted here so this was a completed audit, not an assumption.
+
 ### F-70: same-process loader-reassignment ceiling (disclosure, 2026-08-20)
 
 Aletheia enforces at Node's module-loading layer by wrapping `Module.prototype._compile` and

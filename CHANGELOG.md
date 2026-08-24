@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Second independent-pentest follow-up fix (F-83)**: a follow-up independent pentest
+  (PENTEST-004, re-checking the F-80/F-81/F-82 fixes below once they landed on `main`) found and
+  live-reproduced one more real gap in `canonicalPayload()`:
+  - **F-83** — the key-sort copy loop read its sorted key array with `for (const k of keysArray)`,
+    which dispatches through `Array.prototype[Symbol.iterator]` — a property distinct from
+    `Array.prototype.sort` that F-71's pristine captures never touched, and that F-80's
+    null-prototype copy *target* doesn't gate either (the bug is in what the loop sees, not what
+    it writes to). Allowed code with earlier execution in the process could replace
+    `Symbol.iterator` with a generator that yields every legitimate key while silently dropping
+    one forged key of its choice, so a policy tampered post-signing to add that key still
+    verified, with F-80's fix still in place. Fixed by reading the sorted key array by index
+    (`.length` + indexed access) instead of `for...of` — neither dispatches through
+    `Symbol.iterator`, so no new pristine capture is needed. `scripts/sign-policy.js`'s two
+    matching copies were fixed identically. See `SECURITY.md` for the full writeup, including a
+    scope check confirming the other `for...of`/spread usages in `index.js` are not exposed to
+    this vector (bootstrap-only loops that run before any application code can execute, or object
+    spread which never uses the iterator protocol).
+
 - **Independent-pentest follow-up fixes (F-80, F-81, F-82)**: an independent pentest (PENTEST-003,
   no memory of the implementation work, isolated worktree) of the F-69/F-71/F-73/F-74/F-79/F-70
   work below found and live-reproduced three real gaps before merge, all independently re-verified

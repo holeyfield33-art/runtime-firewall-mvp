@@ -30,10 +30,21 @@ const fs = require('fs');
  * serializes identically to a plain-object one (JSON.stringify never consults the prototype
  * chain), so this changes nothing for ordinary policies -- it only matters for the keys that were
  * being silently dropped before.
+ *
+ * F-83: the copy loop reads the sorted key array by index, not `for...of` -- see the matching
+ * note in policy-watcher.js's canonicalPayload(). `for...of` dispatches through
+ * Array.prototype[Symbol.iterator], which allowed code with earlier execution in the process can
+ * replace with a filtering generator that silently drops one key from what the loop sees while
+ * Object.keys/sort themselves still returned the complete list -- decoupling the signed bytes
+ * from the rules object a step earlier than F-80's bracket-assignment gap, and independent of it.
+ * This file runs offline in a trusted signer process, so it is not the live attack surface (the
+ * verify-side copy in policy-watcher.js is), but it must stay byte-identical to that side or an
+ * honestly-signed policy could sign successfully yet fail to verify.
  */
 function canonicalPayload(version, rules, signedAt) {
   const sorted = Object.create(null);
-  for (const k of Object.keys(rules).sort()) sorted[k] = rules[k];
+  const keys = Object.keys(rules).sort();
+  for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
 }
 

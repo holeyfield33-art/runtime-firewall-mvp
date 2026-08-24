@@ -133,6 +133,28 @@ const pristineBufferFrom = Buffer.from;
 // canonicalPayload copy has the identical bug and is fixed identically (see that file) --
 // required for the two to stay byte-compatible: an honestly-signed policy containing a
 // '__proto__'-shaped or currently-polluted-name key must still verify.
+//
+// ── F-83: index-based key iteration, not for...of (PENTEST-003 second pass, F-71 follow-on) ────
+// F-71 pristine-captured Object.keys and Array.prototype.sort themselves, and F-80 hardened the
+// copy target -- but the loop READING the sorted key array back out was still `for (const k of
+// keysArray)`, which is sugar for calling keysArray[Symbol.iterator]() and stepping it. That
+// dispatch goes through Array.prototype[Symbol.iterator], a distinct property from
+// Array.prototype.sort that F-71 never captured. Allowed code with earlier execution in the
+// process can replace it (`Array.prototype[Symbol.iterator] = function* () { ... }`) with a
+// generator that passes through every legitimate key while silently swallowing one forged key of
+// the attacker's choice -- the pristine Object.keys/sort calls still return the real, complete
+// key list; only the FOR...OF CONSUMING it is redirected. Reproduced live: a targeted filtering
+// iterator dropped one forged rule from the signed bytes while `rules` (built the same way
+// _loadAndVerify applies it) kept the forged rule as a real own property -- verify() returned
+// true and the forged rule was live, with F-80's Object.create(null) fix still in place (this
+// bypass is in the iteration source, not the assignment target, so F-80 does not touch it).
+//
+// Fix: iterate the sorted key array by index (`.length` + `keysArray[i]`) instead of for...of.
+// Array indexed access and `.length` are direct property reads -- neither dispatches through
+// Symbol.iterator or any other overridable protocol, so this closes the gap without needing a
+// new pristine capture. scripts/sign-policy.js's own separate canonicalPayload (and signPolicy's
+// inline copy) have the identical bug and are fixed identically, for the same byte-compatibility
+// reason as F-80.
 /**
  * Build the canonical signed payload buffer from a policy object.
  * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
@@ -140,10 +162,13 @@ const pristineBufferFrom = Buffer.from;
  * JSON.stringify / Object.keys / Array.prototype.sort / Buffer.from cannot decouple the bytes
  * verified here from the rules object the agent applies. Uses a null-prototype copy target (see
  * F-80 note above) so the copy loop itself cannot be defeated via prototype-chain interception.
+ * Iterates the sorted key array by index, not for...of (see F-83 note above), so the loop itself
+ * cannot be defeated via Symbol.iterator interception either.
  */
 function canonicalPayload(version, rules, signedAt) {
   const sorted = Object.create(null);
-  for (const k of pristineSort.call(pristineKeys(rules))) sorted[k] = rules[k];
+  const keys = pristineSort.call(pristineKeys(rules));
+  for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));
 }
 
