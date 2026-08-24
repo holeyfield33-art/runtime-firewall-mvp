@@ -65,7 +65,7 @@ Deferred to Phase 3+ (out of scope for 0.2.0):
 ## August 2026 P0 Hardening Pass — Resolution Status
 
 The following findings, from a two-session TMRP deliberation (strategic decision + technical
-review) with orchestrator-verified evidence at every disputed point, have been addressed:
+review) with maintainer-verified evidence at every disputed point, have been addressed:
 
 | Finding | Severity | Status | Notes |
 | ------- | -------- | ------ | ----- |
@@ -84,7 +84,7 @@ review) with orchestrator-verified evidence at every disputed point, have been a
 The four commits above (F-69/F-71/F-73/F-74/F-79/F-70) were subjected to an independent pentest
 (PENTEST-003) by a reviewer with no memory of the implementation work, in an isolated worktree,
 before merge. It found three real gaps the implementation work missed, all live-reproduced with
-evidence before being reported. All three were independently re-verified by the orchestrator
+evidence before being reported. All three were independently re-verified by the maintainer
 (not just trusted from the reviewer's self-report) before being fixed.
 
 | Finding | Severity | Status | Notes |
@@ -110,7 +110,7 @@ testing sizes safely below it.
 A follow-up independent pentest (PENTEST-004) re-checked the F-80/F-81/F-82 fixes above once they
 landed on `main`. The background reviewer hit a rate limit mid-run, but its partial output left a
 lead — a suspected gap near `Array.prototype.sort` in the F-71 pristine-capture logic — that was
-independently investigated and confirmed by the orchestrator with a live reproduction before being
+independently investigated and confirmed by the maintainer with a live reproduction before being
 fixed, the same independent-reproduction discipline applied to every finding above.
 
 | Finding | Severity | Status | Notes |
@@ -162,7 +162,7 @@ this is PENTEST-005's first formal, schema-validated pass, and it returned a rea
 
 | Finding | Severity | Status | Notes |
 | ------- | -------- | ------ | ----- |
-| F-84: `canonicalPayload()`'s `Object.create(null)` call is not pristine-captured | CRITICAL | ✅ Fixed | F-80's entire fix depends on `Object.create(null)` actually producing a null-prototype object — but `Object.create` itself was never added to F-71's pristine-capture list, so it was still called as the live ambient global. Allowed code that monkeypatches `Object.create` *after* this module loads (e.g. redirecting the `proto === null` case to return an ordinary, Object.prototype-inheriting object instead) makes `canonicalPayload`'s copy target inherit from `Object.prototype` again, reopening F-80's exact bracket-assignment bug through a new vector: attacking the *construction* of the copy target, not the loop that populates it (F-71) or the loop's iteration mechanism (F-83). Live-reproduced by PENTEST-005's Pentester, independently re-verified by the orchestrator: with `Object.create` monkeypatched post-load, a policy signed *without* a `'__proto__'` rule, tampered post-signing (raw text edit, no private key) to add one, verified `VALID` again — the identical bypass shape the F-80 fix was supposed to have closed permanently. F-80's own opt-in `FW_FREEZE_PROTOTYPES=1` hardening does not mitigate this either: `Object.create` is an own property of the `Object` constructor function, not a property on any frozen prototype. Fixed by capturing `pristineCreate = Object.create` at module top level (added to F-71's capture list) and calling `pristineCreate(null)` instead of the ambient global, in `canonicalPayload()`. `scripts/sign-policy.js`'s three matching `Object.create(null)` call sites (`canonicalPayload` once, `signPolicy` once) were fixed identically. |
+| F-84: `canonicalPayload()`'s `Object.create(null)` call is not pristine-captured | CRITICAL | ✅ Fixed | F-80's entire fix depends on `Object.create(null)` actually producing a null-prototype object — but `Object.create` itself was never added to F-71's pristine-capture list, so it was still called as the live ambient global. Allowed code that monkeypatches `Object.create` *after* this module loads (e.g. redirecting the `proto === null` case to return an ordinary, Object.prototype-inheriting object instead) makes `canonicalPayload`'s copy target inherit from `Object.prototype` again, reopening F-80's exact bracket-assignment bug through a new vector: attacking the *construction* of the copy target, not the loop that populates it (F-71) or the loop's iteration mechanism (F-83). Live-reproduced by PENTEST-005's Pentester, independently re-verified by the maintainer: with `Object.create` monkeypatched post-load, a policy signed *without* a `'__proto__'` rule, tampered post-signing (raw text edit, no private key) to add one, verified `VALID` again — the identical bypass shape the F-80 fix was supposed to have closed permanently. F-80's own opt-in `FW_FREEZE_PROTOTYPES=1` hardening does not mitigate this either: `Object.create` is an own property of the `Object` constructor function, not a property on any frozen prototype. Fixed by capturing `pristineCreate = Object.create` at module top level (added to F-71's capture list) and calling `pristineCreate(null)` instead of the ambient global, in `canonicalPayload()`. `scripts/sign-policy.js`'s three matching `Object.create(null)` call sites (`canonicalPayload` once, `signPolicy` once) were fixed identically. |
 
 The Pentester's other priority targets (the F-83 delta itself, F-81's disclosed boundary, F-70's
 loader-reassignment ceiling, F-79's ESM interop path, F-74/F-82's `Object.freeze` capture) all held
@@ -180,7 +180,20 @@ the sorted keys was still live `for...of`; F-84 found the very call that constru
 null-prototype target was still live `Object.create`. Each fix was real and each was independently
 verified — but each also left exactly one more adjacent ambient global unexamined, discovered only
 by the next pentest pass rather than by a first-pass audit of every operation `canonicalPayload`
-touches. `canonicalPayload` now pristine-captures every operation involved in building its output
+touches.
+
+**A note on how F-84's fix was actually confirmed before merge**: the Pentester was resumed to
+independently re-verify the F-84 fix at the corrected commit, but was interrupted by an API
+session-limit error after confirming only that the new regression test passes, before it could
+reach a final status or update its own receipt. The repo owner merged PR #73 on the strength of
+the maintainer's own independent reproduction (real bug present before the fix, real bug absent
+after, using the unmodified candidate code and a generated Ed25519 keypair — the same evidentiary
+bar applied to every finding in this document) rather than waiting for that formal re-confirmation
+to complete. Recorded here rather than glossed over, consistent with this document's own standard:
+a fix's status here is "believed correct on real evidence," not "independently blessed by every
+role the process called for" when that didn't actually happen.
+
+`canonicalPayload` now pristine-captures every operation involved in building its output
 (`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`, `Object.create`) plus
 `crypto.verify`/`crypto.createHash` (F-62) — a genuinely completed set as of this pass, verified by
 a pentest specifically primed to look for exactly this class of gap and finding none. If a future

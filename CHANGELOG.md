@@ -8,79 +8,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-24
+
+This release was held for three rounds of independent security review (PENTEST-003 through
+PENTEST-005 below) before tagging — each round found and closed at least one real gap in the
+round before it. See `SECURITY.md` for the full pentest-by-pentest writeup; this entry summarizes
+the fixes that shipped.
+
 ### Security
 
-- **Third independent-pentest fix (F-84), from a formal pre-merge gate**: a formal pentest
-  (PENTEST-005 — Threat Modeler + Pentester, genuinely isolated worktrees, no memory of the
-  implementation work) run before merging the F-83 fix below found and live-reproduced one more
-  gap in the same `canonicalPayload()` function, independently re-verified by the orchestrator:
-  - **F-84** — `canonicalPayload()`'s `sorted = Object.create(null)` call was never pristine-
-    captured, so F-80's entire fix rested on an ambient global. Allowed code that monkeypatches
-    `Object.create` after this module loads (redirecting the `proto === null` case to return an
-    ordinary object) reopens F-80's exact bracket-assignment bypass — a policy tampered
-    post-signing to add a `'__proto__'` rule verifies `VALID` again, the same shape F-80 was
-    supposed to have closed for good. Fixed by capturing `pristineCreate = Object.create` at
-    module top level and using it in `canonicalPayload()`; `scripts/sign-policy.js`'s three
-    matching `Object.create(null)` call sites fixed identically. `FW_FREEZE_PROTOTYPES=1` does
-    not mitigate this (`Object.create` is a constructor-function property, not a prototype one).
-    See `SECURITY.md` for the full writeup, including why three consecutive pentest passes each
-    found one more adjacent ambient global this function depended on (F-80 → F-83 → F-84), and
-    why the capture set is now believed complete.
+- **Policy-signature forgery chain (F-71, F-80, F-83, F-84) — four rounds on the same function**:
+  `canonicalPayload()` in `packages/fw-agent/src/policy-watcher.js` (and its byte-compatible
+  offline-signer twin in `scripts/sign-policy.js`) builds the exact bytes an Ed25519 signature is
+  checked against. Four independent review passes each found one more ambient global or
+  interceptable operation this function depended on without protecting it — each fix real, each
+  independently reproduced before being trusted:
+  - **F-71** — `JSON.stringify`, `Object.keys`, `Array.prototype.sort`, and `Buffer.from` were
+    called live rather than pristine-captured, so a post-load monkeypatch of any of them could
+    decouple the bytes a signature covers from the rules object actually applied (letting a
+    stale-but-genuine signature validate forged rules). Fixed: all four captured at module load,
+    before any later-loaded code can run.
+  - **F-80** — the key-sort copy loop built its target as a plain `{}`, populated via bracket
+    assignment (`sorted[k] = rules[k]`) — a `[[Set]]` operation, not a primitive call, so it stayed
+    interceptable independent of every F-71 capture. A literal `'__proto__'` key is silently
+    swallowed by Object.prototype's own built-in accessor (no monkeypatch needed); an arbitrary key
+    name is swallowed the same way if `Object.prototype` was polluted for it by earlier-running
+    code. Either way, a policy tampered post-signing (raw JSON-text edit, no private key) to add
+    the key still verified `VALID`. Fixed: build the copy target with `Object.create(null)` instead
+    of `{}` — no inherited accessor anywhere in the chain to intercept.
+  - **F-83** — the loop *reading* that sorted key array back out was still `for (const k of
+    keysArray)`, which dispatches through `Array.prototype[Symbol.iterator]` — distinct from
+    `Array.prototype.sort`, and never captured. A targeted `Symbol.iterator` override can pass
+    through every legitimate key while silently dropping one forged key, reopening the same
+    bypass shape through the iteration source rather than the assignment target. Fixed: iterate the
+    sorted key array by index (`.length` + indexed access) instead of `for...of` — indexed access
+    never dispatches through `Symbol.iterator`. `scripts/sign-policy.js`'s two separate copies of
+    this loop (`canonicalPayload()` and `signPolicy()`) both had it and are both fixed.
+  - **F-84** — the copy target's *construction*, `Object.create(null)` itself, was still the live
+    ambient global. Monkeypatching `Object.create` to redirect the `proto === null` case reopens
+    F-80's exact bug through yet another angle. Fixed: `Object.create` is now pristine-captured
+    too, in both files (all three call sites). `FW_FREEZE_PROTOTYPES=1` does not mitigate this —
+    `Object.create` is a constructor-function property, not a prototype one.
 
-- **Second independent-pentest follow-up fix (F-83)**: a follow-up independent pentest
-  (PENTEST-004, re-checking the F-80/F-81/F-82 fixes below once they landed on `main`) found and
-  live-reproduced one more real gap in `canonicalPayload()`:
-  - **F-83** — the key-sort copy loop read its sorted key array with `for (const k of keysArray)`,
-    which dispatches through `Array.prototype[Symbol.iterator]` — a property distinct from
-    `Array.prototype.sort` that F-71's pristine captures never touched, and that F-80's
-    null-prototype copy *target* doesn't gate either (the bug is in what the loop sees, not what
-    it writes to). Allowed code with earlier execution in the process could replace
-    `Symbol.iterator` with a generator that yields every legitimate key while silently dropping
-    one forged key of its choice, so a policy tampered post-signing to add that key still
-    verified, with F-80's fix still in place. Fixed by reading the sorted key array by index
-    (`.length` + indexed access) instead of `for...of` — neither dispatches through
-    `Symbol.iterator`, so no new pristine capture is needed. See `SECURITY.md` for the full
-    writeup, including a scope check confirming the other `for...of`/spread usages in `index.js`
-    are not exposed to this vector (bootstrap-only loops that run before any application code can
-    execute, or object spread which never uses the iterator protocol).
+  `canonicalPayload()` now pristine-captures every ambient global involved in building its output
+  (`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`, `Object.create`) plus
+  `crypto.verify`/`crypto.createHash` (F-62) — verified complete by a pentest pass specifically
+  primed to look for exactly this class of gap, which found none.
 
-- **F-83 follow-up (caught by PENTEST-005's pre-merge gate)**: the F-83 fix above only fixed one
-  of `scripts/sign-policy.js`'s two copies of the key-sort loop — `canonicalPayload()` was switched
-  to index-based iteration, but `signPolicy()`'s own separate copy (which builds the object that
-  becomes both the signed payload's input and the output `rules` field) was missed and still used
-  `for...of`. Found by PENTEST-005's Threat Modeler during the pre-merge review gate for PR #73,
-  before merge. Narrower exposure than the original F-83 bug (drops a key from signed-bytes and
-  applied-rules *consistently*, so it isn't a forgery vector by itself) but a real correctness/
-  supply-chain-on-the-signing-tool concern: a compromised offline signing environment could
-  silently produce a validly-signed policy missing a rule the operator meant to include. Fixed
-  identically; new regression test (`policy-watcher-unit-test.js` Test 12) proves `signPolicy()`
-  itself resists the pollution and that its output still round-trips through `verify()` intact.
-
-- **Independent-pentest follow-up fixes (F-80, F-81, F-82)**: an independent pentest (PENTEST-003,
-  no memory of the implementation work, isolated worktree) of the F-69/F-71/F-73/F-74/F-79/F-70
-  work below found and live-reproduced three real gaps before merge, all independently re-verified
-  and then fixed:
-  - **F-80** — `canonicalPayload()`'s key-sort copy loop (`sorted[k] = rules[k]` onto a fresh `{}`)
-    was interceptable via `Object.prototype` (the literal key `'__proto__'`, or any key an
-    already-running dependency polluted an accessor for), letting a policy tampered post-signing
-    still verify while the forged rule reached the applied rules — despite every F-71 primitive
-    staying untouched. Fixed with a null-prototype copy target (`Object.create(null)`), in both
-    `policy-watcher.js` and `scripts/sign-policy.js`'s matching copy.
-  - **F-81** — the separator-distance correlation (F-69) counted only literal `;`/`{`/`}`, so
-    arbitrarily many real statements written without semicolons/braces (relying on Automatic
-    Semicolon Insertion) accumulated zero separators, silently defeating the documented "falls off
-    at ≥5 real statements" limit. Fixed: newlines terminating real (non-comment/whitespace) content
-    now also count, closing the many-statements case. A narrower, structurally distinct case — one
-    single arbitrarily long statement, bounded only by the 8000-character backstop — is a
-    mathematically inherent limit of any fixed-threshold text-scanning correlation (proven, not
-    assumed: a first attempt at closing it was shown, by construction, unable to work) and is
-    disclosed rather than silently missed, with an explicit test asserting the exact boundary.
-    See `SECURITY.md` for the full writeup and a correction to this pass's original "invariant to
-    arbitrarily large padding" claim, which was itself an overclaim.
-  - **F-82** — `getCompileMetrics()` called the ambient global `Object.freeze()` directly (no
-    pristine capture, unlike every other byte-building/integrity primitive in this codebase), so a
-    post-load monkeypatch defeated the snapshot's immutability. Fixed with the same pristine-capture
-    pattern (`pristineFreeze`). Low impact: telemetry-only, no enforcement path reads it.
+- **Behavioral correlation evasion (F-69, F-73, F-81)**: `behavior-tracker.js`'s multi-signal
+  correlation rules first moved from whole-file signal co-occurrence to a fixed 200-character
+  window (F-43/F-68), then to statement/block **separator distance** (`; { }`) since any fixed
+  character distance is defeatable with that many characters of padding (F-69). Two follow-on
+  gaps in that redesign:
+  - **F-73** — position tracking used the raw, unsanitized source for some signals while others
+    used the comment/string-blanked `scanSrc` view, so a signal's reported position could
+    correspond to text a *different* sanitization pass had already blanked — a comment-only
+    mention of a path could contribute a real position despite the boolean check correctly
+    ignoring it. Fixed: every signal's position now comes from the same sanitized view its match
+    came from.
+  - **F-81** — separator counting looked only for literal `;`/`{`/`}`, so arbitrarily many real
+    statements written without semicolons or braces (relying on Automatic Semicolon Insertion)
+    accumulated zero separators, silently defeating the documented "falls off at ≥5 statements"
+    limit. Fixed: a newline terminating real (non-comment/whitespace) content now also counts.
+    **Disclosed, not fixed**: a single arbitrarily long statement with no internal separator is
+    still bounded only by the 8000-character backstop (`CORRELATION_MAX_CHARS`) — a mathematically
+    inherent limit of fixed-threshold text-scanning correlation, proven unfixable by a first
+    attempt rather than silently left unexamined, and tested at its exact boundary.
 
 - **Cache-substitution enforcement — `require.cache` pre-seeding (F-58)**: `Module._load()` (the
   real `require()` entry point) checks `require.cache` *before* `Module.prototype._compile` runs,
@@ -113,14 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public key whose private half was never committed; there is no shared dev private key any more
   (see `SECURITY.md` → "Key revocation record").
 
-- **Pristine byte-building primitives for policy verification (F-71)**: `canonicalPayload()` in
-  `policy-watcher.js` builds the exact bytes the Ed25519 signature is checked against, using
-  ambient globals (`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`).
-  Monkeypatching any of them after load could decouple the bytes verified from the `rules` object
-  applied, letting a stale-but-genuine signature (e.g. one issued for an empty-rules policy)
-  validate forged rules. All four are now captured pristine at module load; a regression test
-  monkeypatches each after `require()` and confirms the forged policy stays rejected.
-
 - **Read-only enforcement/telemetry state (F-57, F-74)**: `policyMap` and `quarantinedModules` are
   no longer exported as live mutable `Map`/`Set` — replaced with read-only query functions
   (`hasPolicy`, `getPolicyDecision`, `isQuarantined`) so allowed code cannot mutate live
@@ -139,27 +124,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not a closable gap. See `SECURITY.md` → "F-70" and the strengthened same-process-ceiling note in
   `README.md`.
 
-### Changed
-
-- **Multi-signal behavioral correlation is now structural and padding-resistant (F-43/F-68 + F-69,
-  F-73)**: the correlation rules (`CREDENTIAL_EXFILTRATION` sensitive-path/`.npmrc`/config-store
-  variants, `DYNAMIC_CODE_EXEC_CHAIN`, `OBFUSCATED_CODE_EXECUTION`, `REMOTE_FETCH_EXEC`) no longer
-  fire on whole-file signal co-occurrence — they require the constituent signals to be genuinely
-  correlated, eliminating false positives on large bundled/minified files (confirmed on the real
-  `vite`/`astro` chunk and a multi-thousand-file real-corpus sweep, 0 false positives, 100%
-  true-positive retention). Correlation was first a fixed 200-character window (F-43/F-68); because
-  any fixed character distance is defeatable by inserting that many characters of comment/whitespace
-  padding between a payload's halves (F-69), it is now **separator distance** — the number of
-  statement/block separators (`; { }`) between signals, measured on a length-preserving sanitized
-  view of the source. Comment and whitespace padding contain no separators, so correlation is
-  invariant to arbitrarily large such padding; only real intervening code (≥5 statements at the
-  selected threshold) breaks it, which is documented as the honest evasion limit. Position sources
-  were also made consistent with each signal's match source (F-73), so a comment-only mention a
-  boolean signal correctly ignores can no longer contribute a spurious position.
-
-## [0.5.0] - 2026-08-18
-
-### Security
+- **Multi-signal behavioral correlation redesigned around structural distance, not a character
+  window (F-43/F-68)**: the correlation rules (`CREDENTIAL_EXFILTRATION` sensitive-path/`.npmrc`/
+  config-store variants, `DYNAMIC_CODE_EXEC_CHAIN`, `OBFUSCATED_CODE_EXECUTION`, `REMOTE_FETCH_EXEC`)
+  no longer fire on whole-file signal co-occurrence — they require the constituent signals to be
+  genuinely correlated, eliminating false positives on large bundled/minified files (confirmed on
+  the real `vite`/`astro` chunk and a multi-thousand-file real-corpus sweep, 0 false positives,
+  100% true-positive retention). First shipped as a fixed 200-character window, then redesigned as
+  separator distance (see F-69/F-73/F-81 above) once the character window itself proved
+  padding-defeatable.
 
 - **Self-integrity check now covers the full shipped runtime surface**: `verifySelfIntegrity()`
   and the baseline generator/CI check previously hashed only 7 of the package's executable files,
