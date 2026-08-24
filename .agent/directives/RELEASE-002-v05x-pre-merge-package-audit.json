@@ -1,0 +1,30 @@
+{
+  "phase_id": "RELEASE-002",
+  "title": "Pre-merge compatibility and package audit of packages/fw-agent at the v0.5.x release-blocker candidate (PR #73)",
+  "target": "aletheia-firewall",
+  "track": "release",
+  "objective": "RELEASE-001 audited packages/fw-agent as it stood at candidate_sha 94388bd, before the v0.5.x release-blocker work (F-69 through F-83) existed. This directive re-runs Team Configuration 4 against the CURRENT candidate (PR #73, commit 196cf3d) -- the state that would actually be tagged and published via .github/workflows/publish.yml's Trusted Publishing (OIDC) flow if the repo owner merges next. Confirms the package that would ship still passes the same eight compatibility dimensions and ten release-audit checks, and specifically that none of the F-69..F-83 fix work (extra SECURITY.md/CHANGELOG.md content, the new policy-watcher.js/behavior-tracker.js/index.js code, the regenerated .helios-baseline, the new sign-policy.js copy-loop logic) changed anything that would break a consumer or leak something into the published tarball that shouldn't be there.",
+  "base_sha": "079322774e92a7d1d5aaf12128712afa130aa63b",
+  "base_sha_note": "Same base_sha as RELEASE-001 (the last point this package was formally release-audited) -- this directive's real prior point of comparison is RELEASE-001's own candidate_sha (94388bd), noted here for continuity; base_sha is kept identical to RELEASE-001 rather than bumped to something mid-stream so the diff a reviewer inspects, if any, spans the same window RELEASE-001 established.",
+  "candidate_sha": "196cf3d8ccda4e9ab2ca0875a847aa98257e042d",
+  "candidate_sha_note": "The true final PR #73 tip moved to b9dd046 after both Team Configuration 4 receipts below were already written against 196cf3d (a fix for a gap the sibling PENTEST-005 directive's Threat Modeler found: scripts/sign-policy.js's signPolicy() had its own separate, still-unfixed for...of copy-loop). NOT re-run against b9dd046: both the Compatibility Reviewer and Release Auditor independently found/confirmed, in their own 196cf3d receipts, that scripts/ is excluded from package.json's `files` field and is therefore never part of the published npm tarball -- the Compatibility Reviewer additionally flagged the exact signPolicy() gap itself as a non-blocking advisory finding (now resolved by b9dd046). Since both roles' actual audit surface (the published package / consumer-facing compatibility) provably excludes the file that changed, their PASS verdicts at 196cf3d are treated as still valid for b9dd046 -- a disclosed judgment, not a silent staleness gap, corroborated by two independent agents' own findings rather than asserted by the orchestrator alone.",
+  "scope": [
+    "packages/fw-agent's package.json, .npmignore (if present), README.md, LICENSE, and the real `npm pack --dry-run --json` output at candidate_sha 196cf3d",
+    "whether package.json's version (currently 0.5.0) and the engines/exports/files fields still hold given everything F-69..F-83 touched",
+    "whether .helios-baseline's regeneration (F-83's fix touched a hashed engine file) is correctly included in the packaged files list, matching what's declared in package.json's files array"
+  ],
+  "out_of_scope": [
+    "packages/fw-control -- not being prepared for a standalone npm release in this directive",
+    "actually running npm publish or any registry-modifying command -- audit only",
+    ".github/workflows/publish.yml itself -- a repo-level CI workflow, not part of the published npm package, and not something npm pack would include"
+  ],
+  "success_criteria": [
+    "compatibility-receipt.json reviews the eight dimensions against packages/fw-agent's current exports/engines/dependencies, explicitly comparing against RELEASE-001's prior findings where relevant (confirm nothing RELEASE-001 passed has since regressed)",
+    "release-audit-receipt.json's packaged_files is the real, verbatim npm pack --dry-run output at candidate_sha 196cf3d, not asserted and not copied from RELEASE-001's report",
+    "explicit answer to 'what would accidentally get packaged' -- even if the answer is nothing",
+    "explicit confirmation that .helios-baseline in the tarball matches the value committed in this PR (672ff05125f9db8ebb85a71c51e30160723f1ef03812fc4932ec4c9b13c6a4d4)"
+  ],
+  "require_compatibility_review": true,
+  "require_release_audit": true,
+  "status": "NOT STARTED"
+}

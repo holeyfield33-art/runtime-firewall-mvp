@@ -10,6 +10,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Third independent-pentest fix (F-84), from a formal pre-merge gate**: a formal pentest
+  (PENTEST-005 — Threat Modeler + Pentester, genuinely isolated worktrees, no memory of the
+  implementation work) run before merging the F-83 fix below found and live-reproduced one more
+  gap in the same `canonicalPayload()` function, independently re-verified by the orchestrator:
+  - **F-84** — `canonicalPayload()`'s `sorted = Object.create(null)` call was never pristine-
+    captured, so F-80's entire fix rested on an ambient global. Allowed code that monkeypatches
+    `Object.create` after this module loads (redirecting the `proto === null` case to return an
+    ordinary object) reopens F-80's exact bracket-assignment bypass — a policy tampered
+    post-signing to add a `'__proto__'` rule verifies `VALID` again, the same shape F-80 was
+    supposed to have closed for good. Fixed by capturing `pristineCreate = Object.create` at
+    module top level and using it in `canonicalPayload()`; `scripts/sign-policy.js`'s three
+    matching `Object.create(null)` call sites fixed identically. `FW_FREEZE_PROTOTYPES=1` does
+    not mitigate this (`Object.create` is a constructor-function property, not a prototype one).
+    See `SECURITY.md` for the full writeup, including why three consecutive pentest passes each
+    found one more adjacent ambient global this function depended on (F-80 → F-83 → F-84), and
+    why the capture set is now believed complete.
+
+- **Second independent-pentest follow-up fix (F-83)**: a follow-up independent pentest
+  (PENTEST-004, re-checking the F-80/F-81/F-82 fixes below once they landed on `main`) found and
+  live-reproduced one more real gap in `canonicalPayload()`:
+  - **F-83** — the key-sort copy loop read its sorted key array with `for (const k of keysArray)`,
+    which dispatches through `Array.prototype[Symbol.iterator]` — a property distinct from
+    `Array.prototype.sort` that F-71's pristine captures never touched, and that F-80's
+    null-prototype copy *target* doesn't gate either (the bug is in what the loop sees, not what
+    it writes to). Allowed code with earlier execution in the process could replace
+    `Symbol.iterator` with a generator that yields every legitimate key while silently dropping
+    one forged key of its choice, so a policy tampered post-signing to add that key still
+    verified, with F-80's fix still in place. Fixed by reading the sorted key array by index
+    (`.length` + indexed access) instead of `for...of` — neither dispatches through
+    `Symbol.iterator`, so no new pristine capture is needed. See `SECURITY.md` for the full
+    writeup, including a scope check confirming the other `for...of`/spread usages in `index.js`
+    are not exposed to this vector (bootstrap-only loops that run before any application code can
+    execute, or object spread which never uses the iterator protocol).
+
+- **F-83 follow-up (caught by PENTEST-005's pre-merge gate)**: the F-83 fix above only fixed one
+  of `scripts/sign-policy.js`'s two copies of the key-sort loop — `canonicalPayload()` was switched
+  to index-based iteration, but `signPolicy()`'s own separate copy (which builds the object that
+  becomes both the signed payload's input and the output `rules` field) was missed and still used
+  `for...of`. Found by PENTEST-005's Threat Modeler during the pre-merge review gate for PR #73,
+  before merge. Narrower exposure than the original F-83 bug (drops a key from signed-bytes and
+  applied-rules *consistently*, so it isn't a forgery vector by itself) but a real correctness/
+  supply-chain-on-the-signing-tool concern: a compromised offline signing environment could
+  silently produce a validly-signed policy missing a rule the operator meant to include. Fixed
+  identically; new regression test (`policy-watcher-unit-test.js` Test 12) proves `signPolicy()`
+  itself resists the pollution and that its output still round-trips through `verify()` intact.
+
 - **Independent-pentest follow-up fixes (F-80, F-81, F-82)**: an independent pentest (PENTEST-003,
   no memory of the implementation work, isolated worktree) of the F-69/F-71/F-73/F-74/F-79/F-70
   work below found and live-reproduced three real gaps before merge, all independently re-verified

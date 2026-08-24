@@ -417,6 +417,195 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('  ok F-80: canonicalPayload\'s copy-loop target is prototype-pollution-immune (Object.create(null)) -- forged "__proto__" and arbitrary-key rules are rejected');
   }
 
+  // Test 11: F-83 regression (PENTEST-004 finding) -- canonicalPayload's key-sort copy loop reads
+  // the sorted key array with `for...of`, which dispatches through
+  // Array.prototype[Symbol.iterator] -- a property F-71's pristine captures (Object.keys,
+  // Array.prototype.sort, JSON.stringify, Buffer.from) never touched, and F-80's Object.create(null)
+  // copy target doesn't gate either (the bug is in what the loop SEES, not what it writes to).
+  // Allowed code with earlier execution in the process can replace Array.prototype[Symbol.iterator]
+  // with a generator that yields every legitimate key while silently skipping one forged key of its
+  // choice -- Object.keys/sort still return the real, complete list; only the for...of consuming it
+  // is redirected. Attack shape: sign a policy WITHOUT the target key (genuine signature over the
+  // honest bytes), tamper the raw JSON TEXT post-signing to inject the forged key (JSON.parse's
+  // CreateDataProperty makes it a real own property of the returned `rules`, same as Test 10), then
+  // install a TARGETED Symbol.iterator that drops exactly that key from canonicalPayload's view --
+  // collapsing the forged canonical bytes back to the originally-signed ones.
+  {
+    const TARGET_KEY = 'evil-pkg';
+    const policyPath = freshPolicyPath();
+    writeSignedPolicy(policyPath, { 'left-pad': 'OBSERVE' });
+    let text = fs.readFileSync(policyPath, 'utf8');
+    text = text.replace('"left-pad": "OBSERVE"', `"left-pad": "OBSERVE",\n    "${TARGET_KEY}": "BLOCK"`);
+    fs.writeFileSync(policyPath, text);
+
+    const parsedCheck = JSON.parse(text);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(parsedCheck.rules, TARGET_KEY), true,
+      'sanity: JSON.parse must produce a real own forged-key property for this test to be meaningful'
+    );
+
+    // Sanity: with NO Symbol.iterator pollution, F-80's fix already rejects this (the forged key's
+    // real bytes don't match the stale signature) -- confirms the harness is exercising the right
+    // policy before we add the F-83-specific pollution on top.
+    assert.strictEqual(new PolicyWatcher(policyPath, {}).verify(), false,
+      'sanity: forged policy (extra key, no pollution) must be rejected before testing the Symbol.iterator vector');
+
+    const realArrayIterator = Array.prototype[Symbol.iterator];
+    // eslint-disable-next-line no-extend-native
+    Array.prototype[Symbol.iterator] = function () {
+      const arr = this;
+      if (Array.isArray(arr) && arr.includes(TARGET_KEY) && arr.includes('left-pad')) {
+        let i = 0;
+        return {
+          next() {
+            while (i < arr.length) {
+              const v = arr[i++];
+              if (v === TARGET_KEY) continue;
+              return { value: v, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+          [Symbol.iterator]() { return this; },
+        };
+      }
+      return realArrayIterator.call(arr);
+    };
+    try {
+      // The patch really is live -- it WOULD fool a for...of/spread consumer of this exact key set:
+      assert.deepStrictEqual(
+        Array.from(['left-pad', TARGET_KEY]), ['left-pad'],
+        'scaffolding: the Symbol.iterator patch must filter the forged key out of iteration'
+      );
+
+      assert.strictEqual(
+        new PolicyWatcher(policyPath, {}).verify(), false,
+        'F-83: forged policy must stay REJECTED with Array.prototype[Symbol.iterator] monkeypatched to hide the forged key from the copy loop'
+      );
+
+      // Legitimate path, under the SAME active pollution: an honestly-signed policy whose rules
+      // genuinely include both 'left-pad' and the target-shaped key must still verify true -- the
+      // fix must not depend on the iterator at all, so the pollution has no effect either way.
+      const honestPath = freshPolicyPath();
+      writeSignedPolicy(honestPath, { 'left-pad': 'OBSERVE', [TARGET_KEY]: 'BLOCK' });
+      assert.strictEqual(new PolicyWatcher(honestPath, {}).verify(), true,
+        'F-83: an honestly-signed policy containing the same key names must still verify true under the Symbol.iterator patch');
+    } finally {
+      Array.prototype[Symbol.iterator] = realArrayIterator;
+    }
+
+    console.log('  ok F-83: canonicalPayload\'s copy loop reads the sorted key array by index, not for...of -- Symbol.iterator monkeypatched AFTER module load does not forge a policy past verification');
+  }
+
+  // Test 12: F-83 follow-up regression (PENTEST-005's Threat Modeler finding, caught before merge)
+  // -- signPolicy()'s OWN key-sort copy loop (a separate loop from canonicalPayload's, used to
+  // build the `sorted` object that becomes both the signed payload's input and the output `rules`
+  // field) was missed by the first F-83 fix pass: it still used `for...of` after canonicalPayload
+  // itself had already been switched to index-based iteration. Different failure shape from Test
+  // 11: because signPolicy's `sorted` feeds BOTH canonicalPayload and the returned `rules` field,
+  // a Symbol.iterator pollution here cannot decouple signed-bytes from applied-rules the way the
+  // verify-side bug could -- instead it silently drops the SAME key from a legitimate SIGNING
+  // operation, a correctness/supply-chain-on-the-signing-tool concern, not a forgery vector on its
+  // own. Confirms both that the drop no longer happens, and that the resulting policy still
+  // round-trips through verify() with the complete rule set intact.
+  {
+    const TARGET_KEY = 'dropped-during-signing';
+    const realArrayIterator = Array.prototype[Symbol.iterator];
+    // eslint-disable-next-line no-extend-native
+    Array.prototype[Symbol.iterator] = function () {
+      const arr = this;
+      if (Array.isArray(arr) && arr.includes(TARGET_KEY) && arr.includes('left-pad')) {
+        let i = 0;
+        return {
+          next() {
+            while (i < arr.length) {
+              const v = arr[i++];
+              if (v === TARGET_KEY) continue;
+              return { value: v, done: false };
+            }
+            return { value: undefined, done: true };
+          },
+          [Symbol.iterator]() { return this; },
+        };
+      }
+      return realArrayIterator.call(arr);
+    };
+    try {
+      const signed = signPolicy({ 'left-pad': 'OBSERVE', [TARGET_KEY]: 'BLOCK' }, DEV_PRIVATE_KEY);
+
+      assert.strictEqual(
+        Object.prototype.hasOwnProperty.call(signed.rules, TARGET_KEY), true,
+        'F-83 follow-up: signPolicy()\'s OWN copy loop must not silently drop a key under active Symbol.iterator pollution -- the output `rules` field must contain every key that was actually passed in'
+      );
+      assert.strictEqual(signed.rules[TARGET_KEY], 'BLOCK', 'F-83 follow-up: the surviving key\'s value must be correct, not just its presence');
+
+      const policyPath = freshPolicyPath();
+      fs.writeFileSync(policyPath, JSON.stringify(signed, null, 2) + '\n', 'utf8');
+      assert.strictEqual(
+        new PolicyWatcher(policyPath, {}).verify(), true,
+        'F-83 follow-up: a policy signed while Symbol.iterator is polluted must still verify true with the complete rule set (signPolicy\'s output and canonicalPayload\'s signed bytes must stay consistent with each other)'
+      );
+    } finally {
+      Array.prototype[Symbol.iterator] = realArrayIterator;
+    }
+
+    console.log('  ok F-83 follow-up: signPolicy()\'s own copy loop (separate from canonicalPayload\'s) also reads its sorted key array by index, not for...of');
+  }
+
+  // Test 13: F-84 regression (PENTEST-005's Pentester finding, caught before merge) --
+  // canonicalPayload's `sorted = Object.create(null)` call itself was never pristine-captured, so
+  // F-80's whole fix depends on an ambient global that allowed code can monkeypatch. Different
+  // vector from every prior test here: this attacks the CONSTRUCTION of the copy target, not the
+  // loop that populates it (Test 9/F-71) or the loop's iteration mechanism (Test 11/F-83) -- if
+  // Object.create(null) is redirected to return an ordinary Object.prototype-inheriting object,
+  // F-80's bracket-assignment interception bug (a policy tampered post-signing to inject a
+  // '__proto__' rule still verifying VALID) reopens exactly as it was before F-80 ever shipped,
+  // with F-80's and F-83's own fixes both still in place and untouched.
+  {
+    const policyPath = freshPolicyPath();
+    writeSignedPolicy(policyPath, { 'left-pad': 'OBSERVE' });
+    let text = fs.readFileSync(policyPath, 'utf8');
+    text = text.replace('"left-pad": "OBSERVE"', '"left-pad": "OBSERVE",\n    "__proto__": "BLOCK"');
+    fs.writeFileSync(policyPath, text);
+
+    const parsedCheck = JSON.parse(text);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(parsedCheck.rules, '__proto__'), true,
+      'sanity: JSON.parse must produce a real own "__proto__" property for this test to be meaningful'
+    );
+
+    assert.strictEqual(new PolicyWatcher(policyPath, {}).verify(), false,
+      'sanity: forged policy (extra "__proto__" key, no monkeypatch) must be rejected before testing the Object.create vector');
+
+    const realCreate = Object.create;
+    Object.create = function (proto, props) {
+      if (proto === null) {
+        return props === undefined ? {} : realCreate.call(Object, Object.prototype, props);
+      }
+      return realCreate.call(Object, proto, props);
+    };
+    try {
+      // Scaffolding: confirm the patch really redirects Object.create(null) to an ordinary object.
+      assert.strictEqual(
+        Object.getPrototypeOf(Object.create(null)), Object.prototype,
+        'scaffolding: the Object.create patch must make Object.create(null) inherit from Object.prototype'
+      );
+
+      assert.strictEqual(
+        new PolicyWatcher(policyPath, {}).verify(), false,
+        'F-84: forged policy must stay REJECTED with Object.create monkeypatched AFTER module load to defeat null-prototype construction'
+      );
+
+      const honestPath = freshPolicyPath();
+      writeSignedPolicy(honestPath, { 'left-pad': 'OBSERVE', 'a-real-pkg': 'BLOCK' });
+      assert.strictEqual(new PolicyWatcher(honestPath, {}).verify(), true,
+        'F-84: an honestly-signed, untampered policy must still verify true under the Object.create patch');
+    } finally {
+      Object.create = realCreate;
+    }
+
+    console.log('  ok F-84: canonicalPayload\'s Object.create(null) call uses a pristine capture -- Object.create monkeypatched AFTER module load does not forge a policy past verification');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

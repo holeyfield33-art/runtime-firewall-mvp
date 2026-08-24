@@ -105,6 +105,88 @@ this rarely matters for real attacks — genuine intervening code exhausts the s
 unlimited one, and the padding-adversary tests now assert it explicitly rather than only
 testing sizes safely below it.
 
+## Second Independent Pentest (PENTEST-004) — F-83
+
+A follow-up independent pentest (PENTEST-004) re-checked the F-80/F-81/F-82 fixes above once they
+landed on `main`. The background reviewer hit a rate limit mid-run, but its partial output left a
+lead — a suspected gap near `Array.prototype.sort` in the F-71 pristine-capture logic — that was
+independently investigated and confirmed by the orchestrator with a live reproduction before being
+fixed, the same independent-reproduction discipline applied to every finding above.
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-83: `canonicalPayload()`'s key-sort copy loop reads its key array with `for...of`, which is `Symbol.iterator`-interceptable | CRITICAL | ✅ Fixed | F-71 pristine-captured `Object.keys` and `Array.prototype.sort` themselves; F-80 hardened the copy loop's *target* (`Object.create(null)`). Neither touches `Array.prototype[Symbol.iterator]` — a distinct, uncaptured property that `for (const k of keysArray)` dispatches through. Allowed code with earlier execution in the process can replace it with a generator that yields every legitimate key while silently skipping one forged key of its choice; `Object.keys`/`sort` still return the real, complete list, so F-71's captures see nothing wrong — only the loop *consuming* that list is redirected. Live-reproduced: a policy signed without a target key, tampered post-signing (raw JSON-text edit, same technique as F-80) to add it, with a **targeted** `Symbol.iterator` installed that filters out exactly that key — `verify()` returned `true` and the forged rule was present in the applied `rules`, with F-80's fix still in place (the bypass is in the iteration source, not the assignment target, so F-80 does not gate it). Fixed by reading the sorted key array by index (`.length` + indexed access) instead of `for...of` — indexed access and `.length` are direct property reads, not `Symbol.iterator` dispatch, so no new pristine capture is needed. |
+
+**Correction — F-83's first fix pass only fixed one of `scripts/sign-policy.js`'s two copies of
+this loop.** The row above originally claimed both copies were "fixed identically." That was
+inaccurate: `canonicalPayload()` in that file was switched to index-based iteration, but
+`signPolicy()`'s own, separate copy (which builds the `sorted` object that becomes *both*
+`canonicalPayload`'s input and the output `rules` field written to `policy.signed.json`) was left
+on `for...of`. Caught by **PENTEST-005**'s Threat Modeler — a formal, isolated-worktree,
+schema-validated run, unlike the informal, rate-limited PENTEST-004 run below that originally
+surfaced F-83 — during the pre-merge gate for PR #73, before the fix was merged. Now fixed
+identically (index-based iteration). The practical exposure is narrower than the verify-side bug:
+because `signPolicy()`'s `sorted` feeds both the signed bytes and the returned `rules` field, a
+`Symbol.iterator` pollution there drops a key from both *consistently* — it cannot decouple
+signed-bytes from applied-rules the way the verify-side bug could, so it was not by itself a
+forgery vector. It was a correctness and supply-chain-on-the-signing-tool concern: an operator
+signing a policy meant to include a `BLOCK` rule, in an already-compromised offline signing
+environment, could have silently gotten back a validly-signed policy missing that exact rule, with
+no error. A new regression test (`policy-watcher-unit-test.js` Test 12) proves `signPolicy()`
+itself — not just `canonicalPayload()` — resists this pollution, and that the resulting policy
+still round-trips through `verify()` with the complete rule set intact.
+
+**Scope check on the rest of the codebase**: `index.js` has several other `for...of` loops
+(`intrinsicPrototypes` in `primitiveLockdown()`, `selfFiles` in the self-integrity hash, and
+`Object.entries(pkg.scripts)` in the npm-lifecycle scan) and one `Object.keys(Module._cache)`
+loop seeding `verifiedModulePaths`. All four run once, synchronously, during the agent's own
+top-level bootstrap — before any application or dependency code has had a chance to execute in the
+process, since the firewall is designed to be `--require`-preloaded ahead of everything else. That
+timing, not a missing capture, is what closes the same `Symbol.iterator` vector here: there is no
+window in which allowed code could have polluted `Array.prototype` before these loops run. This is
+architecturally different from `canonicalPayload()`, which `PolicyWatcher` invokes repeatedly over
+the life of a long-running process (on every file-watch-triggered policy reload), long after
+application dependencies have executed. The two remaining spread usages (`{...metadata}` in
+`emitTelemetry()`, `{...compileMetrics}` in `getCompileMetrics()`) are *object* spread, which
+copies own-enumerable properties directly and never dispatches through `Symbol.iterator` at all.
+None of these needed the F-83 fix; noted here so this was a completed audit, not an assumption.
+
+## Third Independent Pentest (PENTEST-005) — F-84, pre-merge gate for PR #73
+
+Before merging PR #73 (the F-83 fix), the repo owner requested a formal pre-merge gate: a Threat
+Modeler (A1b) and Pentester (A2p) pair, run in genuinely isolated git worktrees with no memory of
+the implementation work, plus a Compatibility Reviewer (A2v) and Release Auditor (A2r) auditing
+the package that would actually publish — the `.agent/` orchestration graph's Team Configuration 2
+and 4 tracks, run together as directed. Unlike the informal, rate-limited PENTEST-004 run above,
+this is PENTEST-005's first formal, schema-validated pass, and it returned a real `FAIL`.
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-84: `canonicalPayload()`'s `Object.create(null)` call is not pristine-captured | CRITICAL | ✅ Fixed | F-80's entire fix depends on `Object.create(null)` actually producing a null-prototype object — but `Object.create` itself was never added to F-71's pristine-capture list, so it was still called as the live ambient global. Allowed code that monkeypatches `Object.create` *after* this module loads (e.g. redirecting the `proto === null` case to return an ordinary, Object.prototype-inheriting object instead) makes `canonicalPayload`'s copy target inherit from `Object.prototype` again, reopening F-80's exact bracket-assignment bug through a new vector: attacking the *construction* of the copy target, not the loop that populates it (F-71) or the loop's iteration mechanism (F-83). Live-reproduced by PENTEST-005's Pentester, independently re-verified by the orchestrator: with `Object.create` monkeypatched post-load, a policy signed *without* a `'__proto__'` rule, tampered post-signing (raw text edit, no private key) to add one, verified `VALID` again — the identical bypass shape the F-80 fix was supposed to have closed permanently. F-80's own opt-in `FW_FREEZE_PROTOTYPES=1` hardening does not mitigate this either: `Object.create` is an own property of the `Object` constructor function, not a property on any frozen prototype. Fixed by capturing `pristineCreate = Object.create` at module top level (added to F-71's capture list) and calling `pristineCreate(null)` instead of the ambient global, in `canonicalPayload()`. `scripts/sign-policy.js`'s three matching `Object.create(null)` call sites (`canonicalPayload` once, `signPolicy` once) were fixed identically. |
+
+The Pentester's other priority targets (the F-83 delta itself, F-81's disclosed boundary, F-70's
+loader-reassignment ceiling, F-79's ESM interop path, F-74/F-82's `Object.freeze` capture) all held
+under fresh, genuinely new payloads — no other bypass found. The Compatibility Reviewer and Release
+Auditor both independently returned `PASS`; the Compatibility Reviewer additionally flagged the
+F-83 follow-up gap (see the correction above) as an advisory finding on its own, before this
+document was updated to record it, corroborating the Threat Modeler's independent discovery of the
+same gap.
+
+**Why this pattern of misses (F-80 → F-83 → F-84, all in the same `canonicalPayload` construction)
+matters and what it means going forward**: three consecutive pentest passes each found one more
+ambient global this function depended on without capturing. F-71 captured the byte-building
+primitives; F-80 found the copy loop's *target* was still a live `{}`; F-83 found the loop reading
+the sorted keys was still live `for...of`; F-84 found the very call that constructs the
+null-prototype target was still live `Object.create`. Each fix was real and each was independently
+verified — but each also left exactly one more adjacent ambient global unexamined, discovered only
+by the next pentest pass rather than by a first-pass audit of every operation `canonicalPayload`
+touches. `canonicalPayload` now pristine-captures every operation involved in building its output
+(`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`, `Object.create`) plus
+`crypto.verify`/`crypto.createHash` (F-62) — a genuinely completed set as of this pass, verified by
+a pentest specifically primed to look for exactly this class of gap and finding none. If a future
+change adds a new ambient-global call to this function's byte-building path, it needs the same
+scrutiny this one finally received in full.
+
 ### F-70: same-process loader-reassignment ceiling (disclosure, 2026-08-20)
 
 Aletheia enforces at Node's module-loading layer by wrapping `Module.prototype._compile` and
