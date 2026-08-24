@@ -551,6 +551,61 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('  ok F-83 follow-up: signPolicy()\'s own copy loop (separate from canonicalPayload\'s) also reads its sorted key array by index, not for...of');
   }
 
+  // Test 13: F-84 regression (PENTEST-005's Pentester finding, caught before merge) --
+  // canonicalPayload's `sorted = Object.create(null)` call itself was never pristine-captured, so
+  // F-80's whole fix depends on an ambient global that allowed code can monkeypatch. Different
+  // vector from every prior test here: this attacks the CONSTRUCTION of the copy target, not the
+  // loop that populates it (Test 9/F-71) or the loop's iteration mechanism (Test 11/F-83) -- if
+  // Object.create(null) is redirected to return an ordinary Object.prototype-inheriting object,
+  // F-80's bracket-assignment interception bug (a policy tampered post-signing to inject a
+  // '__proto__' rule still verifying VALID) reopens exactly as it was before F-80 ever shipped,
+  // with F-80's and F-83's own fixes both still in place and untouched.
+  {
+    const policyPath = freshPolicyPath();
+    writeSignedPolicy(policyPath, { 'left-pad': 'OBSERVE' });
+    let text = fs.readFileSync(policyPath, 'utf8');
+    text = text.replace('"left-pad": "OBSERVE"', '"left-pad": "OBSERVE",\n    "__proto__": "BLOCK"');
+    fs.writeFileSync(policyPath, text);
+
+    const parsedCheck = JSON.parse(text);
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(parsedCheck.rules, '__proto__'), true,
+      'sanity: JSON.parse must produce a real own "__proto__" property for this test to be meaningful'
+    );
+
+    assert.strictEqual(new PolicyWatcher(policyPath, {}).verify(), false,
+      'sanity: forged policy (extra "__proto__" key, no monkeypatch) must be rejected before testing the Object.create vector');
+
+    const realCreate = Object.create;
+    Object.create = function (proto, props) {
+      if (proto === null) {
+        return props === undefined ? {} : realCreate.call(Object, Object.prototype, props);
+      }
+      return realCreate.call(Object, proto, props);
+    };
+    try {
+      // Scaffolding: confirm the patch really redirects Object.create(null) to an ordinary object.
+      assert.strictEqual(
+        Object.getPrototypeOf(Object.create(null)), Object.prototype,
+        'scaffolding: the Object.create patch must make Object.create(null) inherit from Object.prototype'
+      );
+
+      assert.strictEqual(
+        new PolicyWatcher(policyPath, {}).verify(), false,
+        'F-84: forged policy must stay REJECTED with Object.create monkeypatched AFTER module load to defeat null-prototype construction'
+      );
+
+      const honestPath = freshPolicyPath();
+      writeSignedPolicy(honestPath, { 'left-pad': 'OBSERVE', 'a-real-pkg': 'BLOCK' });
+      assert.strictEqual(new PolicyWatcher(honestPath, {}).verify(), true,
+        'F-84: an honestly-signed, untampered policy must still verify true under the Object.create patch');
+    } finally {
+      Object.create = realCreate;
+    }
+
+    console.log('  ok F-84: canonicalPayload\'s Object.create(null) call uses a pristine capture -- Object.create monkeypatched AFTER module load does not forge a policy past verification');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

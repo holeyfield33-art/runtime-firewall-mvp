@@ -88,6 +88,8 @@ const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim()
 //     ignoring its receiver, so it is as much a drop vector as Object.keys.)
 //   - Buffer.from: canonicalPayload wraps the JSON string in a Buffer; patched to return fixed
 //     bytes it is byte-for-byte equivalent to patching JSON.stringify.
+//   - Object.create (added under F-84, see that note below): canonicalPayload's copy-target
+//     construction is itself a primitive call this list originally missed.
 // NOT captured, having been checked and found NOT to gate the decision:
 //   - JSON.parse — the object it produces in _loadAndVerify is the SAME object canonicalPayload
 //     serializes AND the same object _loadAndVerify returns for enforcement, so the signature
@@ -101,6 +103,7 @@ const pristineStringify = JSON.stringify;
 const pristineKeys = Object.keys;
 const pristineSort = Array.prototype.sort;
 const pristineBufferFrom = Buffer.from;
+const pristineCreate = Object.create;
 
 // ── F-80: null-prototype copy target (PENTEST-003 finding, F-71 follow-on) ─────────────────────
 // F-71 captured the byte-building PRIMITIVES pristine, but canonicalPayload's own key-sort copy
@@ -155,18 +158,38 @@ const pristineBufferFrom = Buffer.from;
 // new pristine capture. scripts/sign-policy.js's own separate canonicalPayload (and signPolicy's
 // inline copy) have the identical bug and are fixed identically, for the same byte-compatibility
 // reason as F-80.
+//
+// ── F-84: pristine Object.create capture (PENTEST-005 finding, F-80 follow-on) ─────────────────
+// F-80's fix (above) depends entirely on `Object.create(null)` actually producing a null-
+// prototype object -- but `Object.create` itself was never added to F-71's pristine-capture list,
+// so it was still called as the live ambient global. Allowed code that monkeypatches
+// `Object.create` AFTER this module loads (e.g. redirecting the `proto === null` case to return
+// an ordinary object instead) makes `canonicalPayload`'s `sorted = Object.create(null)` produce an
+// object that DOES inherit from Object.prototype -- reopening F-80's exact bracket-assignment
+// bug (`sorted[keys[i]] = ...` becomes interceptable again) through a new vector: attacking the
+// construction of the copy target, not the copy loop itself, which F-80/F-83 never considered.
+// Live-reproduced (PENTEST-005): with Object.create monkeypatched post-load, a policy signed
+// WITHOUT a '__proto__' rule, tampered post-signing (raw text edit, no private key) to add one,
+// verified VALID again -- identical bypass shape to the original pre-F-80 bug. F-80's own
+// FW_FREEZE_PROTOTYPES=1 opt-in hardening does not mitigate this either: Object.create is an
+// own property of the Object constructor function, not a property on any frozen prototype.
+// Fix: capture `pristineCreate = Object.create` at module top level (F-71's list, above) and call
+// `pristineCreate(null)` instead of the ambient global. scripts/sign-policy.js's three separate
+// Object.create(null) call sites (canonicalPayload once, signPolicy once) have the identical gap
+// and are fixed identically, for the same byte-compatibility reason as every prior follow-on here.
 /**
  * Build the canonical signed payload buffer from a policy object.
  * Keys in rules are sorted alphabetically so the byte sequence is deterministic.
- * Uses pristine byte-building primitives (see F-71 note above) so a post-load monkeypatch of
- * JSON.stringify / Object.keys / Array.prototype.sort / Buffer.from cannot decouple the bytes
- * verified here from the rules object the agent applies. Uses a null-prototype copy target (see
- * F-80 note above) so the copy loop itself cannot be defeated via prototype-chain interception.
- * Iterates the sorted key array by index, not for...of (see F-83 note above), so the loop itself
- * cannot be defeated via Symbol.iterator interception either.
+ * Uses pristine byte-building primitives (see F-71/F-84 notes above) so a post-load monkeypatch of
+ * JSON.stringify / Object.keys / Array.prototype.sort / Buffer.from / Object.create cannot
+ * decouple the bytes verified here from the rules object the agent applies. Uses a pristinely-
+ * constructed null-prototype copy target (see F-80/F-84 notes above) so the copy loop itself
+ * cannot be defeated via prototype-chain interception. Iterates the sorted key array by index, not
+ * for...of (see F-83 note above), so the loop itself cannot be defeated via Symbol.iterator
+ * interception either.
  */
 function canonicalPayload(version, rules, signedAt) {
-  const sorted = Object.create(null);
+  const sorted = pristineCreate(null);
   const keys = pristineSort.call(pristineKeys(rules));
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));

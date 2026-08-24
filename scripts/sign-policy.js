@@ -17,6 +17,14 @@
 const crypto = require('crypto');
 const fs = require('fs');
 
+// F-84: pristine Object.create capture -- see the matching note in
+// packages/fw-agent/src/policy-watcher.js's canonicalPayload(). `Object.create` was never
+// captured pristine here either, so a monkeypatch of it (redirecting proto===null to return an
+// ordinary object) would reopen F-80's bracket-assignment bug in this file's own copy loops too.
+// This file runs offline in a trusted signer process, so it is not the live attack surface (the
+// verify-side copy in policy-watcher.js is), but it must stay byte-identical to that side.
+const pristineCreate = Object.create;
+
 /**
  * Sort rules keys alphabetically for a deterministic canonical form.
  * The signed payload is always JSON.stringify({ version, rules: sortedRules, signedAt }).
@@ -42,7 +50,7 @@ const fs = require('fs');
  * honestly-signed policy could sign successfully yet fail to verify.
  */
 function canonicalPayload(version, rules, signedAt) {
-  const sorted = Object.create(null);
+  const sorted = pristineCreate(null);
   const keys = Object.keys(rules).sort();
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
@@ -74,7 +82,7 @@ function signPolicy(rules, privateKeyPem, signedAt) {
   // include a BLOCK rule, in a compromised or already-polluted offline signing environment, could
   // get back a validly-signed policy.signed.json silently missing that exact rule, with no error.
   // Fixed identically to canonicalPayload() -- index-based iteration, immune to Symbol.iterator.
-  const sorted = Object.create(null);
+  const sorted = pristineCreate(null);
   const keys = Object.keys(rules).sort();
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   const payload = canonicalPayload(version, sorted, ts);

@@ -151,6 +151,42 @@ application dependencies have executed. The two remaining spread usages (`{...me
 copies own-enumerable properties directly and never dispatches through `Symbol.iterator` at all.
 None of these needed the F-83 fix; noted here so this was a completed audit, not an assumption.
 
+## Third Independent Pentest (PENTEST-005) — F-84, pre-merge gate for PR #73
+
+Before merging PR #73 (the F-83 fix), the repo owner requested a formal pre-merge gate: a Threat
+Modeler (A1b) and Pentester (A2p) pair, run in genuinely isolated git worktrees with no memory of
+the implementation work, plus a Compatibility Reviewer (A2v) and Release Auditor (A2r) auditing
+the package that would actually publish — the `.agent/` orchestration graph's Team Configuration 2
+and 4 tracks, run together as directed. Unlike the informal, rate-limited PENTEST-004 run above,
+this is PENTEST-005's first formal, schema-validated pass, and it returned a real `FAIL`.
+
+| Finding | Severity | Status | Notes |
+| ------- | -------- | ------ | ----- |
+| F-84: `canonicalPayload()`'s `Object.create(null)` call is not pristine-captured | CRITICAL | ✅ Fixed | F-80's entire fix depends on `Object.create(null)` actually producing a null-prototype object — but `Object.create` itself was never added to F-71's pristine-capture list, so it was still called as the live ambient global. Allowed code that monkeypatches `Object.create` *after* this module loads (e.g. redirecting the `proto === null` case to return an ordinary, Object.prototype-inheriting object instead) makes `canonicalPayload`'s copy target inherit from `Object.prototype` again, reopening F-80's exact bracket-assignment bug through a new vector: attacking the *construction* of the copy target, not the loop that populates it (F-71) or the loop's iteration mechanism (F-83). Live-reproduced by PENTEST-005's Pentester, independently re-verified by the orchestrator: with `Object.create` monkeypatched post-load, a policy signed *without* a `'__proto__'` rule, tampered post-signing (raw text edit, no private key) to add one, verified `VALID` again — the identical bypass shape the F-80 fix was supposed to have closed permanently. F-80's own opt-in `FW_FREEZE_PROTOTYPES=1` hardening does not mitigate this either: `Object.create` is an own property of the `Object` constructor function, not a property on any frozen prototype. Fixed by capturing `pristineCreate = Object.create` at module top level (added to F-71's capture list) and calling `pristineCreate(null)` instead of the ambient global, in `canonicalPayload()`. `scripts/sign-policy.js`'s three matching `Object.create(null)` call sites (`canonicalPayload` once, `signPolicy` once) were fixed identically. |
+
+The Pentester's other priority targets (the F-83 delta itself, F-81's disclosed boundary, F-70's
+loader-reassignment ceiling, F-79's ESM interop path, F-74/F-82's `Object.freeze` capture) all held
+under fresh, genuinely new payloads — no other bypass found. The Compatibility Reviewer and Release
+Auditor both independently returned `PASS`; the Compatibility Reviewer additionally flagged the
+F-83 follow-up gap (see the correction above) as an advisory finding on its own, before this
+document was updated to record it, corroborating the Threat Modeler's independent discovery of the
+same gap.
+
+**Why this pattern of misses (F-80 → F-83 → F-84, all in the same `canonicalPayload` construction)
+matters and what it means going forward**: three consecutive pentest passes each found one more
+ambient global this function depended on without capturing. F-71 captured the byte-building
+primitives; F-80 found the copy loop's *target* was still a live `{}`; F-83 found the loop reading
+the sorted keys was still live `for...of`; F-84 found the very call that constructs the
+null-prototype target was still live `Object.create`. Each fix was real and each was independently
+verified — but each also left exactly one more adjacent ambient global unexamined, discovered only
+by the next pentest pass rather than by a first-pass audit of every operation `canonicalPayload`
+touches. `canonicalPayload` now pristine-captures every operation involved in building its output
+(`JSON.stringify`, `Object.keys`, `Array.prototype.sort`, `Buffer.from`, `Object.create`) plus
+`crypto.verify`/`crypto.createHash` (F-62) — a genuinely completed set as of this pass, verified by
+a pentest specifically primed to look for exactly this class of gap and finding none. If a future
+change adds a new ambient-global call to this function's byte-building path, it needs the same
+scrutiny this one finally received in full.
+
 ### F-70: same-process loader-reassignment ceiling (disclosure, 2026-08-20)
 
 Aletheia enforces at Node's module-loading layer by wrapping `Module.prototype._compile` and

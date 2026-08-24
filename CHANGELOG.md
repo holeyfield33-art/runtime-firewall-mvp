@@ -10,6 +10,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Third independent-pentest fix (F-84), from a formal pre-merge gate**: a formal pentest
+  (PENTEST-005 — Threat Modeler + Pentester, genuinely isolated worktrees, no memory of the
+  implementation work) run before merging the F-83 fix below found and live-reproduced one more
+  gap in the same `canonicalPayload()` function, independently re-verified by the orchestrator:
+  - **F-84** — `canonicalPayload()`'s `sorted = Object.create(null)` call was never pristine-
+    captured, so F-80's entire fix rested on an ambient global. Allowed code that monkeypatches
+    `Object.create` after this module loads (redirecting the `proto === null` case to return an
+    ordinary object) reopens F-80's exact bracket-assignment bypass — a policy tampered
+    post-signing to add a `'__proto__'` rule verifies `VALID` again, the same shape F-80 was
+    supposed to have closed for good. Fixed by capturing `pristineCreate = Object.create` at
+    module top level and using it in `canonicalPayload()`; `scripts/sign-policy.js`'s three
+    matching `Object.create(null)` call sites fixed identically. `FW_FREEZE_PROTOTYPES=1` does
+    not mitigate this (`Object.create` is a constructor-function property, not a prototype one).
+    See `SECURITY.md` for the full writeup, including why three consecutive pentest passes each
+    found one more adjacent ambient global this function depended on (F-80 → F-83 → F-84), and
+    why the capture set is now believed complete.
+
 - **Second independent-pentest follow-up fix (F-83)**: a follow-up independent pentest
   (PENTEST-004, re-checking the F-80/F-81/F-82 fixes below once they landed on `main`) found and
   live-reproduced one more real gap in `canonicalPayload()`:
