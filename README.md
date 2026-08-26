@@ -423,3 +423,9 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 - [x] Phase 4: Behavioral state machine, quarantine enforcement, persistent audit log
 - [ ] Phase 5: AST-level analysis for obfuscation-resistant detection
 - [ ] Phase 6: ClickHouse analytics integration & distributed policy propagation
+
+---
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).

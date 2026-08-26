@@ -3,7 +3,7 @@
   "version": "0.5.0",
   "description": "Zero-dependency runtime firewall that blocks malicious npm modules at require-time.",
   "main": "index.js",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "Aletheia contributors",
   "homepage": "https://github.com/holeyfield33-art/runtime-firewall-mvp#readme",
   "bugs": {
