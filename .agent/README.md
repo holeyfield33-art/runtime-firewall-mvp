@@ -176,6 +176,28 @@ the whole graph where `release-warden.js` doesn't stop at trusting the role's ow
 accidentally got packaged" made an actual script decision, per the directive that introduced this
 track, not left as prose alone.
 
+## Full red team track ("Team Configuration 5")
+
+A fifth path, for whole-system sweeps too large for a solo Pentester to reasonably cover: same A1
+(playing Security Target Builder, as in Team Configuration 2) and A1b Threat Modeler producing
+**one** whole-system `threat-model.json`, but A2 fans out into **twelve** parallel, independently
+worktreed Pentester lanes (A2-01…A2-12, each playing `agents/pentester.md` completely unchanged,
+each scoped to one attack surface by the directive's `lanes` array) instead of a single sequential
+pass. A new role, **Red Team Lead** (A2-lead, `agents/red-team-lead.md`), reads all twelve lane
+receipts plus the threat model and converges them into the *one* `verifier-receipt.json`
+`release-warden.js` actually reads — re-verifying every claimed bypass independently before
+including it, and refusing to launder a real lane `FAIL` into an overall `PASS` (see that role
+file's hard requirement). **`release-warden.js` itself is completely unmodified**: it still
+validates exactly one engineer receipt and one verifier receipt, exactly as every other track —
+this configuration changes who is allowed to contribute to that one receipt's contents and how,
+never what the gate mechanically checks. The twelve lane receipts themselves are kept as
+traceable source material under `<runDir>/lane-receipts/`, each independently schema-valid, but
+never read directly by the gate. First used by `directives/PENTEST-006-full-red-team-sweep.json`
+— copy that directive's shape (particularly its `lanes` array and `roster` field) for a future
+full-sweep engagement rather than inventing a new structure. Sixteen agent seats total (A1, A1b,
+twelve lanes, A2-lead, A3); A4 Docs Scribe remains available afterward, unchanged, strictly
+post-`PASS`, same as every other track.
+
 ## Receipts
 
 Every run directory (`runs/<run-id>/`) accumulates:
@@ -202,6 +224,15 @@ Every run directory (`runs/<run-id>/`) accumulates:
   `contracts/release-audit-receipt.schema.json`. Its `packaged_files` field is mechanically
   scanned by `release-warden.js` against `PACKAGE_DENY_PATTERNS` whenever this receipt exists —
   the one receipt type in the graph whose own `status` field isn't the final word.
+- `lane-receipts/L##-*.json` — Team Configuration 5 only, twelve of them, each written by one
+  parallel Pentester lane, each independently validating against
+  `contracts/verifier-receipt.schema.json` (`agent: "pentester"`). Traceable source material for
+  the Red Team Lead's rollup — never read directly by `release-warden.js`.
+- `redteam-synthesis.md` — Team Configuration 5 only, written by the Red Team Lead (A2-lead,
+  `agents/red-team-lead.md`): a human-readable narrative report (verdict, findings table,
+  unverified claims) meant to be folded into `SECURITY.md`/`CHANGELOG.md` next. Not schema-gated,
+  not read by `release-warden.js` — the mechanical gate only ever reads the rolled-up
+  `verifier-receipt.json` this role also writes.
 - `warden-receipt.json` — written only by `scripts/release-warden.js`, validates against
   `contracts/warden-receipt.schema.json`
 - `docs-receipt.json` — optional, written by Agent 4 only after `warden-receipt.status ===
