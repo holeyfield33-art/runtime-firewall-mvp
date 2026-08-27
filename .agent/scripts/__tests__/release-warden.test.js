@@ -410,27 +410,28 @@ check('docs-receipt citing evidence from a different run is rejected, not silent
   assert.ok(/docs-receipt cites evidence/.test(result.freeze_reason), result.freeze_reason);
 });
 
-check('a malformed directive that plausibly belongs to the active phase FREEZEs instead of silently disabling its requirements', () => {
+// ── Malformed directives: silent-skip is ACCEPTED behavior, not a bug ───────────────────────────
+// Four independent adversarial rounds each found a real, different bypass in four successive
+// attempts to make a malformed directive for the active phase FREEZE instead of silently losing
+// its require_* enforcement (see loadDirectiveForPhase's own comment in release-warden.js for the
+// full history and the reasoning for reverting to simple silent-skip). These tests lock in and
+// document that accepted, disclosed limitation -- they intentionally assert PASS, not FREEZE.
+
+check('a malformed directive for the ACTIVE phase is silently skipped (accepted limitation, not a bug)', () => {
   const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
   const directiveFile = path.join(directivesDir, 'RWTEST-CORRUPT-directive.json');
-  // Deliberately corrupted but still contains its own phase_id as a literal string, the way a
-  // truncated-mid-write file realistically would.
   fs.writeFileSync(directiveFile, '{"phase_id": "RWTEST-CORRUPT", "require_reliability_revi');
   try {
     const runDir = makeValidRun({ phaseId: 'RWTEST-CORRUPT' });
-    // evaluate() itself may throw here (that's fine, main()'s catch-all handles it) -- what
-    // matters is the real CLI never silently proceeds to PASS with the corrupted directive's
-    // requirements simply vanishing.
-    const res = runCli(runDir, 'RWTEST-CORRUPT');
-    assert.strictEqual(res.status, 2, `expected exit 2 (FREEZE) on a corrupted directive for the active phase, got ${res.status}. stdout:\n${res.stdout}`);
-    const receipt = JSON.parse(fs.readFileSync(path.join(runDir, 'warden-receipt.json'), 'utf8'));
-    assert.strictEqual(receipt.status, 'FREEZE');
+    const result = evaluate(runDir, 'RWTEST-CORRUPT');
+    assert.strictEqual(result.status, 'PASS', `a malformed directive is accepted to silently disable its own enforcement -- got ${result.status} instead, meaning the escalation logic was reintroduced without updating this test`);
+    assert.strictEqual(result.reliability && result.reliability.required, false);
   } finally {
     fs.unlinkSync(directiveFile);
   }
 });
 
-check('a corrupted directive for an UNRELATED phase does not freeze this phase (no over-correction)', () => {
+check('a corrupted directive for an UNRELATED phase never affects a different phase (no over-correction)', () => {
   const directivesDir = path.join(REPO_ROOT, '.agent', 'directives');
   const directiveFile = path.join(directivesDir, 'RWTEST-UNRELATED-CORRUPT-directive.json');
   fs.writeFileSync(directiveFile, '{"phase_id": "SOME-COMPLETELY-DIFFERENT-PHASE", "require_rel');
@@ -441,6 +442,71 @@ check('a corrupted directive for an UNRELATED phase does not freeze this phase (
   } finally {
     fs.unlinkSync(directiveFile);
   }
+});
+
+// ── Partial checkpoint-forgery mitigation: verifier evidence must be genuinely bound to
+// candidate_sha for at least one cited entry (disclosed as a bar-raising mitigation, not a full
+// fix -- see the check's own comment in release-warden.js for the honest limit). ─────────────────
+
+check('verifier evidence whose recorded git_sha never matches candidate_sha FREEZEs (naive forgery)', () => {
+  const runDir = makeValidRun();
+  // Overwrite ev-1's git_sha to something that is NOT the real candidate_sha -- simulating
+  // evidence collected without ever actually being at the claimed candidate commit.
+  const evPath = path.join(runDir, 'evidence', 'ev-1.json');
+  const ev = JSON.parse(fs.readFileSync(evPath, 'utf8'));
+  ev.git_sha = '0000000000000000000000000000000000000f';
+  fs.writeFileSync(evPath, JSON.stringify(ev, null, 2));
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
+  assert.ok(/no verifier-cited evidence was genuinely captured at candidate_sha/.test(result.freeze_reason), result.freeze_reason);
+});
+
+check('at least one genuinely-bound verifier evidence entry is sufficient, even alongside a mismatched one', () => {
+  // Mirrors a real, legitimate pattern found in this repo's own history: a verifier's evidence
+  // legitimately includes some main-tree-collected commands (e.g. confirming a file was read)
+  // alongside worktree-collected ones -- only ONE genuinely-bound entry should be required, not
+  // unanimity, or this would false-positive on real, honest verifier work.
+  const runDir = makeValidRun();
+  writeEvidence(runDir, 'ev-2', { runId: path.basename(runDir) }); // genuinely bound (default git_sha = CANDIDATE_SHA)
+  const evPath = path.join(runDir, 'evidence', 'ev-1.json'); // ev-1 deliberately mismatched
+  const ev = JSON.parse(fs.readFileSync(evPath, 'utf8'));
+  ev.git_sha = '0000000000000000000000000000000000000f';
+  fs.writeFileSync(evPath, JSON.stringify(ev, null, 2));
+  writeReceipt(runDir, 'verifier-receipt.json', baseVerifierReceipt({ evidence: ['ev-1', 'ev-2'] }));
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'PASS', `one genuinely-bound entry should be sufficient, got ${result.status}: ${result.freeze_reason}`);
+});
+
+check('an empty verifier.evidence array does not vacuously satisfy the candidate-sha-binding check', () => {
+  // Independent adversarial re-verification found the first version of this mitigation treated
+  // verifier.evidence.length === 0 as an automatic pass -- an attacker could cite ALL evidence via
+  // engineer.evidence (which the general evidence_present gate already accepts on its own) and
+  // leave verifier.evidence empty, defeating the mitigation with ZERO real git access to the
+  // candidate SHA at all -- strictly worse than the mitigation's own disclosed limit.
+  const runDir = makeValidRun();
+  writeReceipt(runDir, 'verifier-receipt.json', baseVerifierReceipt({ evidence: [] }));
+  // engineer still cites real, bound evidence -- the general evidence_present gate is satisfied,
+  // so this must fail specifically at the new verifier-evidence-binding check, not earlier.
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'FREEZE', `expected FREEZE, got ${result.status}`);
+  assert.ok(/cites no evidence at all/.test(result.freeze_reason), result.freeze_reason);
+});
+
+check('an abbreviated candidate_sha does not false-FREEZE against evidence recording the full 40-char SHA', () => {
+  // Bug found by independent adversarial re-verification: exact-string comparison meant a
+  // genuinely legitimate run using an abbreviated SHA (verifier-receipt.schema.json's own
+  // minLength:7 explicitly permits this) false-froze, since collect-evidence.js always records
+  // the full 40-char form. A reliability defect, not a security hole (it could only ever reject
+  // honest work) -- fixed to match checkpoint.js's own assertSha() convention: either string may
+  // be a prefix of the other.
+  const shortSha = CANDIDATE_SHA.slice(0, 8);
+  const runDir = mkRunDir();
+  for (const label of ['a1-candidate', 'a2-verify-start', 'a2-verify-end']) writeCheckpoint(runDir, label, shortSha);
+  writeEvidence(runDir, 'ev-1', { phaseId: 'RWTEST', runId: path.basename(runDir) }); // real, full-length git_sha
+  writeReceipt(runDir, 'engineer-receipt.json', baseEngineerReceipt({ candidate_sha: shortSha, evidence: ['ev-1'] }));
+  writeReceipt(runDir, 'verifier-receipt.json', baseVerifierReceipt({ candidate_sha: shortSha, evidence: ['ev-1'] }));
+  const result = evaluate(runDir, 'RWTEST');
+  assert.strictEqual(result.status, 'PASS', `an abbreviated SHA matching the evidence's full SHA as a prefix should still PASS, got ${result.status}: ${result.freeze_reason}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed.`);
