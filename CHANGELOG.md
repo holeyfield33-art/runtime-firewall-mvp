@@ -8,6 +8,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-27
+
+### Added
+
+- **Phase 3 AST-level obfuscation detection (`FW_ENABLE_AST=1`, opt-in)** —
+  `packages/fw-agent/src/ast-scan.js`: a new, hand-rolled, zero-runtime-dependency
+  tokenizer/parser/constant-folder/structural-matcher, scoped narrowly to the expression grammar
+  needed to see through the specific obfuscation idioms the red-team corpus has long tracked as
+  `knownBypass: true` — bracket/alias/unicode-escape access to `eval`/`Function`, constructor-chase
+  sandbox escapes (`(function(){}).constructor`, `Object.getPrototypeOf(function*(){}).constructor`),
+  decode-primitive chains (`String.fromCharCode`, `.split('').reverse().join('')`,
+  `decodeURIComponent`, `Buffer.from(...).toString()`), and literal string/path/specifier
+  reassembly (`'ev'+'al'`, `['ch','ild'].join('')`, `'/etc/'+'sha'+'dow'`). No new detection
+  *rules*: resolved obfuscation is fed into the existing signature and behavioral-correlation
+  engines as additional signal positions and re-tested literals — `detector.js`'s
+  `BLOCK_SIGNATURES`/`BLOCK_REGEXES` and `behavior-tracker.js`'s `DYNAMIC_CODE_EXEC_CHAIN` /
+  `OBFUSCATED_CODE_EXECUTION` correlation rules are unchanged. A genuinely obfuscated
+  access to `eval`/`Function`/`GeneratorFunction`, or an obfuscated `require()` of a sensitive
+  module, is the one case this module reports as a standalone finding on its own (see
+  `resolveIdentity()`'s direct-vs-obfuscated distinction) — everything else only ever widens what
+  the existing engines can see. Every parse/fold error degrades to "no additional signal from this
+  span," never a throw or a false block; the existing text-based scanners always run over full raw
+  content regardless.
+  - Ships **opt-in, off by default** (mirrors how `FW_ENABLE_CROSSFILE` was introduced): new,
+    unproven parsing code touching a block-tier decision, not yet soak-tested against a large
+    real-world corpus. Default-configuration detection behavior (and the default `npm run
+    redteam` score) is byte-for-byte unchanged by this release.
+  - Closes 18 of the 30 previously-documented static-analysis bypasses when enabled — detection
+    rate on the red-team corpus rises from 76.0% (95/125, default) to 90.4% (113/125,
+    `FW_ENABLE_AST=1`) with 0 new false positives. Run `npm run redteam:ast` to reproduce. See
+    `docs/THREAT-COVERAGE.md` §4 for the exact closed/still-open list.
+  - **Explicitly does not close, by architectural necessity, not oversight**: WASM payloads (no
+    JS source text exists to parse), values sourced only from `process.env`/runtime config (never
+    a literal in source, so nothing for a static fold to resolve), and network+process-exec taint
+    chains / low-and-slow C2 (need either cross-statement dataflow with real false-positive guards,
+    or runtime network-egress allow/deny lists — separate future work, not AST's job).
+- `npm run redteam:ast` / `red-team/run.js --enable-ast` — runs the red-team corpus with
+  `FW_ENABLE_AST=1` so the AST tier's effect can be measured and reproduced independently of the
+  default-posture `npm run redteam` run.
+- Six new red-team `benign-controls` entries exercising the same primitives the AST pass inspects
+  in legitimate ways (an ordinary `.constructor` type-check, `String.fromCharCode` building
+  display text, `Buffer.from(...,'base64')` decoding ordinary data, `Array.join` building a
+  non-sensitive message, a benign computed-property config lookup, and the standalone `(0, eval)`
+  idiom used without a decode/exec chain) — folding literals and resolving call targets is a new
+  false-positive surface distinct from the existing raw-text signal engine, and needed its own
+  regression coverage.
+
 ## [0.5.0] - 2026-08-24
 
 This release was held for three rounds of independent security review (PENTEST-003 through
@@ -440,7 +487,8 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.5.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.3.0...v0.4.0
 [0.2.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.1.1...v0.2.0

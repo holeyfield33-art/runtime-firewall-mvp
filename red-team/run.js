@@ -35,13 +35,14 @@ const { corpus } = require('./corpus');
 
 // ── args ─────────────────────────────────────────────────────────────────────
 function parseArgs(argv) {
-  const args = { output: null, category: null, quiet: false, onlyBypass: false };
+  const args = { output: null, category: null, quiet: false, onlyBypass: false, enableAst: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--output' || a === '-o') args.output = argv[++i];
     else if (a === '--category' || a === '-c') args.category = argv[++i];
     else if (a === '--quiet' || a === '-q') args.quiet = true;
     else if (a === '--only-bypass') args.onlyBypass = true;
+    else if (a === '--enable-ast') args.enableAst = true;
     else if (a === '--help' || a === '-h') { printHelp(); process.exit(0); }
   }
   return args;
@@ -59,6 +60,11 @@ function printHelp() {
                           (default: results/redteam-summary.json)
   -q, --quiet             Suppress the per-attack table; print the summary only
       --only-bypass       Only print rows that got through (bypasses + false neg)
+      --enable-ast        Set FW_ENABLE_AST=1 for this run (Phase 3 AST detection is
+                          opt-in and off by default; the plain 'npm run redteam'
+                          measures out-of-the-box posture, matching production
+                          defaults — use 'npm run redteam:ast' / this flag to see
+                          what the AST tier additionally closes)
   -h, --help              Show this help`);
 }
 
@@ -111,6 +117,7 @@ function evaluate(detector, attack) {
 
 // ── run ──────────────────────────────────────────────────────────────────────
 function run(args) {
+  if (args.enableAst) process.env.FW_ENABLE_AST = '1';
   const detector = new Detector(new Map());
   const selected = args.category
     ? corpus.filter((a) => a.category === args.category)
@@ -155,7 +162,8 @@ function run(args) {
 
   const summary = {
     tool: 'helios-red-team-suite',
-    target: 'runtime-firewall-mvp :: Detector.scanModuleSync (index.js block rule)',
+    target: 'runtime-firewall-mvp :: Detector.scanModuleSync (index.js block rule)'
+      + (args.enableAst ? ' [FW_ENABLE_AST=1 — Phase 3 AST tier enabled, NOT the default posture]' : ''),
     generatedAt: new Date().toISOString(),
     categoryFilter: args.category || null,
     totals: {

@@ -30,6 +30,7 @@ const SELF_FILES = [
   path.join(AGENT_DIR, 'src', 'audit-log.js'),
   path.join(AGENT_DIR, 'src', 'policy.js'),
   path.join(AGENT_DIR, 'src', 'aho-corasick.js'),
+  path.join(AGENT_DIR, 'src', 'ast-scan.js'),
   path.join(AGENT_DIR, 'sync-worker.js'),
 ];
 

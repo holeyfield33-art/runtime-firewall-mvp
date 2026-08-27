@@ -104,7 +104,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'Pool URL reassembled from fragments to dodge the literal "stratum+tcp" signature (host is deliberately not a known-bad literal either)',
+    description: 'Pool URL reassembled from fragments to dodge the literal "stratum+tcp" signature (host is deliberately not a known-bad literal either). CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the concatenation folds statically to the same literal the existing signature already knows — see `npm run redteam:ast`.',
     code: `
       const scheme = 'stra' + 'tum+' + 'tcp';
       const pool = scheme + '://mine.' + 'poolhost' + '.example:443';
@@ -118,7 +118,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'Pool URL held as a base64 blob and decoded at runtime (never eval\'d, so OBFUSCATED_CODE_EXECUTION does not fire)',
+    description: 'Pool URL held as a base64 blob and decoded at runtime (never eval\'d, so OBFUSCATED_CODE_EXECUTION does not fire). CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the decode is folded statically and the result re-matched against the existing signature set — see `npm run redteam:ast`.',
     code: `
       const b = 'c3RyYXR1bSt0Y3A6Ly9wb29sLmhhc2h2YXVsdC5wcm86NDQz';
       const pool = Buffer.from(b, 'base64').toString();

@@ -1,7 +1,7 @@
 // .agent/scripts/__tests__/self-integrity-lockstep.test.js
 // Plain node+assert test (repo convention, no jest/mocha).
 //
-// F-01: the 9-file self-integrity list (index.js's own computeSelfHash(), the source of truth
+// F-01: the 10-file self-integrity list (index.js's own computeSelfHash(), the source of truth
 // for the shipped .helios-baseline) is duplicated in four places that must be byte-identical in
 // content AND order, or the release-warden's baseline-regeneration carve-out recomputes the
 // wrong hash and either wrongly FREEZEs a legitimate baseline regen or wrongly excuses a bad one:
@@ -114,15 +114,17 @@ check('all four copies are deeply equal, order-sensitive', () => {
   );
 });
 
-check('list is exactly 9 files and contains the two previously-missing files', () => {
-  assert.strictEqual(indexJsList.length, 9, `expected 9 files, got ${indexJsList.length}: ${JSON.stringify(indexJsList)}`);
+check('list is exactly 10 files and contains the previously-missing / Phase-3 files', () => {
+  assert.strictEqual(indexJsList.length, 10, `expected 10 files, got ${indexJsList.length}: ${JSON.stringify(indexJsList)}`);
   assert.ok(indexJsList.includes('src/aho-corasick.js'), 'src/aho-corasick.js missing from index.js list');
+  assert.ok(indexJsList.includes('src/ast-scan.js'), 'src/ast-scan.js missing from index.js list');
   assert.ok(indexJsList.includes('sync-worker.js'), 'sync-worker.js missing from index.js list');
   assert.ok(releaseWardenList.includes('src/aho-corasick.js'), 'src/aho-corasick.js missing from release-warden.js list (F-01)');
+  assert.ok(releaseWardenList.includes('src/ast-scan.js'), 'src/ast-scan.js missing from release-warden.js list');
   assert.ok(releaseWardenList.includes('sync-worker.js'), 'sync-worker.js missing from release-warden.js list (F-01)');
 });
 
-check('recomputed 9-file hash matches the committed .helios-baseline', () => {
+check('recomputed 10-file hash matches the committed .helios-baseline', () => {
   const hash = crypto.createHash('sha256');
   for (const rel of indexJsList) {
     const content = fs.readFileSync(path.join(AGENT_DIR, rel), 'utf8').replace(/\r\n/g, '\n');

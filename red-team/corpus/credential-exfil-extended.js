@@ -232,7 +232,7 @@ module.exports = [
     id: 'exfil-concat-etc-shadow',
     category: 'credential-exfil', technique: 'concat-path-evasion', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Sensitive path assembled from fragments so no literal matches SENSITIVE_PATH',
+    description: 'Sensitive path assembled from fragments so no literal matches SENSITIVE_PATH. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the string concatenation is folded and the resulting path re-matched against SENSITIVE_PATH — see `npm run redteam:ast`.',
     code: `
       const fs = require('fs');
       const p = '/etc/' + 'sha' + 'dow';

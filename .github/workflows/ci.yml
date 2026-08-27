@@ -69,6 +69,7 @@ jobs:
             'src/audit-log.js',
             'src/policy.js',
             'src/aho-corasick.js',
+            'src/ast-scan.js',
             'sync-worker.js',
           ];
           const hash = crypto.createHash('sha256');

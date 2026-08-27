@@ -145,4 +145,91 @@ module.exports = [
       module.exports = { loadRegistryConfig, devServerDefaults, fetchManifest };
     `,
   },
+
+  // ── Phase 3 AST-detection false-positive guards ─────────────────────────────
+  // Folding literals and resolving obfuscated-looking call targets is a NEW false-positive
+  // surface (see packages/fw-agent/src/ast-scan.js) distinct from the raw-text signal engine
+  // above — these exercise the same primitives the AST pass specifically inspects, used the
+  // way real packages actually use them, and must stay clean under FW_ENABLE_AST=1.
+  {
+    id: 'benign-ast-constructor-typecheck',
+    category: 'benign-controls', technique: 'constructor-property-typecheck', severity: 'NONE',
+    expected: 'PASS',
+    description: 'Ordinary `.constructor` type-check idiom (common in validation/serialization libraries) — must not be mistaken for the constructor-chase sandbox-escape shape, which requires the OBJECT to itself be a function expression or Object.getPrototypeOf(fn), not an arbitrary value.',
+    code: `
+      function isPlainObject(x) {
+        return x != null && typeof x === 'object' && x.constructor === Object;
+      }
+      function sameType(a, b) {
+        return a.constructor === b.constructor;
+      }
+      module.exports = { isPlainObject, sameType };
+    `,
+  },
+  {
+    id: 'benign-ast-fromcharcode-i18n',
+    category: 'benign-controls', technique: 'fromcharcode-non-code-string', severity: 'NONE',
+    expected: 'PASS',
+    description: 'String.fromCharCode building an ordinary display string (a common pattern in i18n/emoji/unicode-table helpers) — folds to plain text, not a signature match, and the CODE_DECODE-class structural signal it also contributes never chains into a block because there is no dynamicCode/eval anywhere nearby.',
+    code: `
+      function heart() { return String.fromCharCode(0x2764); }
+      function greeting(name) {
+        const hello = String.fromCharCode(72, 101, 108, 108, 111);
+        return hello + ', ' + name + '!';
+      }
+      module.exports = { heart, greeting };
+    `,
+  },
+  {
+    id: 'benign-ast-buffer-base64-data',
+    category: 'benign-controls', technique: 'buffer-base64-ordinary-data', severity: 'NONE',
+    expected: 'PASS',
+    description: 'Buffer.from(..., "base64") decoding ordinary config/asset data (not a command, not a path, not a known-bad signature) — the fold must produce a harmless string that matches nothing.',
+    code: `
+      function decodeAsset(b64) {
+        return Buffer.from(b64, 'base64').toString('utf8');
+      }
+      const defaultIcon = Buffer.from('aWNvbi1wbGFjZWhvbGRlcg==', 'base64').toString();
+      module.exports = { decodeAsset, defaultIcon };
+    `,
+  },
+  {
+    id: 'benign-ast-array-join-message',
+    category: 'benign-controls', technique: 'array-join-non-sensitive', severity: 'NONE',
+    expected: 'PASS',
+    description: 'Array.join used to build an ordinary log/error message — a folded literal that matches no BLOCK_SIGNATURES/SENSITIVE_PATH pattern must never manufacture a finding just because folding happened.',
+    code: `
+      function formatError(parts) {
+        return ['Error', 'occurred', 'while', 'processing', 'request'].join(' ');
+      }
+      const csvHeader = ['id', 'name', 'created_at'].join(',');
+      module.exports = { formatError, csvHeader };
+    `,
+  },
+  {
+    id: 'benign-ast-computed-property-config',
+    category: 'benign-controls', technique: 'computed-member-config-key', severity: 'NONE',
+    expected: 'PASS',
+    description: 'Dynamic bracket-notation property access with a computed-but-benign key (a common config/i18n/feature-flag lookup pattern) — folding the key must never resolve to eval/Function, so no standalone finding fires.',
+    code: `
+      const messages = { en_greeting: 'hello', fr_greeting: 'bonjour' };
+      function greet(lang) {
+        const key = lang + '_greeting';
+        return messages[key] || messages['en' + '_greeting'];
+      }
+      module.exports = { greet };
+    `,
+  },
+  {
+    id: 'benign-ast-indirect-eval-alone',
+    category: 'benign-controls', technique: 'indirect-eval-no-chain', severity: 'WARN',
+    expected: 'PASS',
+    description: 'The (0, eval) indirect-eval idiom used alone (some legitimate polyfills/sandboxing shims use it for global-scope eval) with no decode/process-exec chain — resolveIdentity() must classify this as "direct" (already visible to the existing engine) and NOT escalate it to a standalone block the way a genuinely obfuscated alias would.',
+    code: `
+      function globalEval(code) {
+        return (0, eval)(code);
+      }
+      module.exports = { globalEval };
+    `,
+  },
 ];

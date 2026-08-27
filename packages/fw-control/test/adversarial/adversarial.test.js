@@ -773,15 +773,17 @@ console.log(`\n─────────────────────�
 console.log(`Results: ${passed} passed, ${failed} failed out of ${results.length} tests`);
 console.log(`─────────────────────────────────────────────────────────────\n`);
 
-console.log('Known bypasses (documented for future work):');
-console.log('  1. Bracket-notation eval:   this["ev"+"al"]  → needs AST or V8 Inspector');
-console.log('  2. String concatenation:    global["ev"+"al"] → needs taint tracking');
-console.log('  3. Variable-alias eval:     const fn = eval; fn("code") → needs runtime Proxy');
-console.log('  4. Prototype chain access:  Object.getPrototypeOf(eval).constructor → needs runtime instrumentation');
+console.log('Known bypasses with the DEFAULT configuration (FW_ENABLE_AST unset) — this suite never');
+console.log('sets FW_ENABLE_AST=1, so these are genuinely still bypassed above, matching production defaults:');
+console.log('  1. Bracket-notation eval:   this["ev"+"al"]  → closed by Phase 3 AST detection (FW_ENABLE_AST=1, opt-in)');
+console.log('  2. String concatenation:    global["ev"+"al"] → closed by Phase 3 AST detection (FW_ENABLE_AST=1, opt-in)');
+console.log('  3. Variable-alias eval:     const fn = eval; fn("code") → closed by Phase 3 AST detection (FW_ENABLE_AST=1, opt-in)');
+console.log('  4. Prototype chain access:  Object.getPrototypeOf(eval).constructor → closed by Phase 3 AST detection (FW_ENABLE_AST=1, opt-in)');
+console.log('See packages/fw-agent/src/ast-scan.js and docs/THREAT-COVERAGE.md for exact scope and what remains open (WASM, env-sourced values, network+process-exec taint chains).');
 console.log('\nNote: Array join reassembly (["ch","ild"].join("")) bypasses per-module isolation; may be caught by cross-module state in practice.');
-console.log('\nAll bypasses require runtime (dynamic) analysis. Static analysis has fundamental limits.');
-console.log('Behavioral detection mitigates bypasses by flagging dangerous ACTION SEQUENCES');
-console.log('rather than specific strings, providing defense-in-depth.\n');
+console.log('\nRemaining bypasses (WASM, env-sourced config, network+process-exec chains) require runtime (dynamic)');
+console.log('analysis or taint tracking beyond static/AST scope. Behavioral detection mitigates them by flagging');
+console.log('dangerous ACTION SEQUENCES rather than specific strings, providing defense-in-depth.\n');
 
 if (failed > 0) {
   process.exit(1);
