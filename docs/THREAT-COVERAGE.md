@@ -9,7 +9,10 @@ architectural scope boundary documented below.
 - Tests: `packages/fw-agent/test/behavior-tracker-unit-test.js`, `detector-unit-test.js`, `packages/fw-control/test/adversarial/adversarial.test.js`.
 - Enforcement mapping: HIGH/CRITICAL → hard block (`require()` throws); WARN/MEDIUM → `OBSERVE` telemetry, module runs.
 
-Last verified against the adversarial suite (all passing) and the engine-core coverage gate (100% lines / functions, ≥95% branches).
+Last verified against the adversarial suite (all passing) and the engine-core coverage gate
+(≥99% lines, 100% functions, ≥90% branches — the `ast-scan.js` addition in Phase 3 pulled
+aggregate branch coverage down from the prior ≥95% floor to just above the gate's 90% minimum;
+see `npm run test:coverage`).
 
 ---
 
@@ -88,48 +91,91 @@ eval-only, comment-only-decode, config-built `.npmrc` URL, hardcoded real-regist
 
 ---
 
-## 4. Known bypasses (NOT protected)
+## 4. Known bypasses (NOT protected by default)
 
-These require dynamic (runtime) analysis; static/behavioral analysis is fundamentally limited
-against them. Each is asserted as an **expected bypass** in the adversarial suite so we notice if
-the boundary ever shifts.
+Two configurations now matter here, and they give genuinely different numbers — always say which
+one a figure describes:
 
-Detection has been raised from **55.2% → 76.0%** (69 → **95 / 125** malicious payloads caught,
-**0** false positives on the 27 benign controls and the top-100 soak) across two hardening
-phases — see the roadmap below. The **30** payloads that still bypass, grouped by root cause:
+- **Default** (`FW_ENABLE_AST` unset): signature + behavioral tiers only. **76.0%** (95/125
+  malicious payloads caught), **30** known bypasses, **0** false positives on the 33 benign
+  controls. This is what a fresh install does out of the box — `npm run redteam`.
+- **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak — see §"AST-level detection" below):
+  adds a narrow, hand-rolled AST pass. **90.4%** (113/125 caught), **12** known bypasses, **0**
+  false positives (the same 33 benign controls, including six added specifically to guard the new
+  fold/resolve surface). `npm run redteam:ast`.
 
-| Technique | Example | Why it bypasses | Would need |
+The remaining bypasses genuinely require dynamic (runtime) analysis beyond either tier; each is
+asserted as an **expected bypass** in the adversarial and red-team suites so we notice if the
+boundary ever shifts. Grouped by root cause, with which tier (if any) closes it:
+
+| Technique | Example | Why it bypasses | Closed by |
 |---|---|---|---|
-| String-reassembly eval / require | `this["ev"+"al"](code)`, `global["ev"+"al"]`, `const fn = eval`, `Object.getPrototypeOf(eval).constructor`, `require(["ch","ild"].join(""))`, `String.fromCharCode`, unicode-escape, reversed strings | trigger token assembled at runtime; no literal call site in source | AST / taint analysis (Phase 3) |
-| WASM / GeneratorFunction / constructor.constructor | `WebAssembly.instantiate`, `GeneratorFunction(code)`, `constructor.constructor(code)()` | no JS `eval`/`Function` literal at all | AST / runtime instrumentation (Phase 3) |
-| Decode-without-eval config | miner pool URL held as a base64/hex blob and decoded at runtime, never `eval`'d; config-/env-driven pool with no literal | decode alone is benign (`CODE_DECODE` only chains with `DYNAMIC_CODE`); no signature | taint from decode → sink (Phase 3) |
-| `decodeURIComponent` → eval | `eval(decodeURIComponent(...))`, `(0,eval)(decodeURIComponent(...))` | `decodeURIComponent` deliberately **not** a `CODE_DECODE` signal — it is ubiquitous in benign code (query-string parsers), so co-occurrence with `eval` is not enough | dataflow decode→eval (Phase 3) |
-| Network + process-exec chain | pure-Node socket→`spawn('/bin/sh')`, HTTP-poll C2 (`fetch` cmd → `exec` → POST) | both primitives present but not linked by a blocking rule; a static "egress + child-process" rule would false-positive on legit CLIs | taint / behavioral sequencing with FP guards (Phase 3) |
-| Shell-out / base64 command exec | exfil by shelling to `curl`; `/dev/tcp` base64-encoded then `bash -c` | outbound call is a child process, not a `NETWORK_EGRESS` primitive; command is decoded at runtime | command-string semantics (Phase 3) |
-| Low-and-slow / benign-looking C2 | ngrok/telegram/IP-literal beacons, dependency-confusion fetch, deferred (exit-time) beacon, `bash -i` without `>&` | a single outbound call to an attacker host is statically indistinguishable from legitimate telemetry | runtime network egress allow/deny lists (Phase 3) |
+| String-reassembly eval / require | `this["ev"+"al"](code)`, `global["ev"+"al"]`, `const fn = eval`, `Object.getPrototypeOf(eval).constructor`, `require(["ch","ild"].join(""))`, `String.fromCharCode`, unicode-escape, reversed strings | trigger token assembled at runtime; no literal call site in source | **AST tier** (`FW_ENABLE_AST=1`) |
+| GeneratorFunction / constructor.constructor | `GeneratorFunction(code)`, `constructor.constructor(code)()` | no JS `eval`/`Function` literal at all — but a real, parseable JS *shape* | **AST tier** (`FW_ENABLE_AST=1`) |
+| WASM | `WebAssembly.instantiate(bytes)` | no JS source text exists to parse or fold — architecturally unreachable by any JS-source AST, not merely unimplemented | **Not closeable by AST at all** — would need runtime/native instrumentation |
+| Decode-without-eval config (literal in source) | miner pool URL held as a base64/hex blob, decoded at runtime, never `eval`'d, where the *encoded* form is a literal | decode alone is benign (`CODE_DECODE` only chains with `DYNAMIC_CODE`); no signature matches the encoded literal | **AST tier**: the decode is folded and the *decoded* value re-matched |
+| Decode-without-eval config (env/runtime-sourced) | pool URL read from `process.env`/config, never a literal anywhere in source | nothing for a static fold to resolve — the value doesn't exist in source text at all | **Not closeable by AST** — needs runtime taint tracking |
+| `decodeURIComponent` → eval | `eval(decodeURIComponent(...))`, `(0,eval)(decodeURIComponent(...))` | `decodeURIComponent` deliberately **not** a `CODE_DECODE` signal — it is ubiquitous in benign code (query-string parsers), so co-occurrence with `eval` is not enough | **AST tier**: recognized structurally as a CODE_DECODE-class primitive, correlates with the existing `eval(` match |
+| Literal string/path reassembly | `'/etc/' + 'sha' + 'dow'`, `['/.ss','h/id_','rsa'].join('')` | no literal substring survives in source for `SENSITIVE_PATH`/`BLOCK_SIGNATURES` to match | **AST tier**: concat/join folded, result re-matched against the existing patterns |
+| Network + process-exec chain | pure-Node socket→`spawn('/bin/sh')`, HTTP-poll C2 (`fetch` cmd → `exec` → POST) | both primitives present but not linked by a blocking rule; a static "egress + child-process" rule would false-positive on legit CLIs | **Neither tier** — needs cross-statement taint / behavioral sequencing with real FP guards |
+| Shell-out command exec | exfil by shelling to `curl` with an *unfolded* (runtime-built) argument | outbound call is a child process, not a `NETWORK_EGRESS` primitive; the exfiltrated data isn't a foldable literal | **Neither tier** — needs command-string semantics beyond static folding |
+| Low-and-slow / benign-looking C2 | ngrok/telegram/IP-literal beacons, dependency-confusion fetch, deferred (exit-time) beacon, `bash -i` without `>&` | a single outbound call to an attacker host is statically indistinguishable from legitimate telemetry | **Neither tier** — needs runtime network-egress allow/deny lists |
 
-**Closed in Phases 1–2** (were bypasses, now caught — kept as regression guards in the red-team
-corpus with `knownBypass: false`): inline-require `net`/`tls`/`dgram`/`vm` egress & dynamic-code;
-miner brands coinimp/jsecoin/webminepool/deepminer; `.docker/config.json` / `.kube/config` /
-browser `Login Data` stores; `\| sh`/`\| dash`/`\| zsh` stagers; `REMOTE_FETCH_EXEC` (fetch→eval);
-`nc -e`/`ncat`/`socat`/`mkfifo`/`fsockopen`/PowerShell-TCPClient/`ruby -rsocket`/`lua` reverse
-shells; `dns.resolve` & `navigator.sendBeacon` exfil channels; `process.binding` process exec.
+**Closed in Phases 1–2** (were bypasses, now caught unconditionally — kept as regression guards in
+the red-team corpus with `knownBypass: false`): inline-require `net`/`tls`/`dgram`/`vm` egress &
+dynamic-code; miner brands coinimp/jsecoin/webminepool/deepminer; `.docker/config.json` /
+`.kube/config` / browser `Login Data` stores; `\| sh`/`\| dash`/`\| zsh` stagers;
+`REMOTE_FETCH_EXEC` (fetch→eval); `nc -e`/`ncat`/`socat`/`mkfifo`/`fsockopen`/PowerShell-TCPClient/
+`ruby -rsocket`/`lua` reverse shells; `dns.resolve` & `navigator.sendBeacon` exfil channels;
+`process.binding` process exec.
+
+**Closed under `FW_ENABLE_AST=1`, opt-in** (were bypasses under default settings, now caught when
+the AST tier is enabled — corpus entries keep `knownBypass: true` since that reflects the true
+*default*-configuration state, with a description note pointing at this section; flipping the flag
+would make `npm run redteam`'s default run misrepresent out-of-the-box behavior, exactly the
+overclaiming risk this project's docs otherwise go out of their way to avoid): `dce-bracket-eval`,
+`dce-alias-eval`, `dce-join-require`, `dce-unicode-escape-eval`, `dce-eval-decodeuri`,
+`dce-fromcharcode-eval`, `dce-reverse-eval`, `dce-constructor-constructor`,
+`dce-generatorfunction`, `dce-indirect-eval-decodeuri`, `miner-concat-stratum`,
+`miner-base64-pool`, `miner-charcode-coinhive`, `miner-concat-cryptonight`, `miner-hex-pool`,
+`revsh-base64-devtcp`, `exfil-concat-path`, `exfil-concat-etc-shadow` (18 total — run
+`npm run redteam:ast` to reproduce the full list against `results/redteam-summary.json`).
+
+**Still open under `FW_ENABLE_AST=1`** (12): `miner-hex-pool`'s config-driven sibling
+`miner-env-pool`; `miner-wasm`/`dce-wasm-code`; `revsh-node-net-spawn`, `revsh-node-http-beacon`,
+`revsh-bash-i-only`; `exfil-env-via-curl`; `sc-ngrok-beacon`, `sc-telegram-bot`,
+`sc-ip-literal-c2`, `sc-dependency-confusion`, `sc-setimmediate-beacon` — all documented above as
+needing dynamic taint tracking or runtime egress allow-listing, not AST.
 
 ### Phased hardening roadmap
 
-- **Phase 1 (done) — signature/list extensions, near-zero FP risk.** Inline-require egress &
+Numbering note: this roadmap's phases are **detection-hardening rounds**, a different sequence
+from the architectural-milestone "Phase 1–6" in the root `README.md`'s Roadmap section (async
+telemetry, signature engine, integrity anchoring, behavioral state machine, ...). Round 3 below
+*is* the work README's Roadmap calls "Phase 5: AST-level analysis" — same work, two independent
+numbering schemes; stated explicitly here to stop conflating them.
+
+- **Round 1 (done) — signature/list extensions, near-zero FP risk.** Inline-require egress &
   dynamic-code patterns; miner brands + `isCrypto` relabel; `SENSITIVE_CONFIG_PATH` for
   infra/browser cred stores (gated on a *deliberate* exfil destination so legit k8s/docker/browser
   clients are not flagged); anchored `\| sh`/`dash`/`zsh` stager regex. → **55.2% → 64.0%**.
-- **Phase 2 (done) — behavioral rules & primitive coverage, each soak-gated.** `REMOTE_FETCH_EXEC`
+- **Round 2 (done) — behavioral rules & primitive coverage, each soak-gated.** `REMOTE_FETCH_EXEC`
   (network egress + dynamic code → HIGH); anchored reverse-shell tool signatures; `dns.resolve*`
   and `navigator.sendBeacon` egress channels; `process.binding` in `PROCESS_EXEC`; indirect
   `(0,eval)` in `DYNAMIC_CODE`. → **64.0% → 76.0%**.
-- **Phase 3 (planned) — architectural / out of static-scan scope.** AST / taint analysis
-  ("Phase 5" below) for string-reassembly, wasm, decode-without-eval, `decodeURIComponent→eval`,
-  and network+process-exec chains; **runtime network-egress allow/deny lists** in the agent's
-  runtime policy for the low-and-slow C2 class (a static scanner cannot separate an attacker
-  beacon from legitimate telemetry).
+- **Round 3 (done, opt-in) — AST-level obfuscation detection.** `packages/fw-agent/src/ast-scan.js`
+  (`FW_ENABLE_AST=1`, off by default pending soak — see the note above on why default-posture
+  numbers are unaffected). Closes string-reassembly eval/require, GeneratorFunction/
+  constructor.constructor, decode-without-eval where the encoded form is a literal,
+  `decodeURIComponent→eval`, and literal string/path reassembly. → **76.0% → 90.4%** when enabled.
+  Deliberately does NOT attempt WASM (no JS text exists to parse), env-sourced values (nothing in
+  source to fold), or network+process-exec taint chains (needs cross-statement dataflow with real
+  FP guards, a different problem than AST parsing) — seen below and in the table above as still
+  open, not silently dropped.
+- **Round 4 (planned) — runtime network-egress allow/deny lists** in the agent's runtime policy,
+  for the low-and-slow C2 class a static scanner (AST included) cannot separate from legitimate
+  telemetry; and cross-statement taint tracking for the network+process-exec chain and
+  shell-out-command classes.
 
 ### Cross-file correlation (opt-in: `FW_ENABLE_CROSSFILE=1`, default OFF)
 
@@ -182,7 +228,8 @@ answer, re-run on every change to either hook:
 | Bun / Deno full coverage | Preload is enforced (exit if absent) but interception coverage under these runtimes is limited. |
 | `vm.runInNewContext()` | Never routes through `require()`/`_compile` at all — a different execution primitive entirely, not a detection gap. |
 | Native addon (`.node`) loads | Not JavaScript source; `process.dlopen()` never calls `_compile`. |
-| AST-level obfuscation | Roadmap Phase 5. The behavioral tier mitigates via action-sequence detection but cannot match a determined AST-obfuscated payload. |
+| AST-level obfuscation (default config) | Root README's Roadmap Phase 5. An opt-in tier now exists (`FW_ENABLE_AST=1`, §4 above) but ships off by default pending soak, so default-configuration behavior is unaffected — the behavioral tier alone mitigates via action-sequence detection but cannot match a determined AST-obfuscated payload without it. |
+| WASM payloads, env-sourced config values, network+process-exec taint chains | Out of scope even WITH the AST tier enabled — architectural limits of static/AST analysis, not gaps the AST tier missed. See §4's bypass table for why each specifically can't be closed this way. |
 | Self-integrity baseline is committed alongside the code | Integrity *verification*, not *protection*: an attacker who can rewrite the source can rewrite `.helios-baseline`. External/signed anchoring is future work. |
 
 ---

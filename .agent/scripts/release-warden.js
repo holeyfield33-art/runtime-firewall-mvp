@@ -53,6 +53,9 @@ const HELIOS_SELF_INTEGRITY_FILES = [
   // release where the anchor did not protect the files it claims to. Order matters -- it
   // changes the digest -- and must match index.js's selfFiles array exactly.
   'src/aho-corasick.js',
+  // ast-scan.js (Phase 3 AST detection) joined the security-critical set after the F-01 fix
+  // above; same reasoning -- must match index.js's selfFiles array exactly, same position.
+  'src/ast-scan.js',
   'sync-worker.js',
 ].map((f) => `packages/fw-agent/${f}`);
 
@@ -98,6 +101,7 @@ const SYNC_TRIGGER_PATTERNS = [
   /packages\/fw-agent\/src\/detector\.js$/,
   /packages\/fw-agent\/src\/behavior-tracker\.js$/,
   /packages\/fw-agent\/src\/aho-corasick\.js$/,
+  /packages\/fw-agent\/src\/ast-scan\.js$/,
   /packages\/fw-agent\/src\/policy\.js$/,
   /packages\/fw-agent\/index\.js$/,
 ];

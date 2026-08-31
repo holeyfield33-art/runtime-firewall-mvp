@@ -449,19 +449,39 @@ class BehaviorTracker {
    * Analyze a module and return any behavioral violations found.
    * Checks intra-module signal sequences. `packageKey` (optional) tags this file's signals so a
    * later analyzePackage(packageKey) can correlate only within the same package.
+   *
+   * `astSignals` (optional) — additional signal POSITIONS the Phase 3 AST pass (src/ast-scan.js)
+   * resolved structurally (e.g. an obfuscated `String.fromCharCode(...)` decode primitive, or a
+   * `require()` call whose specifier only resolves to a sensitive module name after folding an
+   * array-join). This module owns zero new correlation logic for them: they are simply OR'd into
+   * the existing boolean signal flags and concatenated into the existing position arrays below, so
+   * every existing rule (DYNAMIC_CODE_EXEC_CHAIN, OBFUSCATED_CODE_EXECUTION, ...) and their
+   * existing proximity/severity thresholds apply completely unchanged, regardless of whether a
+   * given position came from a raw-text regex match or an AST resolution. Shape:
+   * { dynamicCode: number[], processExec: number[], codeDecode: number[], sensitivePath: number[] }.
    */
-  analyzeModule(filename, content, packageKey) {
+  analyzeModule(filename, content, packageKey, astSignals) {
     if (!content) return [];
+    astSignals = astSignals || {};
+    const astDynamicCode = astSignals.dynamicCode || [];
+    const astProcessExec = astSignals.processExec || [];
+    const astCodeDecode = astSignals.codeDecode || [];
+    const astSensitivePath = astSignals.sensitivePath || [];
+    const astHasAnySignal = astDynamicCode.length > 0 || astProcessExec.length > 0 ||
+      astCodeDecode.length > 0 || astSensitivePath.length > 0;
 
     const contentNoWs = content.replace(/\s+/g, '');
 
     // Fast-path: if no signal keyword is present in either the raw content or a
-    // whitespace-collapsed variant, all regex-based signal checks are guaranteed to be false
-    // (the pre-screener is a superset of all SIGNAL_PATTERN regexes). Skip the expensive
-    // scanSrc normalization chain and 60+ regex tests. DYNAMIC_REQUIRE is the one signal
-    // without an unambiguous literal keyword (require(var) vs require('literal')), so it is
-    // checked separately.
-    if (!this._prescreener.searchInsensitive(content) &&
+    // whitespace-collapsed variant, AND the AST pass found nothing either, all regex-based signal
+    // checks are guaranteed to be false (the pre-screener is a superset of all SIGNAL_PATTERN
+    // regexes). Skip the expensive scanSrc normalization chain and 60+ regex tests. The
+    // astHasAnySignal guard is essential, not an optimization: a module whose ONLY signal is an
+    // AST-resolved one (e.g. bracket-eval with no other recognizable keyword anywhere in the
+    // file) would otherwise take this early return and the AST signal would simply be dropped on
+    // the floor. DYNAMIC_REQUIRE is the one signal without an unambiguous literal keyword
+    // (require(var) vs require('literal')), so it is checked separately.
+    if (!astHasAnySignal && !this._prescreener.searchInsensitive(content) &&
         !this._prescreenerNoWs.searchInsensitive(contentNoWs)) {
       const dynamicRequire = matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_REQUIRE);
       const signals = {
@@ -533,7 +553,9 @@ class BehaviorTracker {
 
     const signals = {
       sensitiveRead: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_READ),
-      sensitivePath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
+      // AST-resolved sensitivePath (e.g. a path assembled from '/etc/' + 'sha' + 'dow') OR'd in
+      // alongside the raw-text match — see the astSignals doc comment above analyzeModule().
+      sensitivePath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH) || astSensitivePath.length > 0,
       sensitiveConfigPath: matchesAny(scanSrc, SIGNAL_PATTERNS.SENSITIVE_CONFIG_PATH),
       npmrcRead: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_READ),
       npmrcToken: matchesAny(scanSrc, SIGNAL_PATTERNS.NPMRC_TOKEN),
@@ -542,11 +564,11 @@ class BehaviorTracker {
       hardcodedEgressNonRegistry: hardcodedEgressUrls.some(u => !/^https?:\/\/registry\.npmjs\.org\b/i.test(u)),
       envRead: matchesAny(content, SIGNAL_PATTERNS.ENV_READ),
       networkEgress: matchesAny(content, SIGNAL_PATTERNS.NETWORK_EGRESS),
-      dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE),
+      dynamicCode: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_CODE) || astDynamicCode.length > 0,
       // Matched against scanSrc (comments/URLs/specifiers stripped) so a decode call named
       // only in a comment cannot manufacture the OBFUSCATED_CODE_EXECUTION signal. F-31.
-      codeDecode: matchesAny(scanSrc, SIGNAL_PATTERNS.CODE_DECODE),
-      processExec: matchesAny(content, SIGNAL_PATTERNS.PROCESS_EXEC),
+      codeDecode: matchesAny(scanSrc, SIGNAL_PATTERNS.CODE_DECODE) || astCodeDecode.length > 0,
+      processExec: matchesAny(content, SIGNAL_PATTERNS.PROCESS_EXEC) || astProcessExec.length > 0,
       dynamicRequire: matchesAny(content, SIGNAL_PATTERNS.DYNAMIC_REQUIRE),
     };
 
@@ -570,7 +592,7 @@ class BehaviorTracker {
     // a spurious position and satisfy the proximity check. Position arrays are computed lazily and
     // cached, since several rules reuse the same signal's positions.
     let _dynamicCodePositions = null;
-    const dynamicCodePositions = () => _dynamicCodePositions || (_dynamicCodePositions = matchAllPositions(content, SIGNAL_PATTERNS.DYNAMIC_CODE));
+    const dynamicCodePositions = () => _dynamicCodePositions || (_dynamicCodePositions = matchAllPositions(content, SIGNAL_PATTERNS.DYNAMIC_CODE).concat(astDynamicCode));
     let _networkEgressPositions = null;
     const networkEgressPositions = () => _networkEgressPositions || (_networkEgressPositions = matchAllPositions(content, SIGNAL_PATTERNS.NETWORK_EGRESS));
     const hardcodedEgressNonRegistryPositions = () => hardcodedEgressCallSites
@@ -582,7 +604,7 @@ class BehaviorTracker {
     // and handled by the ENV_NETWORK_EGRESS WARN rule below.
     if (signals.sensitivePath && signals.networkEgress) {
       const proximate = withinContext([
-        matchAllPositions(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH),
+        matchAllPositions(scanSrc, SIGNAL_PATTERNS.SENSITIVE_PATH).concat(astSensitivePath),
         networkEgressPositions(),
       ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
@@ -676,7 +698,7 @@ class BehaviorTracker {
     if (signals.dynamicCode && signals.processExec) {
       const proximate = withinContext([
         dynamicCodePositions(),
-        matchAllPositions(content, SIGNAL_PATTERNS.PROCESS_EXEC),
+        matchAllPositions(content, SIGNAL_PATTERNS.PROCESS_EXEC).concat(astProcessExec),
       ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({
@@ -697,7 +719,7 @@ class BehaviorTracker {
     if (signals.dynamicCode && signals.codeDecode) {
       const proximate = withinContext([
         dynamicCodePositions(),
-        matchAllPositions(scanSrc, SIGNAL_PATTERNS.CODE_DECODE),
+        matchAllPositions(scanSrc, SIGNAL_PATTERNS.CODE_DECODE).concat(astCodeDecode),
       ], sepPrefix, CORRELATION_MAX_SEPARATORS, CORRELATION_MAX_CHARS);
       if (proximate) {
         found.push({

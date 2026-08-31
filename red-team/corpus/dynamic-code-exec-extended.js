@@ -79,28 +79,28 @@ module.exports = [
     id: 'dce-eval-decodeuri',
     category: 'dynamic-code-exec', technique: 'decodeuri-eval', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'eval(decodeURIComponent(...)) — decodeURIComponent is not a CODE_DECODE signal, and bare eval is WARN-only, so nothing chains',
+    description: 'eval(decodeURIComponent(...)) — decodeURIComponent is not a CODE_DECODE signal, and bare eval is WARN-only, so nothing chains. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): decodeURIComponent is recognized structurally as a CODE_DECODE-class primitive, correlating with the existing eval( DYNAMIC_CODE match via OBFUSCATED_CODE_EXECUTION — see `npm run redteam:ast`.',
     code: `eval(decodeURIComponent('%72%65%71%75%69%72%65%28%31%29')); module.exports = {};`,
   },
   {
     id: 'dce-fromcharcode-eval',
     category: 'dynamic-code-exec', technique: 'fromcharcode-eval', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Payload built with String.fromCharCode then eval\'d — no decode primitive is recognised',
+    description: 'Payload built with String.fromCharCode then eval\'d — no decode primitive is recognised. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): String.fromCharCode is recognized structurally as a CODE_DECODE-class primitive, correlating with the existing eval( match — see `npm run redteam:ast`.',
     code: `const s = String.fromCharCode(97,108,101,114,116,40,49,41); eval(s); module.exports = {};`,
   },
   {
     id: 'dce-reverse-eval',
     category: 'dynamic-code-exec', technique: 'reversed-string-eval', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Reversed source string un-reversed at runtime then eval\'d',
+    description: 'Reversed source string un-reversed at runtime then eval\'d. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the .split(\'\').reverse().join(\'\') idiom is recognized structurally as a CODE_DECODE-class primitive — see `npm run redteam:ast`.',
     code: `const s = ')1(trela'.split('').reverse().join(''); eval(s); module.exports = {};`,
   },
   {
     id: 'dce-constructor-constructor',
     category: 'dynamic-code-exec', technique: 'constructor-sandbox-escape', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Function reached via constructor.constructor(...) — no eval/new Function literal for the regex, even though a process exec follows',
+    description: 'Function reached via constructor.constructor(...) — no eval/new Function literal for the regex, even though a process exec follows. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the constructor-chase sandbox-escape shape is recognized structurally and reported as a standalone block-tier finding — see `npm run redteam:ast`.',
     code: `
       const F = (function(){}).constructor;
       F('return process.mainModule.require("child_process")')().exec('id');
@@ -123,7 +123,7 @@ module.exports = [
     id: 'dce-generatorfunction',
     category: 'dynamic-code-exec', technique: 'generatorfunction-constructor', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Code compiled via the GeneratorFunction constructor — not matched by the DYNAMIC_CODE regexes',
+    description: 'Code compiled via the GeneratorFunction constructor — not matched by the DYNAMIC_CODE regexes. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): Object.getPrototypeOf(function*(){}).constructor is recognized structurally as a standalone block-tier finding — see `npm run redteam:ast`.',
     code: `
       const GF = Object.getPrototypeOf(function*(){}).constructor;
       const g = GF('yield require("child_process").execSync("id")');
@@ -135,7 +135,7 @@ module.exports = [
     id: 'dce-indirect-eval-decodeuri',
     category: 'dynamic-code-exec', technique: 'indirect-eval-decodeuri', severity: 'CRITICAL',
     expected: 'BLOCK', knownBypass: true,
-    description: 'Indirect (0, eval) call on a decodeURIComponent payload — indirect eval still matches /\\beval\\s*\\(/ but there is no chained decode/exec signal, so it stays WARN-only',
+    description: 'Indirect (0, eval) call on a decodeURIComponent payload — indirect eval still matches /\\beval\\s*\\(/ but there is no chained decode/exec signal, so it stays WARN-only. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): decodeURIComponent is recognized structurally as a CODE_DECODE-class primitive, correlating with the existing (0,eval) DYNAMIC_CODE match — see `npm run redteam:ast`.',
     code: `(0, eval)(decodeURIComponent('%61%6c%65%72%74%28%31%29')); module.exports = {};`,
   },
   {

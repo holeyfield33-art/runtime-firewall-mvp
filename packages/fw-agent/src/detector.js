@@ -1,6 +1,7 @@
 // packages/fw-agent/src/detector.js
 const { AhoCorasick } = require('./aho-corasick');
 const { BehaviorTracker } = require('./behavior-tracker');
+const { AstScanner } = require('./ast-scan');
 
 // Extended signature set covers crypto-miners, dynamic code execution, network abuse,
 // and supply-chain worm patterns (postinstall fetchers, credential harvesters).
@@ -102,12 +103,14 @@ class Detector {
     this.blockMatcher = new AhoCorasick(BLOCK_SIGNATURES);
     this.warnMatcher = new AhoCorasick(WARN_SIGNATURES);
     this.behaviorTracker = new BehaviorTracker();
+    this.astScanner = new AstScanner();
 
     this.stats = {
       calls: 0,
       automatonScans: 0,
       behaviorViolations: 0,
       warnOnlyDetections: 0,
+      astAssistedDetections: 0,
     };
   }
 
@@ -163,10 +166,63 @@ class Detector {
       });
     }
 
+    // Phase 3 AST-level obfuscation detection (src/ast-scan.js) — OPT-IN via FW_ENABLE_AST=1.
+    // New, hand-rolled parsing code that hasn't been soak-tested the way the regex/behavioral
+    // tiers have; shipping opt-in mirrors how FW_ENABLE_CROSSFILE was introduced in this same
+    // codebase. AstScanner.scan() never throws (internal fail-open), but it is wrapped here too
+    // as a second, belt-and-suspenders guarantee that an AST bug can never become an availability
+    // problem for the firewall itself — on any failure, detection simply proceeds exactly as it
+    // would with AST disabled.
+    const astEnabled = process.env.FW_ENABLE_AST === '1';
+    let astResult = null;
+    if (astEnabled) {
+      try {
+        astResult = this.astScanner.scan(moduleContent, filename || packageName);
+      } catch (e) {
+        astResult = null;
+      }
+    }
+    if (astResult) {
+      // Standalone obfuscated-access findings (bracket/alias/unicode-escape eval, constructor-chase
+      // sandbox escapes, obfuscated require() specifiers) are block-tier on their own — no
+      // legitimate module has a reason to reach a dangerous global this way. See ast-scan.js's
+      // module-level comment and resolveIdentity()'s direct-vs-obfuscated distinction for why this
+      // is the one case where an AST finding IS the finding, rather than merely a signal fed into
+      // the existing correlation engine below.
+      for (const d of astResult.detections) {
+        this.stats.astAssistedDetections++;
+        detections.push({ type: d.type, severity: d.severity, matched: d.matched, astResolved: true, timestamp: Date.now() });
+      }
+      // Folded literal values (e.g. a hex-decoded miner pool URL, a concatenated sensitive path)
+      // are re-tested against the EXISTING signature engines unchanged — this module invents no
+      // new signature/rule logic, it only widens what text those engines get to see.
+      for (const { value } of astResult.literals) {
+        const blockMatch = this.blockMatcher.searchInsensitive(value);
+        if (blockMatch) {
+          this.stats.astAssistedDetections++;
+          const isCrypto = CRYPTO_SIGNAL_HINTS.some(h => blockMatch.includes(h));
+          detections.push({
+            type: isCrypto ? 'crypto-miner' : 'dynamic-code-exec',
+            severity: isCrypto ? 'CRITICAL' : 'HIGH',
+            matched: blockMatch, astResolved: true, timestamp: Date.now(),
+          });
+        }
+        for (const { re, type, severity, label } of BLOCK_REGEXES) {
+          if (re.test(value)) {
+            this.stats.astAssistedDetections++;
+            detections.push({ type, severity, matched: label, astResolved: true, timestamp: Date.now() });
+          }
+        }
+      }
+    }
+
     // Behavioral sequence analysis on full content (skipped when FW_ENABLE_BEHAVIORAL=0)
     const behaviorEnabled = process.env.FW_ENABLE_BEHAVIORAL !== '0';
+    const astSignalsForBehavior = astResult
+      ? { dynamicCode: astResult.dynamicCode, processExec: astResult.processExec, codeDecode: astResult.codeDecode, sensitivePath: astResult.sensitivePath }
+      : undefined;
     const behaviorViolations = behaviorEnabled
-      ? this.behaviorTracker.analyzeModule(filename || packageName, moduleContent, packageKey)
+      ? this.behaviorTracker.analyzeModule(filename || packageName, moduleContent, packageKey, astSignalsForBehavior)
       : [];
 
     // Cross-file correlation, scoped to this file's package. OPT-IN (FW_ENABLE_CROSSFILE=1,

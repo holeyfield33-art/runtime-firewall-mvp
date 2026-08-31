@@ -195,6 +195,11 @@ const fwMode = resolveFwMode();
     // in the npm manifest and are security-critical, so they must be covered here — omitting
     // them let a tampered aho-corasick silently defeat detection while self-integrity passed.
     path.join(__dirname, 'src', 'aho-corasick.js'),
+    // ast-scan.js (Phase 3) is required by detector.js and feeds signal positions directly into
+    // detector.js's block-tier decisions — equally security-critical, same reasoning as
+    // aho-corasick.js above. This list is duplicated in three other places that must stay in
+    // lockstep — see the self-integrity-lockstep test in .agent/scripts/__tests__/.
+    path.join(__dirname, 'src', 'ast-scan.js'),
     path.join(__dirname, 'sync-worker.js'),
   ];
 

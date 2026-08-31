@@ -104,7 +104,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'eval reached via computed member access this["ev"+"al"] — no "eval(" literal for the regex',
+    description: 'eval reached via computed member access this["ev"+"al"] — no "eval(" literal for the regex. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the bracket key is folded and the resolved eval/Function access is a standalone block-tier finding — see `npm run redteam:ast`.',
     code: `
       const fn = this['ev' + 'al'];
       fn('process.exit(0)');
@@ -118,7 +118,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'eval aliased to a variable then called — source contains no "eval(" call site',
+    description: 'eval aliased to a variable then called — source contains no "eval(" call site. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): alias tracking resolves the call target and reports a standalone block-tier finding — see `npm run redteam:ast`.',
     code: `
       const fn = eval;
       fn('1+1');
@@ -132,7 +132,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'child_process module name reassembled from an array join',
+    description: 'child_process module name reassembled from an array join. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the array-join specifier is folded and re-matched against the existing PROCESS_EXEC signal — see `npm run redteam:ast`.',
     code: `
       const m = require(['ch', 'ild', '_pro', 'cess'].join(''));
       m.exec('id');
@@ -146,7 +146,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'eval spelled with a unicode escape (\\u0065val) so the /\\beval\\s*\\(/ regex misses it',
+    description: 'eval spelled with a unicode escape (\\u0065val) so the /\\beval\\s*\\(/ regex misses it. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the tokenizer decodes the escape and the resolved bracket access is a standalone block-tier finding — see `npm run redteam:ast`.',
     code: `
       const g = global;
       g['\\u0065val']('process.exit(0)');

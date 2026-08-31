@@ -60,7 +60,7 @@ A machine-readable `results/redteam-summary.json` is written on every run
 
 ## Corpus
 
-**152 payloads** across 6 threat categories (125 malicious, 27 benign), each
+**158 payloads** across 6 threat categories (125 malicious, 33 benign), each
 category split into a core catalog and an `-extended` catalog under `corpus/`,
 all aggregated by `corpus/index.js` (which validates every entry and rejects
 duplicate ids):
@@ -72,7 +72,7 @@ duplicate ids):
 | `credential-exfil`  |  28   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require evasions |
 | `dynamic-code-exec` |  30   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions |
 | `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
-| `benign-controls`   |  25   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress — must **not** block |
+| `benign-controls`   |  31   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress, Phase 3 AST false-positive guards (constructor typecheck, fromCharCode i18n, base64 data decode, array-join message, computed-property config, standalone indirect-eval) — must **not** block |
 
 Files: `corpus/<category>.js` (core) and `corpus/<category>-extended.js` (the
 100+ added variants).
@@ -101,41 +101,71 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 
 ## Known gaps this suite documents
 
-The current run catches **95/125** malicious payloads (**76%**) with **zero false
-positives** on the 27 benign controls, after two hardening phases (see
-`docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline before Phase 1
-was 69/125 ≈ 55%). The remaining **30** documented bypasses are fundamental
-limits of static/signature analysis and require runtime/AST instrumentation
-(Phase 3) to close. They cluster into these classes:
+Two numbers matter here, depending on configuration — `npm run redteam` measures the
+first, `npm run redteam:ast` the second:
 
-- **String-level evasion of literals** — `eval` via bracket/alias/unicode
-  escape/`fromCharCode`/reverse/`constructor.constructor`; module names or pool
-  URLs reassembled by concatenation/`join`; C2 domains held as base64.
-- **WASM / GeneratorFunction cores** — arbitrary logic with no JS `eval`/`Function`
-  literal at all.
-- **`decodeURIComponent` → eval** — deliberately not a `CODE_DECODE` signal
-  (`decodeURIComponent` is ubiquitous in benign query-string parsers, so
-  co-occurrence with `eval` is not enough — needs decode→eval dataflow).
+- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **95/125** malicious
+  payloads caught (**76%**), **zero false positives** on the 33 benign controls, after two
+  hardening rounds (see `docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline
+  before round 1 was 69/125 ≈ 55%). **30** documented bypasses remain.
+- **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak): adds a narrow, hand-rolled
+  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **18** of those 30 —
+  **113/125** caught (**90.4%**), still **zero false positives**. **12** bypasses remain
+  even with it enabled.
+
+The 12 that remain regardless of configuration are fundamental limits of static/AST
+analysis and require runtime/dataflow instrumentation to close. They cluster into these
+classes:
+
+- **WASM / GeneratorFunction cores** — GeneratorFunction/`constructor.constructor` shapes
+  are now closed by the AST tier; WASM (`WebAssembly.instantiate`) is not and architecturally
+  cannot be — there is no JS source text to parse inside a wasm binary.
+- **`decodeURIComponent` → eval** — now closed by the AST tier (`decodeURIComponent` is
+  recognized structurally as a decode-class primitive, correlating with an existing `eval(`
+  match) when literal; still open when the payload is entirely env/runtime-sourced.
 - **Network + process-exec chains** — pure-Node socket→`spawn('/bin/sh')` and an
   HTTP-polling C2 beacon; both primitives present but not linked by a blocking
   rule (a static "egress + child-process" rule would false-positive on legit CLIs).
-- **Shell-out / base64 command exec** — exfil by shelling out to `curl`; a
-  `/dev/tcp` command base64-encoded then `bash -c`.
-- **Config obfuscation** — a miner pool URL kept as a base64/hex blob (or
-  env/config value) and decoded at runtime without ever being `eval`'d.
+  Not closeable by AST parsing — needs cross-statement taint tracking.
+- **Shell-out / base64 command exec** — exfil by shelling out to `curl` with a
+  runtime-built argument; a `/dev/tcp` command base64-encoded then `bash -c` (the latter
+  IS now closed by the AST tier when the encoded form is a literal — see
+  `revsh-base64-devtcp`).
+- **Config obfuscation, env/runtime-sourced** — a miner pool URL read from
+  `process.env`/config, decoded at runtime, never a literal anywhere in source — nothing
+  for a static fold to resolve. (The literal-in-source case, e.g. a hex/base64 *literal*
+  decoded at runtime, IS now closed by the AST tier — see `miner-hex-pool`.)
 - **Low-and-slow / benign-looking C2** — ngrok/telegram/IP-literal beacons,
   dependency-confusion fetch, exit-time deferred beacon; a single outbound call
   to an attacker host is statically indistinguishable from legitimate telemetry
-  (needs runtime egress allow/deny lists).
+  (needs runtime egress allow/deny lists — a different problem from parsing).
 
-Closed since the 55% baseline (now caught, kept as `knownBypass: false` regression
-guards): inline-require `net`/`tls`/`dgram`/`vm`; miner brands
-coinimp/jsecoin/webminepool/deepminer; `.docker`/`.kube`/browser `Login Data`
+**String-level evasion of literals** — `eval` via bracket/alias/unicode
+escape/`fromCharCode`/reverse/`constructor.constructor`; module names or pool
+URLs reassembled by concatenation/`join`; sensitive paths reassembled by
+concatenation/`join` — **all now closed by the AST tier** (`FW_ENABLE_AST=1`). This
+was the single largest bypass class and the AST pass's primary target; see
+`packages/fw-agent/src/ast-scan.js` and `docs/THREAT-COVERAGE.md` §4 for exactly how.
+
+Closed unconditionally since the 55% baseline (now caught regardless of `FW_ENABLE_AST`,
+kept as `knownBypass: false` regression guards): inline-require `net`/`tls`/`dgram`/`vm`;
+miner brands coinimp/jsecoin/webminepool/deepminer; `.docker`/`.kube`/browser `Login Data`
 stores; `| sh`/`| dash`/`| zsh` stagers; fetch→eval (`REMOTE_FETCH_EXEC`);
 `nc -e`/`ncat`/`socat`/`mkfifo`/`fsockopen`/PowerShell/`ruby`/`lua` reverse shells;
 `dns.resolve` & `navigator.sendBeacon` channels; `process.binding` exec.
 
-These are intentional trade-offs the detector makes to keep false positives at
-zero on the benign corpus. The value of logging them is a live, regression-
-guarded inventory of the firewall's real blind spots — the full machine-readable
-list is the `gap_report` array in `results/redteam-summary.json`.
+Closed under `FW_ENABLE_AST=1` specifically (kept as `knownBypass: true` under default
+settings, since that reflects true out-of-the-box behavior — see each entry's
+`description` for the closure note, and `docs/THREAT-COVERAGE.md` §4 for the full list):
+`dce-bracket-eval`, `dce-alias-eval`, `dce-join-require`, `dce-unicode-escape-eval`,
+`dce-eval-decodeuri`, `dce-fromcharcode-eval`, `dce-reverse-eval`,
+`dce-constructor-constructor`, `dce-generatorfunction`, `dce-indirect-eval-decodeuri`,
+`miner-concat-stratum`, `miner-base64-pool`, `miner-charcode-coinhive`,
+`miner-concat-cryptonight`, `miner-hex-pool`, `revsh-base64-devtcp`, `exfil-concat-path`,
+`exfil-concat-etc-shadow`.
+
+These remaining gaps are intentional trade-offs the detector makes to keep false
+positives at zero on the benign corpus. The value of logging them is a live,
+regression-guarded inventory of the firewall's real blind spots — the full
+machine-readable list is the `gap_report` array in `results/redteam-summary.json`
+(regenerate with `npm run redteam` for default, `npm run redteam:ast` for the AST tier).

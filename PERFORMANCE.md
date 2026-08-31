@@ -37,6 +37,7 @@ immediately preceding, the v0.4.0 commit:
 | Sandboxed audit container (pre-v0.4.0, 2026-07-25, base commit `1d60552`) | not stated | 60.58% | ❌ FAIL (P95 79.16%) | Committed, first-party-verifiable — `AUDIT.md` "Unverified claims" section. A prior audit session's own gate run; the audit report itself attributes it to "shared/virtualized CPU noise in this container" rather than a real regression, while noting it could not rule that out with certainty at the time. |
 | GitHub Codespaces, run 1 | not confirmed | 40.08% | ❌ FAIL (P95 55.24%) | Reported, narrative summary only — `results/gate-v0.4.0-20260813-codespaces-report.txt`. No raw gate output seen. |
 | GitHub Codespaces, run 2 | **2, confirmed via `nproc`** | 39.21% | ❌ FAIL (P95 56.56%, min 20.66%, max 62.13%) | Reported, full raw transcript — `results/gate-v0.4.0-20260813-codespaces-run2.txt`. Same host CPU model as the historical EPYC row (AMD EPYC 7763), but capped to 2 visible cores by the container — i.e. this and the 64-core PASS row are, per `/proc`, the *same silicon* at two different visible-core counts. |
+| Remote sandboxed session container (v0.6.0 dev, 2026-08-27) | **4, confirmed via `nproc`** | 67.99% (unmodified code, A/B baseline) / 71.53% (with the Phase 3 AST change, `FW_ENABLE_AST` unset) | ❌ FAIL both (P95 83.16% / 80.79%) | First-party, this session — see the v0.6.0 addendum below. **Complicates the "≥4 cores predicts PASS" heuristic above**: this container reports 4 logical cores via `nproc` (matching the PASSing local-Windows row) yet fails harder than either 2-core Codespaces run, and a single run's min/max spread (51–92%) rivals the entire cross-environment range in the table. `nproc` evidently does not capture whatever this container's actual scheduling contention is (cgroup CPU quota, noisy-neighbor virtualization) — core count alone is not a reliable predictor here. |
 
 Two independent Codespaces runs, both on 2 confirmed cores, land within 1 point of each
 other (40.08%, 39.21%) and both fail; a third, older FAIL in a different shared/sandboxed
@@ -173,9 +174,45 @@ regression control.
 - v0.3.0 did not claim ≤25% measured performance; the 25% figure was treated purely as
   a regression-guard threshold at that time.
 
+## v0.6.0 addendum — Phase 3 AST tier, red-team corpus, and an inconclusive gate run
+
+Not a full re-freeze (that would need the same multi-environment discipline as the v0.4.0
+freeze above, which this session didn't have time or hardware access to reproduce) — just
+what this session directly measured, first-party, plus what it deliberately did NOT
+establish.
+
+**Red-team corpus (first-party, this session, full raw output from `npm run redteam` /
+`npm run redteam:ast`):** the corpus grew from 152 to 158 payloads (6 new `benign-controls`
+entries guarding the new AST fold/resolve surface). Default-configuration detection is
+**unchanged** at 95/125 (76.0%), 0 false positives — confirmed by running the suite against
+this session's own working tree. With the new opt-in `FW_ENABLE_AST=1` tier enabled,
+detection rises to 113/125 (90.4%), still 0 false positives. See
+`docs/THREAT-COVERAGE.md` §4 for the full closed/still-open breakdown.
+
+**Compilation-hook gate (`npm run gate`): inconclusive in this environment, not a regression.**
+This session's sandboxed container fails the gate's 25%-median budget on the **unmodified**
+pre-Phase-3 codebase (67.99% median, stashed A/B baseline — see the Core-count sensitivity
+table above), so it cannot validate or refute a specific overhead number for this change. What
+it CAN say: `FW_ENABLE_AST` defaults off, and `packages/fw-agent/src/detector.js`'s AST
+integration is gated behind `process.env.FW_ENABLE_AST === '1'` — read once per `scanModuleSync`
+call, short-circuiting to the pre-existing code path when unset. The gate's A/B comparison
+(no agent vs. `FW_ENABLE_DETECTION=1`) never sets `FW_ENABLE_AST`, so it exercises identical
+code whether or not this change is present; the 67.99% (unmodified) vs. 71.53% (with the
+change) delta this session observed is within a single run's own min/max spread (51–92%,
+see the table row above) and is not distinguishable from noise. **Follow-up needed before
+enabling `FW_ENABLE_AST=1` by default**: run `npm run gate` with `FW_ENABLE_AST=1` forced on
+for both the baseline and agent legs (not currently wired into `bench.js` — it only toggles
+`FW_ENABLE_DETECTION`) on quieter hardware, to get a real number for the opt-in tier's own
+marginal cost. The prescreen-gating design in `ast-scan.js` (an Aho-Corasick pass plus a
+handful of narrow regexes must hit before any tokenizing happens) is intended to keep that
+cost near-zero on the common case, but that is a design intent, not yet a measured claim.
+
 ## Notes
 
 - This file is the canonical v0.4.0 performance evidence summary.
+- The v0.6.0 addendum above is first-party evidence from a single noisy sandboxed session,
+  not a new frozen baseline — treat the v0.4.0 numbers below as still authoritative for
+  absolute overhead figures until a proper v0.6.0 multi-environment freeze is done.
 - The core-count finding should be reflected as a runtime warning in `bench.js` itself
   (log detected core count, note when running below ~4) so future runs on constrained
   CI/Codespaces don't silently produce a misleading FAIL without that context — tracked

@@ -25,13 +25,13 @@ We will acknowledge your report within 5 business days and aim to resolve and pu
 
 ### In scope
 
-- **Detection bypass**: a technique that causes the firewall to allow a module it should block or quarantine, without requiring AST-level or full dynamic analysis (which are already documented as out-of-scope at the architectural level).
+- **Detection bypass**: a technique that causes the firewall to allow a module it should block or quarantine, under the DEFAULT configuration, without requiring AST-level or full dynamic analysis; OR a technique that bypasses the opt-in `FW_ENABLE_AST=1` tier specifically for one of the obfuscation classes it claims to close (see `docs/THREAT-COVERAGE.md` §4). Full dynamic/taint analysis remains out-of-scope at the architectural level regardless of configuration.
 - **Firewall integrity**: an attack that defeats or silently disables the self-integrity check, the policy watcher's tamper detection, or the audit log without triggering a lockdown.
 
 ### Out of scope
 
 - **Telemetry fail-open under `FW_TELEMETRY=1` with no control plane**: when `FW_TELEMETRY=1` is set and no control plane is running, the telemetry worker swallows connection errors and delivers nothing. This is intentional and documented behavior -- do not file a security report for it.
-- **Known bypass techniques documented in README**: bracket-notation eval (`this["ev"+"al"]`), string concatenation (`global["ev"+"al"]`), array-join reassembly, and prototype-chain access all require AST-level or dynamic analysis. These are architectural limitations, not implementation bugs.
+- **Known bypass techniques documented in README, under DEFAULT settings**: bracket-notation eval (`this["ev"+"al"]`), string concatenation (`global["ev"+"al"]`), array-join reassembly, and prototype-chain access are closed only by the opt-in `FW_ENABLE_AST=1` tier (0.6.0+), which ships off by default pending soak — see `docs/THREAT-COVERAGE.md` §4. A report that one of these bypasses the *default* configuration is not a new finding. **A report that one of these bypasses `FW_ENABLE_AST=1` specifically IS in scope** — that tier claims to close exactly these techniques, and a bypass of it is a real detection gap in `packages/fw-agent/src/ast-scan.js`. WASM payloads, env-sourced (non-literal) config values, and network+process-exec taint chains remain architectural limitations regardless of `FW_ENABLE_AST`, and are out of scope either way — see `docs/THREAT-COVERAGE.md` §4 for why each specifically can't be closed by AST/static analysis at all.
 - **Issues in packages outside `aletheia-firewall`**: `fw-control` (the control plane server) is out of scope for this policy; its security posture is separate.
 - **Performance or denial-of-service against the scanner itself**: the firewall is a synchronous in-process hook; its availability is tied to the host process.
 - **False positives**: incorrect blocking of benign modules is a usability issue, not a security vulnerability.
@@ -54,13 +54,13 @@ The following findings from the July 2026 internal audit have been addressed as 
 | F-13: No warning for unauthenticated dashboard | LOW | ✅ Fixed | 0.2.0 |
 | F-14: No tests for watcher/quarantine/auditlog | INFO | ✅ Fixed | 0.1.1 — new test suite |
 
-Deferred to Phase 3+ (out of scope for 0.2.0):
+Deferred at the time (out of scope for 0.2.0):
 
 | Finding | Severity | Notes |
 | ------- | -------- | ----- |
-| F-10: AST-level obfuscation detection | MEDIUM | Requires V8 Inspector / AST pre-processing |
-| F-11: Postinstall shim for pre-firewall hooks | MEDIUM | Architectural; hooks run before the firewall loads |
-| F-12: Runtime taint tracking | LOW | Requires dynamic analysis infrastructure |
+| F-10: AST-level obfuscation detection | MEDIUM | **Partially addressed in 0.6.0** — `packages/fw-agent/src/ast-scan.js`, opt-in via `FW_ENABLE_AST=1` (off by default pending soak). A narrow, hand-rolled parser (not V8 Inspector — kept the package zero-dependency), scoped to the bypass classes documented in `docs/THREAT-COVERAGE.md` §4: bracket/alias/unicode-escape eval, constructor-chase sandbox escapes, decode-primitive chains, literal string/path reassembly. Still open even with the tier enabled: WASM payloads (no JS text to parse), env-sourced config values (nothing in source to fold), and network+process-exec taint chains (needs dataflow tracking, not AST parsing) — see §4 for why each specifically remains out of reach. |
+| F-11: Postinstall shim for pre-firewall hooks | MEDIUM | Architectural; hooks run before the firewall loads. Still open. |
+| F-12: Runtime taint tracking | LOW | Requires dynamic analysis infrastructure. Still open — the AST tier above is static folding, not taint tracking, and does not close this. |
 
 ## August 2026 P0 Hardening Pass — Resolution Status
 

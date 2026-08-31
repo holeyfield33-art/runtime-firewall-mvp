@@ -126,7 +126,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'Credential path assembled from fragments so the SENSITIVE_PATH regex never matches the literal',
+    description: 'Credential path assembled from fragments so the SENSITIVE_PATH regex never matches the literal. CLOSED under FW_ENABLE_AST=1 (Phase 3, opt-in): the array-join is folded and the resulting path re-matched against SENSITIVE_PATH — see `npm run redteam:ast`.',
     code: `
       const fs = require('fs');
       const p = ['/.ss', 'h/id_', 'rsa'].join('');

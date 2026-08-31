@@ -54,11 +54,14 @@ Aletheia is a **runtime enforcement layer**: it watches what a dependency does o
 already in your require/import graph, after `npm install` has finished. It is not an
 install-time scanner and does not intercept package installation.
 
-Detection is signature + behavioral, not AST-based, so payloads can evade static matching
-through string-splitting, encoding, or indirection. Our adversarial corpus documents this
-honestly: **95/125 (76%) of malicious payloads caught, 30 known bypasses, 0 false positives**
-on the current corpus — run it yourself with `npm run redteam`. Every bypass class is listed
-in [`red-team/README.md`](red-team/README.md).
+Detection is signature + behavioral by default, so payloads can evade static matching through
+string-splitting, encoding, or indirection. Our adversarial corpus documents this honestly:
+**95/125 (76%) of malicious payloads caught, 30 known bypasses, 0 false positives** on the
+current corpus with default settings — run it yourself with `npm run redteam`. An **opt-in**
+AST-detection tier (`FW_ENABLE_AST=1`, off by default pending soak) closes 18 of those 30
+bypasses — **113/125 (90.4%)** — run `npm run redteam:ast` to see it. Every remaining bypass
+class is listed in [`red-team/README.md`](red-team/README.md) and
+[`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md).
 
 ---
 
@@ -421,7 +424,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 - [x] Phase 2: Signature detection engine & enforcement matrix
 - [x] Phase 3: Helios Core integrity anchoring & forensic auditing
 - [x] Phase 4: Behavioral state machine, quarantine enforcement, persistent audit log
-- [ ] Phase 5: AST-level analysis for obfuscation-resistant detection
+- [~] Phase 5: AST-level analysis for obfuscation-resistant detection — landed in `aletheia-firewall@0.6.0` as an **opt-in** tier (`FW_ENABLE_AST=1`, off by default pending soak). Closes 18 of the 30 previously-documented static-analysis bypasses (bracket/alias/unicode-escape eval, constructor-chase sandbox escapes, decode-primitive chains, literal string/path reassembly) when enabled; WASM, env-sourced config values, and network+process-exec taint chains remain open by design — see `docs/THREAT-COVERAGE.md` §4 and `packages/fw-agent/src/ast-scan.js`. Not marked done: it's a scoped, additional tier, not full AST coverage.
 - [ ] Phase 6: ClickHouse analytics integration & distributed policy propagation
 
 ---
