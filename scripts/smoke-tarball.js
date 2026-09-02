@@ -72,12 +72,24 @@ function check(name, fn) {
   }
 }
 
-// 1 + 2: clean load + self-integrity (a tampered/stale baseline fails this).
-check('clean load with the agent preloaded (also proves self-integrity baseline)', () => {
+// 1: clean load — the agent preloads and a trivial program runs to completion.
+check('clean load with the agent preloaded', () => {
   const res = run([`--require=${agentPath}`, '-e', "console.log('CLEAN-OK')"], { FW_MODE: 'dev' });
   assert.strictEqual(res.status, 0, 'expected exit 0, got ' + res.status + '\nstderr:\n' + res.stderr);
   assert.ok(/CLEAN-OK/.test(res.stdout), 'expected CLEAN-OK on stdout:\n' + res.stdout);
+});
+
+// 2: self-integrity — the shipped .helios-baseline must be present in the tarball AND match the
+// shipped src, so the agent does not refuse to run with a tamper banner. A distinct check from the
+// clean load above: it asserts the baseline artifact ships and that the integrity gate is satisfied.
+check('self-integrity baseline ships and verifies', () => {
+  const installedDir = path.dirname(agentPath);
+  assert.ok(fs.existsSync(path.join(installedDir, '.helios-baseline')),
+    '.helios-baseline must be present in the installed package (it is what the self-integrity gate reads)');
+  const res = run([`--require=${agentPath}`, '-e', "console.log('INTEGRITY-OK')"], { FW_MODE: 'dev' });
+  assert.strictEqual(res.status, 0, 'agent must start (self-integrity gate satisfied), got ' + res.status + '\nstderr:\n' + res.stderr);
   assert.ok(!/self-integrity check FAILED/.test(res.stderr), 'self-integrity must not fail on the shipped tarball:\n' + res.stderr);
+  assert.ok(/INTEGRITY-OK/.test(res.stdout), 'expected the program to run past the integrity gate:\n' + res.stdout);
 });
 
 // 3: blocking a malicious CommonJS module through the real _compile hook.

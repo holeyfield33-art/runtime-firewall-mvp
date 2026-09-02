@@ -108,6 +108,63 @@ assert.ok(!Detector.isSuspicious(null), 'null is not suspicious');
     assert.strictEqual(r.action, 'OBSERVE', 'a thrown AST scan must degrade to OBSERVE, not crash or false-block');
     detector.astScanner.scan = originalScan;
 
+    // ── F-91: incomplete-scan policy (FW_AST_INCOMPLETE_POLICY) ────────────────────────────────
+    // A high-risk span flood exceeding the AST tier's high-risk budget forces an *incomplete* scan.
+    // The three policy values must behave distinctly and unmistakably.
+    const prevPolicy = process.env.FW_AST_INCOMPLETE_POLICY;
+    try {
+      const bigFiller = 'x'.repeat(2100); // > MAX_SPAN_CHARS so each decoy is its own span
+      // >256 benign high-risk (concat bracket-access) spans: harmless by value, high-risk by shape,
+      // so the high-risk budget is exhausted and the scan is reported incomplete — with NO real
+      // payload present, so any block is attributable purely to the incompleteness policy.
+      const incompleteFlood = Array.from({ length: 300 }, (_, i) => `const z${i} = obj['xx' + 'yy'];${bigFiller}`).join('\n');
+
+      // observe (default): telemetry only — the module still runs (OBSERVE), the incomplete finding
+      // is present but warnOnly, and its matched string unmistakably names the high-risk span counts.
+      process.env.FW_AST_INCOMPLETE_POLICY = 'observe';
+      detector.behaviorTracker.reset();
+      r = detector.scanModuleSync('pkg', incompleteFlood, 'flood.js', 'pkg');
+      assert.strictEqual(r.action, 'OBSERVE', 'observe policy must not block on incompleteness alone');
+      const obs = r.detections.find(d => d.type === 'ast-scan-incomplete');
+      assert.ok(obs, 'observe policy must still emit an ast-scan-incomplete telemetry detection');
+      assert.strictEqual(obs.warnOnly, true, 'observe-policy incomplete detection must be warnOnly (telemetry, not a block)');
+      assert.ok(/^ast-scan-incomplete:\d+-high-risk-spans-\d+-scanned$/.test(obs.matched),
+        'incomplete telemetry must unmistakably carry the high-risk span counts, got: ' + obs.matched);
+
+      // unset FW_AST_INCOMPLETE_POLICY defaults to observe (never fail-closed by accident).
+      delete process.env.FW_AST_INCOMPLETE_POLICY;
+      detector.behaviorTracker.reset();
+      r = detector.scanModuleSync('pkg', incompleteFlood, 'flood.js', 'pkg');
+      assert.strictEqual(r.action, 'OBSERVE', 'unset incomplete policy must default to observe (non-blocking)');
+      assert.ok(r.detections.find(d => d.type === 'ast-scan-incomplete' && d.warnOnly),
+        'unset policy still emits warnOnly incomplete telemetry');
+
+      // quarantine and block both fail CLOSED: incompleteness becomes a block-tier, non-warnOnly,
+      // astResolved HIGH detection and the module is quarantined.
+      for (const policy of ['quarantine', 'block']) {
+        process.env.FW_AST_INCOMPLETE_POLICY = policy;
+        detector.behaviorTracker.reset();
+        r = detector.scanModuleSync('pkg', incompleteFlood, 'flood.js', 'pkg');
+        assert.strictEqual(r.action, 'QUARANTINE', `${policy} policy must fail closed (QUARANTINE) on an incomplete scan`);
+        const blk = r.detections.find(d => d.type === 'ast-scan-incomplete');
+        assert.ok(blk && !blk.warnOnly && blk.severity === 'HIGH' && blk.astResolved,
+          `${policy} policy must produce a block-tier astResolved HIGH ast-scan-incomplete detection`);
+      }
+
+      // A benign ORDINARY-span flood (low-risk require()/(0,) noise) far exceeding the low-risk
+      // budget must NOT be reported incomplete under any policy — no false positive on large bundles.
+      process.env.FW_AST_INCOMPLETE_POLICY = 'quarantine';
+      detector.behaviorTracker.reset();
+      const benignFlood = Array.from({ length: 400 }, (_, i) => `const a${i} = (0, require)('m${i}');${bigFiller}`).join('\n');
+      r = detector.scanModuleSync('pkg', benignFlood, 'bundle.js', 'pkg');
+      assert.strictEqual(r.action, 'OBSERVE', 'ordinary low-risk bundle noise must never be flagged incomplete, even under quarantine policy');
+      assert.ok(!r.detections.find(d => d.type === 'ast-scan-incomplete'),
+        'low-risk bundle noise must not produce an ast-scan-incomplete detection');
+    } finally {
+      if (prevPolicy === undefined) delete process.env.FW_AST_INCOMPLETE_POLICY;
+      else process.env.FW_AST_INCOMPLETE_POLICY = prevPolicy;
+    }
+
     console.log('Detector AST integration (FW_ENABLE_AST=1) test passed.');
   } finally {
     if (prevAst === undefined) delete process.env.FW_ENABLE_AST;

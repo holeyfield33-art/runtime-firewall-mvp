@@ -108,6 +108,23 @@ one a figure describes:
 > measured general false-positive rate on arbitrary packages, and must not be read as one. Enabling
 > the AST tier by default is gated on a broader benign-package soak (see the roadmap below).
 
+**Benign-package soak with the AST tier enabled.** `aletheia-soak-test.js` now takes `--enable-ast`
+(and `--incomplete-policy observe|quarantine|block`) so the AST tier's false-positive rate can be
+measured on *real, popular npm packages* rather than the curated controls. Reproduce with:
+
+```bash
+npm install <corpus-top100.json packages>          # one-time
+node aletheia-soak-test.js --agent ./packages/fw-agent --enable-ast
+node aletheia-soak-test.js --agent ./packages/fw-agent --enable-ast --incomplete-policy quarantine
+```
+
+A preliminary run (36 of the top-100 packages installed, plus their full transitive `require()`
+trees) recorded **0 false positives** under both `observe` and the strictest `quarantine`
+incomplete policy, with 5/5 synthetic malicious samples still caught (`results/soak-2026-09-02.jsonl`).
+This is **preliminary evidence, not the release gate**: flipping `FW_ENABLE_AST` to on-by-default
+requires a *large* soak (the full top-100 and beyond) sustaining a near-zero FP rate. Until then the
+AST tier stays opt-in.
+
 **Bounded, prioritized AST scanning (F-91).** The AST tier parses at most a bounded number of
 candidate *spans* per file (a large budget for rare high-risk shapes, a small one for ordinary
 bundle noise), and it scans them **highest-risk-first**, never in file order. This closes a

@@ -13,6 +13,14 @@
  * RUN:
  *   node aletheia-soak-test.js --agent ./packages/fw-agent
  *   node aletheia-soak-test.js --agent ./packages/fw-agent --rounds 100 --interval 300   (long soak)
+ *
+ *   # AST-enabled benign soak (the gate before changing FW_ENABLE_AST's default):
+ *   node aletheia-soak-test.js --agent ./packages/fw-agent --enable-ast
+ *   node aletheia-soak-test.js --agent ./packages/fw-agent --enable-ast --incomplete-policy quarantine
+ *
+ * The false-positive rate reported here — on real, popular npm packages, NOT the 33 curated
+ * red-team controls — is what must stay at/near zero across a large corpus before the AST tier
+ * could ship on by default. Until then it remains opt-in.
  */
 const { execFileSync } = require('child_process');
 const fs = require('fs');
@@ -23,6 +31,8 @@ const getArg = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1
 const AGENT = path.resolve(getArg('--agent', './packages/fw-agent'));
 const ROUNDS = parseInt(getArg('--rounds', '1'), 10);
 const INTERVAL = parseInt(getArg('--interval', '0'), 10); // seconds between rounds
+const ENABLE_AST = args.includes('--enable-ast'); // opt-in AST tier — measure its benign FP rate
+const INCOMPLETE_POLICY = getArg('--incomplete-policy', null); // observe|quarantine|block (AST only)
 
 // The packages to test. Edit this list freely, then `npm install` them once.
 const CORPUS_FILE = getArg('--corpus', 'corpus-top100.json');
@@ -57,6 +67,8 @@ function installedPackages() {
 // so this works where `npm` did not). Returns {blocked, rule, ms, err}.
 function probe(requireExpr) {
   const env = { ...process.env, FW_ENABLE_DETECTION: '1', FW_ALLOW_DEV_POLICY_KEY: '1' };
+  if (ENABLE_AST) env.FW_ENABLE_AST = '1';
+  if (INCOMPLETE_POLICY) env.FW_AST_INCOMPLETE_POLICY = INCOMPLETE_POLICY;
   const t0 = process.hrtime.bigint();
   try {
     execFileSync(process.execPath, ['--require', AGENT, '-e', requireExpr],
@@ -82,6 +94,7 @@ function runRound(round, corpus) {
   const malCaught = malResults.filter(r => r.blocked);
   const summary = {
     ts: new Date().toISOString(), round,
+    ast_enabled: ENABLE_AST, incomplete_policy: ENABLE_AST ? (INCOMPLETE_POLICY || 'observe') : null,
     legit_total: corpus.length, legit_blocked: legitBlocked.length,
     false_positive_rate_pct: corpus.length ? +(legitBlocked.length / corpus.length * 100).toFixed(1) : 0,
     fp_packages: legitBlocked.map(r => `${r.pkg}:${r.rule}`),
@@ -97,6 +110,8 @@ function runRound(round, corpus) {
 
 (async () => {
   console.log(`Aletheia soak test | agent: ${AGENT}`);
+  console.log(`  AST tier: ${ENABLE_AST ? 'ENABLED (FW_ENABLE_AST=1)' : 'disabled (default posture)'}` +
+    (ENABLE_AST ? ` | incomplete policy: ${INCOMPLETE_POLICY || 'observe'}` : ''));
   console.log('='.repeat(64));
   const corpus = installedPackages();
   const missing = LEGIT.filter(p => !corpus.includes(p));
