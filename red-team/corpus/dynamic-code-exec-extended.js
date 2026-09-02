@@ -153,3 +153,35 @@ module.exports = [
     code: `WebAssembly.instantiate(bytes).then((m) => m.instance.exports.run()); module.exports = {};`,
   },
 ];
+
+// ── F-91: span-exhaustion / decoy-flood ────────────────────────────────────────────────────────
+// A bracket+concat obfuscated eval hidden behind a flood of >40 harmless prescreen-matching decoy
+// spans. Pre-fix the AST tier scanned candidate spans in file-position order and stopped after a
+// fixed count, so with the payload at the back it was never parsed (a deterministic AST-tier bypass
+// even WITH FW_ENABLE_AST=1). Post-fix the tier scans highest-risk-first, so the payload is caught
+// regardless of its position. Three entries pin the payload at the front, middle, and end of the
+// decoy flood. Built outside the array literal so the >90KB decoy strings stay readable, then
+// appended. Each is a real corpus entry (same shape as the rest) exercised through the live Detector
+// by red-team/run.js — the exact block decision index.js's _compile hook makes. `knownBypass: true`
+// because without FW_ENABLE_AST=1 (the default posture) the bracket-eval has no literal call site
+// and still passes — run `npm run redteam:ast` to see them CLOSED.
+{
+  const filler = 'x'.repeat(2100); // > MAX_SPAN_CHARS so each decoy line becomes its own span
+  const flood = (n) => Array.from({ length: n }, (_, i) => `const benign${i} = String.fromCharCode(65);${filler};`).join('\n');
+  const payload = `\nconst run = this['ev' + 'al'];\nrun('require("child_process").execSync(\\'id\\')');\n`;
+  const base = {
+    category: 'dynamic-code-exec', technique: 'ast-span-exhaustion', severity: 'CRITICAL',
+    expected: 'BLOCK', knownBypass: true,
+  };
+  module.exports.push(
+    { ...base, id: 'dce-span-exhaustion-front',
+      description: 'Bracket+concat eval placed AFTER a 45-span decoy flood (>40). Pre-fix the AST tier stopped after a fixed span count scanned from the front, so the payload span was never parsed. CLOSED under FW_ENABLE_AST=1 (highest-risk-first span scheduling) — see `npm run redteam:ast`.',
+      code: flood(45) + payload + '\nmodule.exports = {};' },
+    { ...base, id: 'dce-span-exhaustion-middle',
+      description: 'Same bracket+concat eval buried in the MIDDLE of a decoy flood. CLOSED under FW_ENABLE_AST=1 — highest-risk-first scheduling reaches it regardless of position.',
+      code: flood(22) + payload + '\n' + flood(23) + '\nmodule.exports = {};' },
+    { ...base, id: 'dce-span-exhaustion-end',
+      description: 'Same bracket+concat eval placed BEFORE a trailing decoy flood. CLOSED under FW_ENABLE_AST=1.',
+      code: payload + '\n' + flood(45) + '\nmodule.exports = {};' },
+  );
+}

@@ -111,6 +111,7 @@ class Detector {
       behaviorViolations: 0,
       warnOnlyDetections: 0,
       astAssistedDetections: 0,
+      astIncompleteScans: 0,
     };
   }
 
@@ -213,6 +214,30 @@ class Detector {
             detections.push({ type, severity, matched: label, astResolved: true, timestamp: Date.now() });
           }
         }
+      }
+      // Incomplete-scan policy. astResult.incomplete means a genuinely HIGH-RISK span went
+      // unanalyzed because the AST tier's (large) high-risk budget was exhausted — the module is so
+      // densely packed with rare strong-obfuscation shapes that it could not be fully analyzed.
+      // Rather than silently returning a clean-looking partial scan (the span-exhaustion failure
+      // mode), apply a documented operator policy:
+      //   FW_AST_INCOMPLETE_POLICY = observe (default) -> WARN-only telemetry, module still runs
+      //                            = quarantine|block  -> block-tier: escalate to QUARANTINE
+      // Default is observe because the AST tier itself is opt-in and fail-open; operators who want
+      // fail-closed behavior on un-analyzable modules set quarantine explicitly. See README /
+      // docs/THREAT-COVERAGE.md.
+      if (astResult.incomplete) {
+        this.stats.astIncompleteScans = (this.stats.astIncompleteScans || 0) + 1;
+        const policy = process.env.FW_AST_INCOMPLETE_POLICY || 'observe';
+        const enforce = policy === 'quarantine' || policy === 'block';
+        detections.push({
+          type: 'ast-scan-incomplete',
+          severity: enforce ? 'HIGH' : 'WARN',
+          matched: 'ast-scan-incomplete:' + astResult.highRiskSpans + '-high-risk-spans-' +
+            astResult.highRiskScanned + '-scanned',
+          astResolved: true,
+          timestamp: Date.now(),
+          warnOnly: !enforce,
+        });
       }
     }
 

@@ -8,6 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
+  processed candidate spans in **file-position order** and hard-stopped after a fixed count
+  (`MAX_SPANS_PER_FILE = 40`), so an attacker could place >40 harmless prescreen-matching decoy
+  spans *ahead of* the real payload and the payload span was never parsed — a deterministic
+  AST-tier bypass even with detection fully enabled (reproduced: a bracket-eval payload at offset
+  ~87 KB behind 41 `String.fromCharCode` decoys went from `QUARANTINE`/CRITICAL to `OBSERVE`/zero
+  detections). The AST tier now:
+  - scans spans **highest-risk-first** (never in file order), with a per-trigger risk weight, so a
+    real payload can't be starved of the parse budget by lower-risk decoy spans placed ahead of it;
+  - splits the budget by risk tier — a large budget for rare high-risk obfuscation shapes, the
+    original small budget for ordinary bundle noise (`require()`/`(0, x)`/`.join()`), so large
+    legitimate bundles are unaffected;
+  - reports an **incomplete** scan when a genuinely high-risk span is left unanalyzed, governed by
+    the new `FW_AST_INCOMPLETE_POLICY` (`observe` default = WARN-only telemetry; `quarantine`/`block`
+    = fail-closed on an un-analyzable suspicious module).
+- Added regression coverage: unit assertions for the payload at the front/middle/end of a decoy
+  flood and for the incomplete-gate boundary (`packages/fw-agent/test/ast-scan-unit-test.js`); a
+  test through the **real preload hook** (`packages/fw-agent/test/ast-exhaustion-preload-test.js`);
+  and three red-team corpus entries (`dce-span-exhaustion-{front,middle,end}`).
+
+### Changed
+
+- **Documentation truth-up for the npm-shipped README** (`packages/fw-agent/README.md`) and package
+  `description`: removed the stale "Detection is signature + behavioral, not AST-based" claim and
+  the "blocks malicious npm modules" framing; documented `FW_ENABLE_AST`, `FW_AST_INCOMPLETE_POLICY`,
+  `FW_ENABLE_CROSSFILE`, and `FW_CACHE_POLICY`; added the two-tier detection numbers (default vs.
+  AST) and disclosed that "0 false positives" is measured only across the 33 curated benign
+  controls. Reframed the package as opt-in runtime enforcement for supported module-loading paths,
+  defense-in-depth rather than comprehensive malware prevention.
+
+### CI
+
+- **Publish workflow hardening** (`.github/workflows/publish.yml`): pinned every third-party action
+  to a reviewed full commit SHA (`actions/checkout`, `actions/setup-node`,
+  `softprops/action-gh-release`) and pinned the release npm CLI to an exact version (`npm@11.5.1`)
+  instead of the mutable `npm@latest`. The workflow now **builds the exact release tarball, inspects
+  it, installs it into a clean project, and runs a tarball smoke suite** (clean load, self-integrity,
+  CJS blocking, AST tier, enforcement mode, ESM interception) on Node 18/20/22/24 before publishing —
+  and publishes that same `.tgz` verbatim, rather than only `npm pack --dry-run` and re-packing at
+  publish time (`scripts/smoke-tarball.js`).
+
 ## [0.6.0] - 2026-08-27
 
 ### Added
@@ -35,10 +78,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     unproven parsing code touching a block-tier decision, not yet soak-tested against a large
     real-world corpus. Default-configuration detection behavior (and the default `npm run
     redteam` score) is byte-for-byte unchanged by this release.
-  - Closes 18 of the 30 previously-documented static-analysis bypasses when enabled — detection
-    rate on the red-team corpus rises from 76.0% (95/125, default) to 90.4% (113/125,
-    `FW_ENABLE_AST=1`) with 0 new false positives. Run `npm run redteam:ast` to reproduce. See
-    `docs/THREAT-COVERAGE.md` §4 for the exact closed/still-open list.
+  - Closes 21 of the 33 documented static-analysis bypasses when enabled — detection rate on the
+    red-team corpus rises from 74.2% (95/128, default) to 90.6% (116/128, `FW_ENABLE_AST=1`) with 0
+    false positives across the 33 curated benign controls (not a measured general FP rate). Run
+    `npm run redteam:ast` to reproduce. See `docs/THREAT-COVERAGE.md` §4 for the exact
+    closed/still-open list. (The corpus grew by 3 malicious span-exhaustion entries in F-91 below,
+    shifting the pre-F-91 76.0%/95/125 → 90.4%/113/125 figures to these.)
   - **Explicitly does not close, by architectural necessity, not oversight**: WASM payloads (no
     JS source text exists to parse), values sourced only from `process.env`/runtime config (never
     a literal in source, so nothing for a static fold to resolve), and network+process-exec taint

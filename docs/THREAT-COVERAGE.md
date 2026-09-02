@@ -96,13 +96,28 @@ eval-only, comment-only-decode, config-built `.npmrc` URL, hardcoded real-regist
 Two configurations now matter here, and they give genuinely different numbers — always say which
 one a figure describes:
 
-- **Default** (`FW_ENABLE_AST` unset): signature + behavioral tiers only. **76.0%** (95/125
-  malicious payloads caught), **30** known bypasses, **0** false positives on the 33 benign
+- **Default** (`FW_ENABLE_AST` unset): signature + behavioral tiers only. **74.2%** (95/128
+  malicious payloads caught), **33** known bypasses, **0** false positives on the 33 benign
   controls. This is what a fresh install does out of the box — `npm run redteam`.
 - **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak — see §"AST-level detection" below):
-  adds a narrow, hand-rolled AST pass. **90.4%** (113/125 caught), **12** known bypasses, **0**
+  adds a narrow, hand-rolled AST pass. **90.6%** (116/128 caught), **12** known bypasses, **0**
   false positives (the same 33 benign controls, including six added specifically to guard the new
   fold/resolve surface). `npm run redteam:ast`.
+
+> **"0 false positives" is measured against the 33 curated benign controls only** — it is not a
+> measured general false-positive rate on arbitrary packages, and must not be read as one. Enabling
+> the AST tier by default is gated on a broader benign-package soak (see the roadmap below).
+
+**Bounded, prioritized AST scanning (F-91).** The AST tier parses at most a bounded number of
+candidate *spans* per file (a large budget for rare high-risk shapes, a small one for ordinary
+bundle noise), and it scans them **highest-risk-first**, never in file order. This closes a
+span-exhaustion bypass where an attacker padded a module with >40 harmless prescreen-matching decoy
+spans ahead of the real payload so it was never parsed. If a genuinely high-risk span is left
+unanalyzed because the budget was exhausted, the scan is reported **incomplete** and
+`FW_AST_INCOMPLETE_POLICY` decides what happens: `observe` (default) records WARN-only telemetry and
+lets the module run; `quarantine` (or `block`) treats an un-analyzable suspicious module as
+block-tier. Ordinary large bundles (many `require()`/`(0, x)`/`.join()` hits) are low-risk and never
+trip the incomplete gate.
 
 The remaining bypasses genuinely require dynamic (runtime) analysis beyond either tier; each is
 asserted as an **expected bypass** in the adversarial and red-team suites so we notice if the
@@ -136,9 +151,10 @@ would make `npm run redteam`'s default run misrepresent out-of-the-box behavior,
 overclaiming risk this project's docs otherwise go out of their way to avoid): `dce-bracket-eval`,
 `dce-alias-eval`, `dce-join-require`, `dce-unicode-escape-eval`, `dce-eval-decodeuri`,
 `dce-fromcharcode-eval`, `dce-reverse-eval`, `dce-constructor-constructor`,
-`dce-generatorfunction`, `dce-indirect-eval-decodeuri`, `miner-concat-stratum`,
+`dce-generatorfunction`, `dce-indirect-eval-decodeuri`, `dce-span-exhaustion-front`,
+`dce-span-exhaustion-middle`, `dce-span-exhaustion-end`, `miner-concat-stratum`,
 `miner-base64-pool`, `miner-charcode-coinhive`, `miner-concat-cryptonight`, `miner-hex-pool`,
-`revsh-base64-devtcp`, `exfil-concat-path`, `exfil-concat-etc-shadow` (18 total — run
+`revsh-base64-devtcp`, `exfil-concat-path`, `exfil-concat-etc-shadow` (21 total — run
 `npm run redteam:ast` to reproduce the full list against `results/redteam-summary.json`).
 
 **Still open under `FW_ENABLE_AST=1`** (12): `miner-hex-pool`'s config-driven sibling
@@ -167,7 +183,9 @@ numbering schemes; stated explicitly here to stop conflating them.
   (`FW_ENABLE_AST=1`, off by default pending soak — see the note above on why default-posture
   numbers are unaffected). Closes string-reassembly eval/require, GeneratorFunction/
   constructor.constructor, decode-without-eval where the encoded form is a literal,
-  `decodeURIComponent→eval`, and literal string/path reassembly. → **76.0% → 90.4%** when enabled.
+  `decodeURIComponent→eval`, and literal string/path reassembly. → **74.2% → 90.6%** on the current
+  128-payload corpus when enabled (was 76.0% → 90.4% before the F-91 span-exhaustion regression
+  fixtures were added to the corpus).
   Deliberately does NOT attempt WASM (no JS text exists to parse), env-sourced values (nothing in
   source to fold), or network+process-exec taint chains (needs cross-statement dataflow with real
   FP guards, a different problem than AST parsing) — seen below and in the table above as still

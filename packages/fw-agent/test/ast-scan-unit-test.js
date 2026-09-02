@@ -231,8 +231,8 @@ const { AstScanner, tokenize, Parser, foldNode, resolveIdentity } = require('../
   const nearEnd = 'x'.repeat(5000) + "; const fn = this['ev'+'al']; fn(1);";
   const r = s.scan(nearEnd, 'x.js');
   assert.ok(r.detections.length > 0, 'a hit near EOF must still resolve within the clamped window');
-  // More candidate hits than MAX_SPANS_PER_FILE must not throw or hang, and still catches an
-  // early one within the cap.
+  // More candidate hits than the per-tier span budget must not throw or hang, and still catch one
+  // within the budget (see the F-91 span-exhaustion block below for the priority/incomplete gate).
   const many = "this['ev'+'al'](1);\n".repeat(60);
   assert.doesNotThrow(() => s.scan(many, 'x.js'));
   console.log('span boundary edge cases: ok');
@@ -297,6 +297,50 @@ const { AstScanner, tokenize, Parser, foldNode, resolveIdentity } = require('../
   assert.doesNotThrow(() => s.scan("const x = [this['ev'+'al'], 1]; module.exports = x;", 'x.js'));
   assert.doesNotThrow(() => s.scan("void this['ev'+'al'];", 'x.js'));
   console.log('walkExpression recursion coverage: ok');
+}
+
+// ── F-91: span-exhaustion / decoy-flood bypass ─────────────────────────────────────────────────
+// Regression guard for the span-exhaustion attack: before the fix, scan() processed candidate
+// spans in FILE-POSITION order and hard-stopped after a fixed count, so an attacker could place a
+// flood of harmless prescreen-matching decoy spans AHEAD of the real payload and the payload span
+// was never parsed. The fix scans HIGHEST-RISK-FIRST with a tiered budget, so a real payload is
+// reached regardless of how many low-risk decoys precede it — and if a genuinely high-risk span is
+// ever left unanalyzed, scan() must report result.incomplete rather than a clean partial scan.
+{
+  const s = new AstScanner();
+  const filler = 'x'.repeat(2100); // > MAX_SPAN_CHARS so each decoy is its own distinct span
+  // Low-risk decoy: String.fromCharCode is a real decode-primitive prescreen hit, but harmless.
+  const decoyLines = Array.from({ length: 45 }, (_, i) => `const benign${i} = String.fromCharCode(65);${filler};`);
+  // A bracket+concat obfuscated eval — no literal "eval(" call site; only the AST tier sees it.
+  const payload = "\nconst run = this['ev' + 'al'];\nrun('1+1');\n";
+  const caught = (r) => r.detections.some(d => d.matched === 'ast-resolved-eval-access');
+
+  const atFront = s.scan(decoyLines.join('\n') + payload, 'front.js');
+  assert.ok(caught(atFront), 'payload after a 45-decoy flood (>40) must still be caught (decoys at FRONT)');
+  assert.strictEqual(atFront.incomplete, false, 'a low-risk decoy flood must not be reported as an incomplete scan');
+
+  const atMiddle = s.scan(decoyLines.slice(0, 22).join('\n') + payload + '\n' + decoyLines.slice(22).join('\n'), 'middle.js');
+  assert.ok(caught(atMiddle), 'payload in the MIDDLE of a decoy flood must still be caught');
+
+  const atEnd = s.scan(payload + '\n' + decoyLines.join('\n'), 'end.js');
+  assert.ok(caught(atEnd), 'payload before a trailing decoy flood must still be caught');
+
+  // A large flood of BENIGN low-risk noise (require()/(0,) — pervasive in real bundles) must
+  // neither detect nor be flagged incomplete: no false positive on ordinary large bundled code.
+  const benignBundle = Array.from({ length: 300 }, (_, i) => `const a${i} = (0, require)('m${i}');${filler}`).join('\n');
+  const bundleScan = s.scan(benignBundle, 'bundle.js');
+  assert.strictEqual(bundleScan.detections.length, 0, 'benign low-risk bundle noise must not produce detections');
+  assert.strictEqual(bundleScan.incomplete, false, 'benign low-risk bundle noise must not trip the incomplete gate');
+
+  // A flood of HIGH-RISK spans exceeding the high-risk budget must set result.incomplete, so a
+  // payload that an attacker buries among engineered high-risk decoys can never slip past silently:
+  // either it is scanned (detected) or the module is flagged incomplete.
+  const hiRiskDecoys = Array.from({ length: 300 }, (_, i) => `const z${i} = obj['xx' + 'yy'];${filler}`).join('\n');
+  const flood = s.scan(hiRiskDecoys + payload, 'flood.js');
+  assert.ok(flood.incomplete, 'a high-risk span flood that exceeds the budget must be reported incomplete');
+  assert.ok(caught(flood) || flood.incomplete, 'buried payload is either scanned or the module is flagged incomplete');
+
+  console.log('F-91 span-exhaustion / decoy-flood: ok');
 }
 
 console.log('AST scan unit test passed.');

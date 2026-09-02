@@ -46,7 +46,21 @@ const pristineUnescape = unescape;
 // ── Bounds (mirrors the fixed-backstop discipline behavior-tracker.js already established for
 // CORRELATION_MAX_SEPARATORS/CORRELATION_MAX_CHARS — every hand-rolled analyzer in this codebase
 // bounds its own cost with a fixed, documented ceiling rather than an adaptive one) ─────────────
-const MAX_SPANS_PER_FILE = 40;
+// Span-scanning budget. A single position-ordered cap (the pre-F-91 `MAX_SPANS_PER_FILE = 40`,
+// scanned from the FRONT of the file) was exhaustible: an attacker could place >40 harmless
+// prescreen-matching decoy spans AHEAD of the real payload so the payload span was never parsed
+// (span-exhaustion / decoy-flood bypass). Two things close that now: spans are scanned
+// HIGHEST-RISK-FIRST (see computeSpanRisk / scan()), never in file order, and the budget is split
+// by risk tier —
+//   - high-risk spans (those covering a rare, strong-obfuscation trigger — weight >= HIGH_RISK_WEIGHT)
+//     get a large budget, because legitimate code essentially never produces many of them;
+//   - low-risk spans (ordinary bundle noise: require()/(0,)/.join()/decode primitives) keep the
+//     original small budget, since large legitimate bundles routinely contain thousands of these.
+// If a HIGH-RISK span is left unscanned because its tier budget was exhausted, scan() sets
+// result.incomplete so detector.js can apply a documented policy (FW_AST_INCOMPLETE_POLICY) instead
+// of silently passing an under-analyzed suspicious module.
+const MAX_LOW_RISK_SPANS = 40;
+const MAX_HIGH_RISK_SPANS = 256;
 const MAX_SPAN_CHARS = 2000;
 const MAX_TOKENS_PER_SPAN = 1200;
 const MAX_FOLD_DEPTH = 24;
@@ -986,6 +1000,23 @@ const UNICODE_ESCAPE_RE = /\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\}/;
 // never gate it. A broader match here only costs an extra bounded parse attempt on a span that
 // turns out uninteresting; it can never cause a false positive, since detection precision lives
 // entirely downstream in the folder/structural-matcher, not in the prescreen.
+// Per-trigger RISK WEIGHT. Drives two things: (a) the order spans are scanned in — highest weight
+// first, so a real payload span can never be starved of the parse budget by lower-risk decoy spans
+// placed ahead of it in the file (the span-exhaustion bypass this closes); and (b) which spans
+// count as "high-risk" for the incomplete-scan gate (a covered trigger of weight >= HIGH_RISK_WEIGHT).
+// Ordering matters more than the absolute numbers. High weights are reserved for shapes genuinely
+// rare in benign source (a bare `= eval` alias, adjacent short-literal concatenation used to
+// assemble a token, an Object.getPrototypeOf / chained `.constructor` sandbox chase); ordinary
+// bundle idioms (require(), (0, x), .join(), decode primitives, a single computed string access)
+// stay BELOW HIGH_RISK_WEIGHT so a large legitimate bundle full of them never trips the incomplete
+// gate — only their being truncated, which is expected and silent, never flagged.
+const HIGH_RISK_WEIGHT = 5;
+const KEYWORD_WEIGHTS = {
+  'fromcharcode': 3, 'getprototypeof': 8, '.constructor': 5, 'decodeuricomponent': 3,
+  'unescape(': 3, 'buffer.from': 3, '.reverse()': 2, '.reverse ()': 2,
+  '(0,': 1, '(0 ,': 1, '(void 0,': 1, 'require(': 1, '.join(': 1,
+};
+const UNICODE_ESCAPE_WEIGHT = 3;
 const PRESCREEN_REGEXES = [
   /\[\s*['"]/,                                                    // computed access with a fresh string-literal key
   /=\s*eval\s*[;,)]/,                                             // bare `= eval` aliasing
@@ -996,6 +1027,12 @@ const PRESCREEN_REGEXES = [
   // template-literal-heavy or long-literal-heavy legitimate code doesn't match this either way.
   /['"][^'"\n]{0,24}['"]\s*\+\s*['"][^'"\n]{0,24}['"]/,
 ];
+// Weights aligned by index with PRESCREEN_REGEXES: [computed string-literal access, `= eval`
+// alias, adjacent short-literal concat]. A single computed access (`a["b"]`) is common enough in
+// hand-written source that it stays below HIGH_RISK_WEIGHT (it still outranks decode/require noise
+// for scan-priority); `= eval` and short-literal concat are rare obfuscation tells, so they are
+// high-risk.
+const PRESCREEN_REGEX_WEIGHTS = [4, 10, 6];
 
 class AstScanner {
   constructor() {
@@ -1003,7 +1040,10 @@ class AstScanner {
   }
 
   scan(content, filename) {
-    const result = { detections: [], dynamicCode: [], processExec: [], codeDecode: [], sensitivePath: [], literals: [] };
+    const result = {
+      detections: [], dynamicCode: [], processExec: [], codeDecode: [], sensitivePath: [],
+      literals: [], incomplete: false, highRiskSpans: 0, highRiskScanned: 0,
+    };
     try {
       if (!content || typeof content !== 'string') return result;
       if (!this._prescreener.searchInsensitive(content) && !UNICODE_ESCAPE_RE.test(content) &&
@@ -1012,15 +1052,42 @@ class AstScanner {
       }
 
       const spans = findCandidateSpans(content);
-      let spanCount = 0;
-      for (const span of spans) {
-        if (spanCount++ >= MAX_SPANS_PER_FILE) break;
+      // Scan HIGHEST-RISK-FIRST, never in file order. A stable sort by descending risk weight (ties
+      // keep source order) guarantees the most suspicious spans get the bounded parse budget first,
+      // so a payload span can never be pushed out of range by a flood of lower-risk decoy spans
+      // placed ahead of it — the span-exhaustion bypass. The budget is split by tier so ordinary
+      // bundle noise being truncated (expected, silent) is never confused with a genuinely
+      // suspicious span going unanalyzed (flagged via result.incomplete).
+      const ordered = spans
+        .map((span, i) => ({ span, i }))
+        .sort((a, b) => (b.span.weight - a.span.weight) || (a.i - b.i));
+      for (const { span } of ordered) if (span.highRisk) result.highRiskSpans++;
+
+      let lowRiskScanned = 0;
+      for (const { span } of ordered) {
+        if (span.highRisk) {
+          if (result.highRiskScanned >= MAX_HIGH_RISK_SPANS) continue;
+          result.highRiskScanned++;
+        } else {
+          if (lowRiskScanned >= MAX_LOW_RISK_SPANS) continue;
+          lowRiskScanned++;
+        }
         try {
           this._scanSpan(content, span, result);
         } catch (e) {
           // A single unparseable span never affects any other span or the existing scanners.
           continue;
         }
+      }
+
+      // A genuinely high-risk span was left unanalyzed because its (large) tier budget was
+      // exhausted — i.e. the module is so densely packed with rare, strong-obfuscation shapes that
+      // we could not fully analyze it. That is itself a strong signal; surface it so detector.js can
+      // apply FW_AST_INCOMPLETE_POLICY rather than silently returning a clean-looking partial scan.
+      // Deliberately NOT raised for low-risk truncation (require()/(0,)/.join() noise), which is
+      // normal for large legitimate bundles.
+      if (result.highRiskScanned < result.highRiskSpans) {
+        result.incomplete = true;
       }
     } catch (e) {
       // Absolute backstop: scan() must never throw. Whatever succeeded before the exception is
@@ -1165,31 +1232,48 @@ function computeSpan(content, hitIdx) {
   return { start: boundariesBeforeHit[startIdx], end };
 }
 
+// Each hit carries the risk WEIGHT of the trigger that produced it (see KEYWORD_WEIGHTS /
+// PRESCREEN_REGEX_WEIGHTS / UNICODE_ESCAPE_WEIGHT). A span inherits the MAX weight of every hit
+// that falls within it, and is `highRisk` if any covered hit is at/above HIGH_RISK_WEIGHT — so a
+// strong-obfuscation trigger anywhere inside an otherwise-low-risk span still raises that span's
+// scan priority and marks it for the incomplete gate.
 function findCandidateSpans(content) {
   const hits = [];
   const lower = content.toLowerCase();
   for (const kw of PRESCREEN_KEYWORDS) {
+    const weight = KEYWORD_WEIGHTS[kw] || 1;
     let idx = lower.indexOf(kw);
-    while (idx !== -1) { hits.push(idx); idx = lower.indexOf(kw, idx + 1); }
+    while (idx !== -1) { hits.push({ idx, weight }); idx = lower.indexOf(kw, idx + 1); }
   }
-  for (const re of [UNICODE_ESCAPE_RE, ...PRESCREEN_REGEXES]) {
+  const regexes = [UNICODE_ESCAPE_RE, ...PRESCREEN_REGEXES];
+  regexes.forEach((re, ri) => {
+    const weight = ri === 0 ? UNICODE_ESCAPE_WEIGHT : PRESCREEN_REGEX_WEIGHTS[ri - 1];
     const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
     let m;
     while ((m = g.exec(content)) !== null) {
-      hits.push(m.index);
+      hits.push({ idx: m.index, weight });
       if (g.lastIndex === m.index) g.lastIndex++;
     }
-  }
+  });
   if (hits.length === 0) return [];
 
-  hits.sort((a, b) => a - b);
+  hits.sort((a, b) => a.idx - b.idx);
   const spans = [];
   let lastEnd = -1;
   for (const hit of hits) {
-    if (hit < lastEnd) continue; // already covered by a previous span
-    const { start, end } = computeSpan(content, hit);
+    if (hit.idx < lastEnd) {
+      // Already covered by the previous span — fold this hit's risk into it so a high-risk trigger
+      // sitting inside an already-open span still counts (raises priority / marks it high-risk).
+      const s = spans[spans.length - 1];
+      if (s && hit.idx >= s.start && hit.idx < s.end) {
+        if (hit.weight > s.weight) s.weight = hit.weight;
+        if (hit.weight >= HIGH_RISK_WEIGHT) s.highRisk = true;
+      }
+      continue;
+    }
+    const { start, end } = computeSpan(content, hit.idx);
     if (end <= start) continue;
-    spans.push({ start, end });
+    spans.push({ start, end, weight: hit.weight, highRisk: hit.weight >= HIGH_RISK_WEIGHT });
     lastEnd = end;
   }
   return spans;

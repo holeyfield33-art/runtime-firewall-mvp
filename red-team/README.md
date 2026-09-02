@@ -60,7 +60,7 @@ A machine-readable `results/redteam-summary.json` is written on every run
 
 ## Corpus
 
-**158 payloads** across 6 threat categories (125 malicious, 33 benign), each
+**161 payloads** across 6 threat categories (128 malicious, 33 benign), each
 category split into a core catalog and an `-extended` catalog under `corpus/`,
 all aggregated by `corpus/index.js` (which validates every entry and rejects
 duplicate ids):
@@ -70,7 +70,7 @@ duplicate ids):
 | `crypto-miner`      |  26   | stratum pools, coinhive/xmr-stak/cryptonight/nicehash, uncovered brands, concat/hex/wasm evasions |
 | `reverse-shell`     |  22   | `/dev/tcp` + curl\|bash (caught); nc/ncat/socat/php/ruby/powershell/lua, http-beacon, mkfifo (bypass) |
 | `credential-exfil`  |  28   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require evasions |
-| `dynamic-code-exec` |  30   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions |
+| `dynamic-code-exec` |  33   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions, AST span-exhaustion decoy-flood (front/middle/end) |
 | `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
 | `benign-controls`   |  31   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress, Phase 3 AST false-positive guards (constructor typecheck, fromCharCode i18n, base64 data decode, array-join message, computed-property config, standalone indirect-eval) — must **not** block |
 
@@ -104,14 +104,18 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 Two numbers matter here, depending on configuration — `npm run redteam` measures the
 first, `npm run redteam:ast` the second:
 
-- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **95/125** malicious
-  payloads caught (**76%**), **zero false positives** on the 33 benign controls, after two
+- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **95/128** malicious
+  payloads caught (**74.2%**), **zero false positives** on the 33 benign controls, after two
   hardening rounds (see `docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline
-  before round 1 was 69/125 ≈ 55%). **30** documented bypasses remain.
+  before round 1 was 69/125 ≈ 55%). **33** documented bypasses remain.
 - **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak): adds a narrow, hand-rolled
-  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **18** of those 30 —
-  **113/125** caught (**90.4%**), still **zero false positives**. **12** bypasses remain
+  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **21** of those 33 —
+  **116/128** caught (**90.6%**), still **zero false positives**. **12** bypasses remain
   even with it enabled.
+
+> "Zero false positives" is measured against the **33 curated benign controls only** — it is not
+> evidence of a general 0% false-positive rate on arbitrary packages. A broader benign-package soak
+> is a release gate before the AST tier could ship on by default.
 
 The 12 that remain regardless of configuration are fundamental limits of static/AST
 analysis and require runtime/dataflow instrumentation to close. They cluster into these
