@@ -131,13 +131,14 @@ assert.ok(!Detector.isSuspicious(null), 'null is not suspicious');
       assert.ok(/^ast-scan-incomplete:\d+-high-risk-spans-\d+-scanned$/.test(obs.matched),
         'incomplete telemetry must unmistakably carry the high-risk span counts, got: ' + obs.matched);
 
-      // unset FW_AST_INCOMPLETE_POLICY defaults to observe (never fail-closed by accident).
+      // unset FW_AST_INCOMPLETE_POLICY defaults to quarantine (fail CLOSED) — the span-exhaustion
+      // bypass must be closed by default, not only when an operator opts into a non-default policy.
       delete process.env.FW_AST_INCOMPLETE_POLICY;
       detector.behaviorTracker.reset();
       r = detector.scanModuleSync('pkg', incompleteFlood, 'flood.js', 'pkg');
-      assert.strictEqual(r.action, 'OBSERVE', 'unset incomplete policy must default to observe (non-blocking)');
-      assert.ok(r.detections.find(d => d.type === 'ast-scan-incomplete' && d.warnOnly),
-        'unset policy still emits warnOnly incomplete telemetry');
+      assert.strictEqual(r.action, 'QUARANTINE', 'unset incomplete policy must DEFAULT to fail-closed (QUARANTINE)');
+      assert.ok(r.detections.find(d => d.type === 'ast-scan-incomplete' && !d.warnOnly && d.severity === 'HIGH'),
+        'unset policy must produce a block-tier incomplete detection by default');
 
       // quarantine and block both fail CLOSED: incompleteness becomes a block-tier, non-warnOnly,
       // astResolved HIGH detection and the module is quarantined.

@@ -23,8 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     original small budget for ordinary bundle noise (`require()`/`(0, x)`/`.join()`), so large
     legitimate bundles are unaffected;
   - reports an **incomplete** scan when a genuinely high-risk span is left unanalyzed, governed by
-    the new `FW_AST_INCOMPLETE_POLICY` (`observe` default = WARN-only telemetry; `quarantine`/`block`
-    = fail-closed on an un-analyzable suspicious module).
+    the new `FW_AST_INCOMPLETE_POLICY`. Because an incomplete scan is itself the span-exhaustion
+    attack shape, the default is **fail-closed** (`quarantine`/`block`) so the bypass is closed by
+    default rather than only for operators who opt in; `observe` opts down to WARN-only telemetry.
+    Only fires on pathological saturation (>256 rare high-risk spans in one module); 0 FP across the
+    AST-enabled benign soak, including under quarantine.
 - Added regression coverage: unit assertions for the payload at the front/middle/end of a decoy
   flood and for the incomplete-gate boundary (`packages/fw-agent/test/ast-scan-unit-test.js`); a
   test through the **real preload hook** (`packages/fw-agent/test/ast-exhaustion-preload-test.js`);

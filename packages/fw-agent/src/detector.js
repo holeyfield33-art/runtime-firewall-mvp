@@ -218,16 +218,19 @@ class Detector {
       // Incomplete-scan policy. astResult.incomplete means a genuinely HIGH-RISK span went
       // unanalyzed because the AST tier's (large) high-risk budget was exhausted — the module is so
       // densely packed with rare strong-obfuscation shapes that it could not be fully analyzed.
-      // Rather than silently returning a clean-looking partial scan (the span-exhaustion failure
-      // mode), apply a documented operator policy:
-      //   FW_AST_INCOMPLETE_POLICY = observe (default) -> WARN-only telemetry, module still runs
-      //                            = quarantine|block  -> block-tier: escalate to QUARANTINE
-      // Default is observe because the AST tier itself is opt-in and fail-open; operators who want
-      // fail-closed behavior on un-analyzable modules set quarantine explicitly. See README /
-      // docs/THREAT-COVERAGE.md.
+      // This is precisely the span-exhaustion attack shape (flood the scanner with high-risk decoys
+      // so the real payload falls outside the budget), so the DEFAULT must fail CLOSED — a policy
+      // that only protects operators who opt into a non-default value would leave the very bypass
+      // this tier exists to close open by default. Operators who prefer availability over this
+      // protection can opt down to telemetry-only:
+      //   FW_AST_INCOMPLETE_POLICY = quarantine|block (DEFAULT) -> block-tier: escalate to QUARANTINE
+      //                            = observe                    -> WARN-only telemetry, module runs
+      // Only fires on pathological saturation (>256 rare high-risk spans in ONE module); ordinary
+      // large bundles never reach it (0 FP across the AST-enabled benign soak, incl. quarantine —
+      // see docs/THREAT-COVERAGE.md). The AST tier as a whole stays opt-in (FW_ENABLE_AST).
       if (astResult.incomplete) {
         this.stats.astIncompleteScans = (this.stats.astIncompleteScans || 0) + 1;
-        const policy = process.env.FW_AST_INCOMPLETE_POLICY || 'observe';
+        const policy = process.env.FW_AST_INCOMPLETE_POLICY || 'quarantine';
         const enforce = policy === 'quarantine' || policy === 'block';
         detections.push({
           type: 'ast-scan-incomplete',

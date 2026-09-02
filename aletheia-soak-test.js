@@ -94,7 +94,7 @@ function runRound(round, corpus) {
   const malCaught = malResults.filter(r => r.blocked);
   const summary = {
     ts: new Date().toISOString(), round,
-    ast_enabled: ENABLE_AST, incomplete_policy: ENABLE_AST ? (INCOMPLETE_POLICY || 'observe') : null,
+    ast_enabled: ENABLE_AST, incomplete_policy: ENABLE_AST ? (INCOMPLETE_POLICY || 'quarantine (default)') : null,
     legit_total: corpus.length, legit_blocked: legitBlocked.length,
     false_positive_rate_pct: corpus.length ? +(legitBlocked.length / corpus.length * 100).toFixed(1) : 0,
     fp_packages: legitBlocked.map(r => `${r.pkg}:${r.rule}`),
@@ -111,7 +111,7 @@ function runRound(round, corpus) {
 (async () => {
   console.log(`Aletheia soak test | agent: ${AGENT}`);
   console.log(`  AST tier: ${ENABLE_AST ? 'ENABLED (FW_ENABLE_AST=1)' : 'disabled (default posture)'}` +
-    (ENABLE_AST ? ` | incomplete policy: ${INCOMPLETE_POLICY || 'observe'}` : ''));
+    (ENABLE_AST ? ` | incomplete policy: ${INCOMPLETE_POLICY || 'quarantine (default, fail-closed)'}` : ''));
   console.log('='.repeat(64));
   const corpus = installedPackages();
   const missing = LEGIT.filter(p => !corpus.includes(p));

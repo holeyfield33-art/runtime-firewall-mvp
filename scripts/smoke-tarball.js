@@ -120,17 +120,36 @@ check('FW_MODE=enforce without a real --require preload exits non-zero', () => {
 
 // 6: ESM interception — import() a malicious file:// .mjs.
 check('blocks (or cleanly skips below floor) a malicious ESM module', () => {
-  const evilMjs = write('evil.mjs', "const cp = await import('child_process');\nconst code = getRemoteCode();\neval(code);\ncp.exec(code);\nexport default {};\n");
-  const loader = write('esm-loader.mjs', `await import(${JSON.stringify('file://' + evilMjs)}); console.log('ESM-LOADED');\n`);
-  const res = run([`--require=${agentPath}`, loader], { FW_MODE: 'dev' });
+  // CRITICAL: the fixture must run to COMPLETION and print ESM-LOADED when UNPROTECTED — otherwise a
+  // nonzero exit proves nothing about the firewall (an earlier fixture threw on an undefined
+  // reference, so the "blocked" assertion passed even with the ESM hook entirely absent). This body
+  // is benign to execute (assigns a string, exports, logs) but carries a crypto-miner BLOCK
+  // signature the firewall must catch at load time.
+  const evilMjs = write('evil.mjs', "export const pool = 'stratum+tcp://xmr.pool.evil:3333';\nconsole.log('ESM-LOADED');\n");
+  const loader = write('esm-loader.mjs', `await import(${JSON.stringify('file://' + evilMjs)});\n`);
   const [maj, min] = process.versions.node.split('.').map(Number);
   const esmSupported = (maj > 23) || (maj === 23 && min >= 5) || (maj === 22 && min >= 15);
+
+  // Control: WITHOUT the firewall the fixture must load cleanly (exit 0, ESM-LOADED). This proves
+  // the fixture itself is valid, so any block below is attributable to the firewall, not the module.
+  const unprotected = run([loader], { FW_MODE: 'dev' });
+  assert.strictEqual(unprotected.status, 0, 'ESM fixture must load cleanly WITHOUT the firewall (control), got ' + unprotected.status + '\nstderr:\n' + unprotected.stderr);
+  assert.ok(/ESM-LOADED/.test(unprotected.stdout), 'ESM fixture must reach completion unprotected (control):\n' + unprotected.stdout);
+
+  const res = run([`--require=${agentPath}`, loader], { FW_MODE: 'dev' });
   if (esmSupported) {
-    assert.notStrictEqual(res.status, 0, 'on a supported Node version the malicious ESM module must be blocked\nstderr:\n' + res.stderr);
-    assert.ok(!/ESM-LOADED/.test(res.stdout), 'malicious ESM module must not load on a supported Node version');
+    // Firewall-SPECIFIC assertions: nonzero exit AND the COMPILATION LOCKDOWN banner AND the module
+    // did not reach ESM-LOADED. A missing/broken ESM hook would let the control-valid fixture load
+    // (exit 0, ESM-LOADED) and fail these — which is the whole point.
+    assert.notStrictEqual(res.status, 0, 'on a supported Node version the malicious ESM module must be BLOCKED by the firewall\nstderr:\n' + res.stderr);
+    assert.ok(/COMPILATION LOCKDOWN/.test(res.stderr), 'ESM block must come from the firewall (COMPILATION LOCKDOWN banner), not an unrelated error:\n' + res.stderr);
+    assert.ok(!/ESM-LOADED/.test(res.stdout), 'malicious ESM module must not reach completion on a supported Node version:\n' + res.stdout);
   } else {
-    // Below the ESM hook floor: import() runs unprotected but must warn loudly (never silently
-    // claim coverage). We only assert the agent itself did not crash the process spuriously.
+    // Below the ESM hook floor: import() runs unprotected (ESM-LOADED prints, exit 0), and the agent
+    // must have warned loudly that ESM is uncovered rather than silently claiming coverage.
+    assert.strictEqual(res.status, 0, 'below the ESM floor the module loads unprotected (exit 0), got ' + res.status + '\nstderr:\n' + res.stderr);
+    assert.ok(/ESM-LOADED/.test(res.stdout), 'below the ESM floor the module must actually load (proves the fixture is exercised):\n' + res.stdout);
+    assert.ok(/ESM|import|registerHooks/i.test(res.stderr), 'below the ESM floor the agent must warn that ESM is uncovered:\n' + res.stderr);
     console.log('    (Node ' + process.versions.node + ' is below the ESM hook floor — coverage is CJS-only here, by design)');
   }
 });

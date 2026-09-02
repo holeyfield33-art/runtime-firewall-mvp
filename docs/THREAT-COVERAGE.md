@@ -131,10 +131,14 @@ bundle noise), and it scans them **highest-risk-first**, never in file order. Th
 span-exhaustion bypass where an attacker padded a module with >40 harmless prescreen-matching decoy
 spans ahead of the real payload so it was never parsed. If a genuinely high-risk span is left
 unanalyzed because the budget was exhausted, the scan is reported **incomplete** and
-`FW_AST_INCOMPLETE_POLICY` decides what happens: `observe` (default) records WARN-only telemetry and
-lets the module run; `quarantine` (or `block`) treats an un-analyzable suspicious module as
-block-tier. Ordinary large bundles (many `require()`/`(0, x)`/`.join()` hits) are low-risk and never
-trip the incomplete gate.
+`FW_AST_INCOMPLETE_POLICY` decides what happens. Because an incomplete scan *is* the span-exhaustion
+attack shape (flood the scanner with high-risk decoys so the real payload falls outside the budget),
+the default is **fail-closed**: `quarantine`/`block` (the default) treats an un-analyzable suspicious
+module as block-tier, so the bypass is closed by default and not only for operators who opt into a
+non-default value; `observe` opts down to WARN-only telemetry for operators who prefer availability.
+It only fires on pathological saturation (>256 rare high-risk spans in one module); ordinary large
+bundles (many `require()`/`(0, x)`/`.join()` hits) are low-risk and never trip the gate (0 FP across
+the AST-enabled benign soak, including under quarantine).
 
 The remaining bypasses genuinely require dynamic (runtime) analysis beyond either tier; each is
 asserted as an **expected bypass** in the adversarial and red-team suites so we notice if the

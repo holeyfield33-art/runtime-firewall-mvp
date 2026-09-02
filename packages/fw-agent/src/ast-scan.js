@@ -50,7 +50,8 @@ const pristineUnescape = unescape;
 // scanned from the FRONT of the file) was exhaustible: an attacker could place >40 harmless
 // prescreen-matching decoy spans AHEAD of the real payload so the payload span was never parsed
 // (span-exhaustion / decoy-flood bypass). Two things close that now: spans are scanned
-// HIGHEST-RISK-FIRST (see computeSpanRisk / scan()), never in file order, and the budget is split
+// HIGHEST-RISK-FIRST (per-hit `weight` assigned in findCandidateSpans, ordered in scan()), never in
+// file order, and the budget is split
 // by risk tier —
 //   - high-risk spans (those covering a rare, strong-obfuscation trigger — weight >= HIGH_RISK_WEIGHT)
 //     get a large budget, because legitimate code essentially never produces many of them;

@@ -90,15 +90,24 @@ check('FW_AST_INCOMPLETE_POLICY=quarantine blocks an un-analyzable high-risk flo
   assert.ok(/COMPILATION LOCKDOWN/.test(res.stderr), 'expected a COMPILATION LOCKDOWN banner on stderr:\n' + res.stderr);
 });
 
-check('FW_AST_INCOMPLETE_POLICY=observe (default) does not block on incompleteness alone', () => {
-  // A benign high-risk flood with NO real payload: under the default observe policy the module
-  // still loads (incompleteness is telemetry-only), so we confirm observe never over-blocks. The
-  // flood is wrapped in a never-called function so the firewall still compile-scans every line
-  // (the thing under test) while the module body itself executes nothing.
+check('FW_AST_INCOMPLETE_POLICY=observe (explicit opt-out) does not block on incompleteness alone', () => {
+  // The DEFAULT policy is now fail-closed (quarantine), so an operator who prefers availability over
+  // this protection opts down to observe EXPLICITLY. A benign high-risk flood with NO real payload
+  // must then still load (incompleteness is telemetry-only). The flood is wrapped in a never-called
+  // function so the firewall still compile-scans every line while the module body executes nothing.
+  const file = writeModule('function dead(){\n' + hiRiskDecoys + '\n} if (false) dead();');
+  const res = requireThroughPreload(file, { FW_AST_INCOMPLETE_POLICY: 'observe' });
+  assert.strictEqual(res.status, 0, 'explicit observe policy must not block on incompleteness, got ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.ok(/LOADED-OK/.test(res.stdout), 'expected the module to load under explicit observe policy:\n' + res.stdout);
+});
+
+check('default (no policy set) fails CLOSED on an incomplete high-risk flood', () => {
+  // With no FW_AST_INCOMPLETE_POLICY set, an un-analyzable high-risk flood must be blocked — the
+  // span-exhaustion bypass is closed by default, not only under an opt-in policy.
   const file = writeModule('function dead(){\n' + hiRiskDecoys + '\n} if (false) dead();');
   const res = requireThroughPreload(file);
-  assert.strictEqual(res.status, 0, 'default observe policy must not block on incompleteness, got ' + res.status + '\nstderr:\n' + res.stderr);
-  assert.ok(/LOADED-OK/.test(res.stdout), 'expected the module to load under observe policy:\n' + res.stdout);
+  assert.notStrictEqual(res.status, 0, 'default policy must fail closed on an incomplete scan, got ' + res.status + '\nstderr:\n' + res.stderr);
+  assert.ok(/COMPILATION LOCKDOWN/.test(res.stderr), 'expected a COMPILATION LOCKDOWN banner under the default fail-closed policy:\n' + res.stderr);
 });
 
 console.log(`\nAST exhaustion preload test passed (${passed}).`);
