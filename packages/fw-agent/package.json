@@ -1,7 +1,7 @@
 {
   "name": "aletheia-firewall",
   "version": "0.6.0",
-  "description": "Zero-dependency runtime firewall that blocks malicious npm modules at require-time.",
+  "description": "Zero-dependency, opt-in runtime enforcement for supported Node.js module-loading paths (require()/file:// ESM): signature, behavioral, and opt-in AST obfuscation detection with signed-policy enforcement. Defense-in-depth, not a comprehensive malware blocker.",
   "main": "index.js",
   "license": "Apache-2.0",
   "author": "Aletheia contributors",

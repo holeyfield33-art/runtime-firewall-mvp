@@ -1,6 +1,11 @@
 # Aletheia Firewall
 
-Zero-dependency runtime firewall that blocks malicious npm modules at require-time through behavioral detection, Aho-Corasick signature scanning, and policy enforcement.
+Zero-dependency, opt-in runtime enforcement layer for supported Node.js module-loading paths. It
+scans modules as they are compiled/loaded (`require()` of `.js`/`.cjs`, and `import` of `file://`
+ESM on supported Node versions) using Aho-Corasick signature matching, behavioral-sequence
+correlation, and — opt-in — a narrow AST obfuscation tier, then enforces a signed policy. It is
+defense-in-depth, **not** a comprehensive malware blocker: it covers specific module-loading paths
+(see the coverage table below) and a documented set of techniques, with known gaps listed honestly.
 
 ## Install
 
@@ -55,11 +60,30 @@ Aletheia is a **runtime enforcement layer**: it watches what a dependency does o
 already in your CommonJS require graph, after `npm install` has finished. It is not an
 install-time scanner and does not intercept package installation.
 
-Detection is signature + behavioral, not AST-based, so payloads can evade static matching
-through string-splitting, encoding, or indirection. Our adversarial corpus documents this
-honestly: **95/125 (76%) of malicious payloads caught, 30 known bypasses, 0 false positives**
-on the current corpus — run it yourself from the repository root with `npm run redteam`. Every bypass class is listed
-in [`red-team/README.md`](../../red-team/README.md).
+Detection runs in tiers: **signature + behavioral by default**, plus an **opt-in AST obfuscation
+tier** (`FW_ENABLE_AST=1`, off by default pending a broader benign-package soak). By default,
+payloads can still evade static matching through string-splitting, encoding, or indirection; the
+AST tier folds and structurally resolves many of those. Our adversarial corpus documents both
+honestly:
+
+| Configuration | Malicious caught | Known bypasses | False positives* |
+|---|---|---|---|
+| **Default** (`FW_ENABLE_AST` unset) | **95/128 (74.2%)** | 33 | 0 / 33 controls |
+| **`FW_ENABLE_AST=1`** (opt-in) | **116/128 (90.6%)** | 12 | 0 / 33 controls |
+
+\* "0 false positives" means zero across the **33 curated benign controls** — it is **not** a
+measured general false-positive rate on arbitrary packages, which is one reason the AST tier ships
+opt-in. Run them yourself from the repository root: `npm run redteam` (default) and
+`npm run redteam:ast` (AST tier).
+
+**Bounded, prioritized AST scanning.** The AST tier parses a bounded number of candidate spans per
+file and scans them **highest-risk-first** (never in file order), so a payload can't be starved by a
+flood of harmless decoy spans placed ahead of it. If a genuinely high-risk span is left unanalyzed
+because the budget was exhausted, the scan is reported *incomplete* and `FW_AST_INCOMPLETE_POLICY`
+decides what happens (see the environment-variable table).
+
+Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md) and the monorepo's
+`docs/THREAT-COVERAGE.md`.
 
 ## Environment Variables
 
@@ -67,6 +91,10 @@ in [`red-team/README.md`](../../red-team/README.md).
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
 | `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. Note: several detections (credential exfiltration, dynamic-code/exec chains, base64→eval obfuscation) rely on the behavioral pass — disabling it falls back to signature-only coverage. |
+| `FW_ENABLE_AST` | `0` | Set to `1` to enable the opt-in AST obfuscation tier (`src/ast-scan.js`). Folds/resolves bracket-, alias-, unicode-escape-, concat-, decode-, and constructor-based obfuscation of `eval`/`Function`/`require`. Raises malicious coverage from 74.2% to 90.6% on the corpus (see the table above). Off by default pending a broader benign-package soak; it is internally fail-open (any error falls back to signature+behavioral). |
+| `FW_AST_INCOMPLETE_POLICY` | `quarantine` | Only relevant when `FW_ENABLE_AST=1`. Governs what happens when a module is so densely packed with high-risk obfuscation shapes that the AST tier could not fully analyze it (an *incomplete* scan — the span-exhaustion attack shape). Defaults to **fail-closed** (`quarantine`/`block`): an un-analyzable suspicious module is treated as block-tier, so the bypass is closed by default rather than only for operators who opt in. Set `observe` to opt down to WARN-only telemetry (module still runs) if you prefer availability. Only fires on pathological saturation (>256 rare high-risk spans in one module); ordinary large bundles never reach it. |
+| `FW_ENABLE_CROSSFILE` | `0` | Set to `1` to enable cross-file behavioral correlation within a package (capabilities split across files). Off by default: it false-positives on large legitimate packages that legitimately split credential reads, metadata fetches, and code-gen/spawn across files. Intended for curated dependency sets and the registry batch scanner. |
+| `FW_CACHE_POLICY` | `block` under `FW_MODE=enforce`, else `audit` | How `require.cache`/`Module._load` pre-seeding (a forged cache entry that bypasses `_compile` entirely) is handled: `block` refuses the substitution, `audit` allows it but logs, `allow` disables the check. |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
 | `FW_MODE` | `dev` | `enforce` fails closed (`process.exit(1)`) when not preloaded via `--require`; `dev` (default) warns loudly and continues. See the root README's "Enforcement mode vs Development mode" section. |
@@ -127,7 +155,8 @@ To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
 ## Known Bypasses
 
-This firewall provides defense-in-depth but cannot catch all threats. Documented bypasses require dynamic or AST-level analysis:
+This firewall provides defense-in-depth but cannot catch all threats. "Status" below is split by
+tier: default (signature + behavioral) and `FW_ENABLE_AST=1` (the opt-in AST tier).
 
 | Technique | Status |
 |-----------|--------|
@@ -138,11 +167,14 @@ This firewall provides defense-in-depth but cannot catch all threats. Documented
 | `.env`/credential read + network call | **BLOCKED** |
 | `eval` + `child_process.exec` | **BLOCKED** |
 | `curl \| bash` in host project's npm scripts | **BLOCKED** (root scripts only; not dependency install hooks) |
-| Bracket eval: `this["ev"+"al"]` | **BYPASSES** — needs AST analysis |
-| String concat: `global["ev"+"al"]` | **BYPASSES** — needs taint tracking |
-| Variable-alias eval: `const fn = eval; fn("code")` | **BYPASSES** — needs runtime Proxy / taint tracking |
-| Array join: `["ch","ild"].join("")` | **BYPASSES (per-module)** — may be caught by cross-module state |
-| Prototype chain: `eval.constructor` | **BYPASSES** — needs runtime instrumentation |
+| Bracket eval: `this["ev"+"al"]` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (bracket key folded, resolved eval access) |
+| String concat: `global["ev"+"al"]` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (concat folded) |
+| Variable-alias eval: `const fn = eval; fn("code")` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (alias tracking) |
+| Array join: `["ch","ild"].join("")` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (join folded, re-matched) |
+| Unicode-escape eval: `eval(...)` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (tokenizer decodes escapes) |
+| Prototype chain: `Object.getPrototypeOf(fn).constructor`, `constructor.constructor` | Default: **BYPASSES** · `FW_ENABLE_AST=1`: **BLOCKED** (constructor-chase resolved) |
+| AST span-exhaustion: real payload hidden behind >40 decoy spans | `FW_ENABLE_AST=1`: **BLOCKED** (highest-risk-first span scheduling; incomplete scans governed by `FW_AST_INCOMPLETE_POLICY`) |
+| WASM payloads, env-sourced config, network+process-exec taint chains, low-and-slow C2 | **BYPASSES even with `FW_ENABLE_AST=1`** — architectural limits of static/AST analysis; need runtime/dataflow instrumentation |
 
 See the monorepo's `docs/THREAT-COVERAGE.md` for the full, test-backed protection/bypass matrix.
 

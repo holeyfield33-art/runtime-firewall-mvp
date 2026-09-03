@@ -30,8 +30,40 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Gate: build the tarball and run the smoke suite against a clean install on every supported Node
+  # major BEFORE the publish job runs. A tarball that installs and enforces on Node 22 but breaks on
+  # 18/20/24 must never reach npm. read-only permissions -- this job never touches the registry.
+  smoke:
+    name: Tarball smoke test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        node: ['18', '20', '22', '24']
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install dependencies
+        run: npm ci
+      - name: Build the tarball and smoke-test a clean install
+        run: |
+          cd packages/fw-agent
+          TARBALL=$(npm pack --json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d)[0].filename))")
+          TARBALL_ABS="$PWD/$TARBALL"
+          tar tzf "$TARBALL" | grep -q 'package/.helios-baseline' || { echo "::error::.helios-baseline missing from the tarball"; exit 1; }
+          SMOKE_DIR="$(mktemp -d)"
+          ( cd "$SMOKE_DIR" && npm init -y >/dev/null && npm install "$TARBALL_ABS" )
+          node "$GITHUB_WORKSPACE/scripts/smoke-tarball.js" "$SMOKE_DIR"
+
   publish:
     name: Publish aletheia-firewall to npm
+    needs: smoke
     runs-on: ubuntu-latest
     # A GitHub Environment gives this job a distinct identity npm's trusted-publisher config can
     # be scoped to, and lets required-reviewer / branch protections be layered on later without
@@ -42,8 +74,11 @@ jobs:
       contents: write # required: to create the GitHub Release below
 
     steps:
+      # All third-party actions are pinned to a reviewed full commit SHA (not a mutable tag) so a
+      # compromised or silently-retagged action can never alter this security-sensitive publish.
+      # Update these pins only through reviewed Dependabot PRs. SHAs match .github/workflows/ci.yml.
       - name: Checkout tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -57,16 +92,17 @@ jobs:
           echo "OK: ${{ github.sha }} is on main."
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      # Trusted Publishing requires npm CLI >=11.5.1. Node 22's bundled npm version drifts by
-      # patch release, so pin the floor explicitly rather than trusting whatever setup-node ships.
-      - name: Ensure npm >= 11.5.1 (required for Trusted Publishing)
+      # Trusted Publishing requires npm CLI >=11.5.1. Node 22's bundled npm version drifts by patch
+      # release, so pin an EXACT npm version (not @latest, which is mutable and would silently change
+      # the tool that produces and signs the release) that satisfies the Trusted-Publishing floor.
+      - name: Pin npm CLI (Trusted Publishing requires >=11.5.1)
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11.5.1
           npm --version
 
       - name: Install dependencies
@@ -88,16 +124,38 @@ jobs:
       - name: Red-team regression suite
         run: npm run redteam
 
-      - name: Sanity-check the published tarball contents
+      # Build the EXACT artifact that will be published, inspect it, install it into a clean
+      # throwaway project, and run the tarball smoke suite against that install -- so a
+      # source/package divergence (a missing `files` entry, a stale .helios-baseline, a broken
+      # export) fails the release here instead of shipping a broken package. The same .tgz is then
+      # published verbatim in the next step; nothing is re-packed.
+      - name: Build the release tarball
+        id: pack
         working-directory: packages/fw-agent
-        run: npm pack --dry-run
+        run: |
+          TARBALL=$(npm pack --json | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d)[0].filename))")
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "Built $TARBALL"
+          echo "--- tarball contents ---"
+          tar tzf "$TARBALL"
+          # Fail fast if the self-integrity baseline was left out of the packed files.
+          tar tzf "$TARBALL" | grep -q 'package/.helios-baseline' || { echo "::error::.helios-baseline missing from the tarball"; exit 1; }
 
-      - name: Publish to npm (Trusted Publishing -- no token; npm auto-detects the OIDC context and attaches provenance)
+      - name: Install the tarball into a clean project and smoke-test it
         working-directory: packages/fw-agent
-        run: npm publish --access public
+        run: |
+          TARBALL="${{ steps.pack.outputs.tarball }}"
+          TARBALL_ABS="$PWD/$TARBALL"
+          SMOKE_DIR="$(mktemp -d)"
+          ( cd "$SMOKE_DIR" && npm init -y >/dev/null && npm install "$TARBALL_ABS" )
+          node "$GITHUB_WORKSPACE/scripts/smoke-tarball.js" "$SMOKE_DIR"
+
+      - name: Publish the exact tested tarball to npm (Trusted Publishing -- no token; npm auto-detects the OIDC context and attaches provenance)
+        working-directory: packages/fw-agent
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --access public
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@6da8fa9354ddfdc4aeace5fc48d7f679b5214090 # v2.4.1
         with:
           generate_release_notes: true
           body: |
