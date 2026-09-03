@@ -149,7 +149,7 @@ check('blocks (or cleanly skips below floor) a malicious ESM module', () => {
     // must have warned loudly that ESM is uncovered rather than silently claiming coverage.
     assert.strictEqual(res.status, 0, 'below the ESM floor the module loads unprotected (exit 0), got ' + res.status + '\nstderr:\n' + res.stderr);
     assert.ok(/ESM-LOADED/.test(res.stdout), 'below the ESM floor the module must actually load (proves the fixture is exercised):\n' + res.stdout);
-    assert.ok(/ESM|import|registerHooks/i.test(res.stderr), 'below the ESM floor the agent must warn that ESM is uncovered:\n' + res.stderr);
+    assert.ok(/ESM static\/dynamic import interception not active|run unprotected/i.test(res.stderr), 'below the ESM floor the agent must emit its specific ESM-uncovered warning:\n' + res.stderr);
     console.log('    (Node ' + process.versions.node + ' is below the ESM hook floor — coverage is CJS-only here, by design)');
   }
 });
