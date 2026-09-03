@@ -88,7 +88,7 @@ jobs:
           console.log('Self-integrity OK: ' + computed);
           "
 
-      - name: Pack dry run (verify 13-file manifest)
+      - name: Pack dry run (verify 14-file manifest)
         working-directory: packages/fw-agent
         run: npm pack --dry-run
 
