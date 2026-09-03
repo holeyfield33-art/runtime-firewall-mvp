@@ -56,13 +56,13 @@ install-time scanner and does not intercept package installation.
 
 Detection is signature + behavioral by default, so payloads can evade static matching through
 string-splitting, encoding, or indirection. Our adversarial corpus documents this honestly:
-**95/128 (74.2%) of malicious payloads caught, 33 known bypasses, 0 false positives** on the
+**105/142 (73.9%) of malicious payloads caught, 37 known bypasses, 0 false positives** on the
 current corpus with default settings — run it yourself with `npm run redteam`. An **opt-in**
-AST-detection tier (`FW_ENABLE_AST=1`, off by default pending soak) closes 21 of those 33
-bypasses — **116/128 (90.6%)** — run `npm run redteam:ast` to see it. Every remaining bypass
+AST-detection tier (`FW_ENABLE_AST=1`, off by default pending soak) closes 22 of those 37
+bypasses — **127/142 (89.4%)** — run `npm run redteam:ast` to see it. Every remaining bypass
 class is listed in [`red-team/README.md`](red-team/README.md) and
 [`docs/THREAT-COVERAGE.md`](docs/THREAT-COVERAGE.md). "0 false positives" means zero across the
-33 curated benign controls, not a measured general false-positive rate — which is one reason the
+36 curated benign controls, not a measured general false-positive rate — which is one reason the
 AST tier ships opt-in.
 
 ---

@@ -133,20 +133,21 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 Two numbers matter here, depending on configuration — `npm run redteam` measures the
 first, `npm run redteam:ast` the second:
 
-- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **95/128** malicious
-  payloads caught (**74.2%**), **zero false positives** on the 33 benign controls, after two
-  hardening rounds (see `docs/THREAT-COVERAGE.md` → "Phased hardening roadmap"; baseline
-  before round 1 was 69/125 ≈ 55%). **33** documented bypasses remain.
+- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **105/142** malicious
+  payloads caught (**73.9%**), **zero false positives** on the 36 benign controls, after two
+  hardening rounds plus the `redteam-kit-adapter` addition (see `docs/THREAT-COVERAGE.md` →
+  "Phased hardening roadmap"; baseline before round 1 was 69/125 ≈ 55% on the original corpus).
+  **37** documented bypasses remain.
 - **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak): adds a narrow, hand-rolled
-  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **21** of those 33 —
-  **116/128** caught (**90.6%**), still **zero false positives**. **12** bypasses remain
+  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **22** of those 37 —
+  **127/142** caught (**89.4%**), still **zero false positives**. **15** bypasses remain
   even with it enabled.
 
-> "Zero false positives" is measured against the **33 curated benign controls only** — it is not
+> "Zero false positives" is measured against the **36 curated benign controls only** — it is not
 > evidence of a general 0% false-positive rate on arbitrary packages. A broader benign-package soak
 > is a release gate before the AST tier could ship on by default.
 
-The 12 that remain regardless of configuration are fundamental limits of static/AST
+The 15 that remain regardless of configuration are fundamental limits of static/AST
 analysis and require runtime/dataflow instrumentation to close. They cluster into these
 classes:
 
