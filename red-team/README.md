@@ -60,10 +60,12 @@ A machine-readable `results/redteam-summary.json` is written on every run
 
 ## Corpus
 
-**161 payloads** across 6 threat categories (128 malicious, 33 benign), each
-category split into a core catalog and an `-extended` catalog under `corpus/`,
-all aggregated by `corpus/index.js` (which validates every entry and rejects
-duplicate ids):
+**178 payloads** across 7 threat categories (142 malicious, 36 benign — the
+extra 14 malicious and 3 benign entries beyond the original 128/33 come from
+`redteam-kit-adapter`, see [Redteam-kit adapter](#redteam-kit-adapter) below),
+each of the original 6 categories split into a core catalog and an
+`-extended` catalog under `corpus/`, all aggregated by `corpus/index.js`
+(which validates every entry and rejects duplicate ids):
 
 | Category            | Count | Covers                                                                             |
 |---------------------|:-----:|------------------------------------------------------------------------------------|
@@ -73,9 +75,36 @@ duplicate ids):
 | `dynamic-code-exec` |  33   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions, AST span-exhaustion decoy-flood (front/middle/end) |
 | `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
 | `benign-controls`   |  31   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress, Phase 3 AST false-positive guards (constructor typecheck, fromCharCode i18n, base64 data decode, array-join message, computed-property config, standalone indirect-eval) — must **not** block |
+| `redteam-kit-adapter` | 17  | reconstructed `aletheia-redteam-kit` attack techniques (dataset/workflow-config RCE, credential/env/path-traversal exfil, supply-chain lateral movement, dependency confusion, multi-stage encoding, Unicode-confusable identifier evasion) — see below |
 
 Files: `corpus/<category>.js` (core) and `corpus/<category>-extended.js` (the
 100+ added variants).
+
+### Redteam-kit adapter
+
+[`aletheia-redteam-kit`](https://github.com/holeyfield33-art/aletheia-redteam-kit)'s
+attack catalog (`attacks/`) targets LLM/agent chat endpoints — each entry is a
+natural-language instruction scored by refusal-keyword matching over a chat
+completion. That contract doesn't fit this firewall (a code scanner, not a
+chat API), so `corpus/redteam-kit-adapter.js` does not feed the kit's payload
+*text* through the detector. Instead, each entry **reconstructs the
+underlying technique** a real malicious npm package implementing that kit
+attack would contain as JS module source — the same "reconstruct, never copy"
+principle the kit's own `adapters/aegis/shim.mjs` uses for its non-chat
+targets. Each entry's `krcId` traces back to the source kit attack id
+(e.g. `PSE_004` → `attacks/advanced/supply_chain_sandbox_egress.json`).
+
+Running it (`node red-team/run.js --category redteam-kit-adapter`, with or
+without `--enable-ast`) surfaced three gaps that were not new: `env-secret-exfiltration`,
+`registry-mirror-substitution`, and `cross-sandbox-pivot` all reproduce
+already-documented accepted gaps in `docs/THREAT-COVERAGE.md` (bare env-read
++ egress, non-literal `require()`, and a lone outbound socket call are each
+statically indistinguishable from common legitimate patterns — see that doc
+for why). One entry, `confusable-identifier-evasion` (a Unicode-homoglyph
+alias for `eval`), is caught only under `FW_ENABLE_AST=1` — the same shape as
+the existing `dce-alias-eval` gap, confirming the Phase 3 AST tier generalizes
+to a genuinely new obfuscation variant this adapter introduced. All three
+benign-control entries pass clean (no false positives).
 
 ### Adding an attack
 

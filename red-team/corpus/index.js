@@ -16,6 +16,7 @@ const catalogs = [
   require('./supply-chain-extended'),
   require('./benign-controls'),
   require('./benign-controls-extended'),
+  require('./redteam-kit-adapter'),
 ];
 
 const corpus = catalogs.flat();

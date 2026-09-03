@@ -43,6 +43,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   controls. Reframed the package as opt-in runtime enforcement for supported module-loading paths,
   defense-in-depth rather than comprehensive malware prevention.
 
+### Added
+
+- **`redteam-kit-adapter` red-team category** (`red-team/corpus/redteam-kit-adapter.js`, 17
+  entries): reconstructs 14 attack techniques from the sibling
+  [`aletheia-redteam-kit`](https://github.com/holeyfield33-art/aletheia-redteam-kit) repo's attack
+  catalog (`attacks/`) as real malicious Node.js module source — the kit's own payloads are
+  natural-language instructions for an LLM chat target and don't apply to this firewall's
+  code-scanning threat model, so each entry reconstructs the underlying technique rather than
+  replaying the kit's text, mirroring the "reconstruct, never copy" principle the kit's own
+  `adapters/aegis/shim.mjs` uses for its non-chat targets. Plus 3 benign controls. Full run
+  (`npm run redteam` / `npm run redteam:ast`) is clean: 10/14 (default) and 11/14 (AST) malicious
+  entries caught, the remaining 3 reproduce already-documented accepted gaps in
+  `docs/THREAT-COVERAGE.md`, and the 1 gap closed only under `FW_ENABLE_AST=1`
+  (`confusable-identifier-evasion`, a Unicode-homoglyph `eval` alias) confirms the Phase 3 AST tier
+  generalizes to a new obfuscation variant beyond the original corpus. 0 false positives on the
+  benign controls. See `red-team/README.md` § Redteam-kit adapter.
+
+### Security
+
+- Bumped `fastify` to the latest patch in `packages/fw-control`'s private control-plane workspace,
+  closing a moderate schema-validation-bypass and `X-Forwarded-*`-spoofing advisory pair
+  (GHSA-w2qp-rph6-63g4, GHSA-3m5p-2c4r-xxw2), and ran `npm audit fix` for the transitive `fast-uri`
+  high-severity host-confusion/SSRF advisories pulled in via `ajv`. `packages/fw-control` is a
+  private dev-only workspace, never published — the zero-runtime-dependency `aletheia-firewall`
+  tarball (`packages/fw-agent`) was unaffected either way. `npm audit --omit=dev` now reports 0
+  vulnerabilities.
+
 ### CI
 
 - **Publish workflow hardening** (`.github/workflows/publish.yml`): pinned every third-party action
