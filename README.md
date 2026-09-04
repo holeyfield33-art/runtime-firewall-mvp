@@ -2,6 +2,8 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/dynamic/github-code-scanning/codeql?branch=main&label=CodeQL)](https://github.com/holeyfield33-art/runtime-firewall-mvp/security/code-scanning)
+[![npm version](https://img.shields.io/npm/v/aletheia-firewall)](https://www.npmjs.com/package/aletheia-firewall)
+[![Provenance: SLSA](https://img.shields.io/badge/provenance-SLSA%20attested-2ea44f)](https://www.npmjs.com/package/aletheia-firewall?activeTab=code)
 
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
@@ -428,6 +430,28 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 - [x] Phase 4: Behavioral state machine, quarantine enforcement, persistent audit log
 - [~] Phase 5: AST-level analysis for obfuscation-resistant detection — landed in `aletheia-firewall@0.6.0` as an **opt-in** tier (`FW_ENABLE_AST=1`, off by default pending soak). Closes 18 of the 30 previously-documented static-analysis bypasses (bracket/alias/unicode-escape eval, constructor-chase sandbox escapes, decode-primitive chains, literal string/path reassembly) when enabled; WASM, env-sourced config values, and network+process-exec taint chains remain open by design — see `docs/THREAT-COVERAGE.md` §4 and `packages/fw-agent/src/ast-scan.js`. Not marked done: it's a scoped, additional tier, not full AST coverage.
 - [ ] Phase 6: ClickHouse analytics integration & distributed policy propagation
+
+---
+
+## Provenance & Supply-Chain Security
+
+This is about how **this package itself** is published, distinct from the detection features above.
+
+Every release from `v0.6.0` onward is published via [npm Trusted Publishing](https://docs.npmjs.com/generating-provenance-statements) — a tag-triggered GitHub Actions workflow (`.github/workflows/publish.yml`) that negotiates a short-lived OIDC token with npm at publish time. There is no long-lived npm token stored anywhere, and the exact tarball that passes CI is the one published — no manual `npm publish` step in the release path.
+
+This produces a [SLSA provenance](https://slsa.dev/provenance/v1) attestation, publicly verifiable on the npm package page or via:
+
+```bash
+npm view aletheia-firewall@0.6.0 dist.attestations
+```
+
+or
+
+```bash
+npm audit signatures
+```
+
+after installing. This tells you the package was built by this repo's own CI from a specific, inspectable commit — not hand-published from someone's laptop.
 
 ---
 
