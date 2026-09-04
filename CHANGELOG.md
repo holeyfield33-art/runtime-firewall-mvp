@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-04
+
+Release A — security closure patch. Closes the audit's P0 findings: the sole explicit NO-SHIP
+condition (quarantine proxy crash), a package-identity spoofing bypass, two telemetry-worker
+crash paths, and a required pre-tag disclosure. Every fix below shipped as its own independent
+PR with its own regression tests (each verified to reproduce the underlying bug against the
+pre-fix code and pass only with the fix applied), merged to `main` only after its tests passed;
+this entry rolls them up. `npm test` and both `npm run redteam` / `npm run redteam:ast` are green
+on the combined result with 0 regressions and 0 false positives.
+
 ### Security
 
 - **F-1.1 / P0-5: disclosed the function-indirection correlation limitation and added an
