@@ -10,6 +10,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-21.1 / P0-3 + F-21.2 / P0-4: telemetry worker failures can no longer crash the protected
+  host.** Telemetry is optional/best-effort observability — nothing in the block/quarantine/
+  lockdown enforcement path reads it. Two failure modes previously bypassed that guarantee:
+  - **F-21.1**: `new Worker(sync-worker.js)` construction is synchronous and can itself throw
+    (resource exhaustion, a missing worker file, sandbox/permission errors); unwrapped, that
+    exception propagated straight out of module load and crashed the host on startup.
+  - **F-21.2**: `Worker` is an `EventEmitter`; with no `'error'` listener attached, an uncaught
+    exception inside the worker thread surfaced as an unhandled `'error'` event, which Node
+    re-throws into the *parent* process — a telemetry crash minutes into a long-running process
+    could take the protected host down with it.
+
+  Worker construction is now wrapped, an `'error'` listener is attached immediately after a
+  successful construction, and `emitTelemetry()`'s `postMessage()` call is guarded too (defense in
+  depth against a terminated-worker edge case). Either failure now degrades telemetry to a null,
+  inert state — `console.warn` once (never spammed on repeated failures) plus a
+  `TELEMETRY_DEGRADED` audit/telemetry event — while firewall enforcement keeps running
+  unaffected; the existing shutdown/exit handlers' `if (telemetryWorker)` guards already no-op
+  correctly once degraded. Added `telemetry-worker-failure-test.js`: two real, spawned
+  `--require`-preloaded firewalled-child regressions (one per finding) that monkeypatch
+  `Module._load` to intercept `require('worker_threads')` and exercise the actual Node
+  EventEmitter unhandled-`'error'`-throws hazard, confirmed to reproduce the pre-fix crash and
+  pass only with the fix; each also asserts a BLOCK-policy module load still gets blocked after
+  telemetry degrades, proving enforcement is unaffected.
+  - **Follow-up (found by automated PR review):** `degradeTelemetry()`'s cleanup call to
+    `worker.terminate()` returns a Promise that can itself reject (the worker is already dead or
+    mid-teardown) — an unhandled rejection there would reintroduce the exact "telemetry failure
+    crashes the host" hazard this fix exists to close; the original try/catch only covered a
+    synchronous throw, not a rejected Promise. Now explicitly swallowed. The F-21.2 regression
+    test's simulated worker now rejects on `terminate()`, confirmed to reproduce an unhandled
+    rejection crash against the prior commit and pass only with this follow-up applied.
+
 - **F-1.2 / P0-2 (+ P0-6): package-manifest identity can no longer spoof past policy.**
   `resolveModuleIdentity()`'s canonical `"name@version:relPath"` identity used the package's own
   self-reported `package.json` `name` — attacker-controlled for any installed dependency. A
