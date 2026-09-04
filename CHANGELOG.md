@@ -10,6 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-5.1 / P0-1: fixed the QUARANTINE proxy's callable/constructible crash (audit's sole
+  explicit NO-SHIP condition).** `QuarantineStub.createProxy()` backed its Proxy with a plain
+  object (`{}`) target. A Proxy is only callable/constructible if its *target* is — traps are
+  never consulted otherwise — so calling or `new`-ing a function/class-shaped quarantined
+  dependency threw a native, uncatchable-by-the-firewall TypeError instead of being safely
+  neutered. The target is now a real function (both callable and constructible), with new
+  `apply`/`construct` traps that record the interception and gracefully degrade (return `null`
+  / a fresh inert quarantine proxy) without ever executing the real quarantined code. That
+  target unavoidably owns one non-configurable own property (`prototype`, spec-mandated for
+  every ordinary function); the `ownKeys`/`getOwnPropertyDescriptor`/`has`/`deleteProperty`/
+  `defineProperty` traps now defer to the target's real descriptor for any non-configurable (or,
+  once frozen, any real) own key instead of unconditionally pretending it's absent — the same
+  Proxy-invariant-violation crash class as F-63, now closed for the one key that a callable
+  target inescapably carries. Existing property/read/write/enumeration behavior for every other
+  (forgeable) key is unchanged. Added regression coverage to `quarantine-unit-test.js`: proxy()
+  and `new proxy()` no longer throw and never execute real code; `prototype`'s presence,
+  non-deletability, and descriptor survive `Object.keys()`/`Reflect.ownKeys()`/
+  `getOwnPropertyDescriptors()` without an invariant-violation TypeError.
+  - **Follow-up (found by automated PR review, same class of bug):** `defineProperty` still
+    unconditionally pretended success for an explicit `configurable:false` request or for adding a
+    genuinely new key once the proxy is non-extensible — both are invariant violations in their
+    own right, independent of whether the key was already a real target key. This is exactly what
+    `Object.freeze(proxy)`/`Object.seal(proxy)` trigger internally (they `defineProperty` every own
+    key, including the callable target's forgeable `length`/`name`, with `configurable:false`), so
+    hardening a quarantined proxy the ordinary way crashed the host. `defineProperty` now forwards
+    honestly (real success/failure) whenever pretending would violate an invariant — a real
+    non-configurable target key, an explicit `configurable:false` in the incoming descriptor, or a
+    non-extensible target — not just for the one key already forwarded before. `get`/`set` were
+    updated to match: once a key is genuinely non-configurable **and** non-writable on the target
+    (e.g. `prototype` after `Object.freeze()`), they now report/enforce the real value instead of
+    continuing to lie with the synthetic inert stub, which is itself an invariant violation once a
+    property is that hardened. Added regression coverage for `Object.freeze`/`Object.seal`, for
+    `defineProperty` adding a new key on a non-extensible proxy, and for `get`/`set` against a
+    directly-hardened `prototype` — confirmed to reproduce the exact TypeError against the
+    prior fix and pass only with this follow-up applied.
+
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
   (`MAX_SPANS_PER_FILE = 40`), so an attacker could place >40 harmless prescreen-matching decoy
