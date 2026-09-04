@@ -435,6 +435,19 @@ const verifiedModulePaths = new Set();
 // ── Core module interception hook ─────────────────────────────────────────────────────────────
 const originalCompile = Module.prototype._compile;
 
+// Shared by packageKeyForFilename() and the install-identity check below: given a normalized
+// ('/'-separated) path, returns the package name owning its LAST node_modules segment — nested
+// node_modules is naturally resolved correctly since lastIndexOf finds the one closest to the
+// leaf, i.e. the actual installed package, not some ancestor's private copy of a dependency — or
+// null if the path is not under any node_modules directory at all.
+function packageNameFromNodeModulesPath(norm) {
+  const idx = norm.lastIndexOf('/node_modules/');
+  if (idx === -1) return null;
+  const rest = norm.slice(idx + '/node_modules/'.length).split('/');
+  if (rest[0] && rest[0][0] === '@') return rest[0] + '/' + (rest[1] || '');
+  return rest[0] || null;
+}
+
 // Derive the npm-package key for a filename so cross-file correlation stays scoped to ONE
 // package. The behavioral tracker is reset per dependency-tree root (below), which spans the
 // whole app — without this scoping, cross-file rules would pair a config-reading module with any
@@ -442,12 +455,7 @@ const originalCompile = Module.prototype._compile;
 // (no node_modules segment): the developer's own files reading config and making network calls
 // across files is normal, not the split-attack threat model, so cross-file is skipped for them.
 function packageKeyForFilename(filename) {
-  const norm = String(filename).replace(/\\/g, '/');
-  const idx = norm.lastIndexOf('/node_modules/');
-  if (idx === -1) return null;
-  const rest = norm.slice(idx + '/node_modules/'.length).split('/');
-  if (rest[0] && rest[0][0] === '@') return rest[0] + '/' + (rest[1] || '');
-  return rest[0] || null;
+  return packageNameFromNodeModulesPath(String(filename).replace(/\\/g, '/'));
 }
 
 // ── P0-2: canonical package identity ──────────────────────────────────────────────────────────
@@ -461,7 +469,7 @@ function packageKeyForFilename(filename) {
 // re-parsing package.json for every file in a package would add a stat+parse per require() call
 // instead of one per package directory (path-compressed: every directory walked on the way to a
 // resolved package.json is memoized to the same result).
-const packageJsonCache = new Map(); // dir -> { name, version, pkgDir } | null
+const packageJsonCache = new Map(); // dir -> { name, version, pkgDir, installName } | null
 
 function findPackageJsonInfo(startDir) {
   const visitedDirs = [];
@@ -481,11 +489,32 @@ function findPackageJsonInfo(startDir) {
       pkg = null;
     }
     if (pkg) {
-      result = {
-        name: typeof pkg.name === 'string' ? pkg.name : null,
-        version: typeof pkg.version === 'string' ? pkg.version : null,
-        pkgDir: dir,
-      };
+      const name = typeof pkg.name === 'string' ? pkg.name : null;
+      // F-1.2 (P0-2): the name a package installed under node_modules claims for itself in its
+      // OWN package.json is attacker-controlled — a malicious dependency can self-report a
+      // trusted package's name to try to outrank the filesystem-derived identity that policy
+      // (BLOCK/QUARANTINE) rules are keyed on. installName is derived purely from *where npm put
+      // it on disk*, which the package's own manifest cannot influence, and is the required
+      // invariant: filesystem/install identity must not be overridden merely because the package
+      // claims another name.
+      const installName = packageNameFromNodeModulesPath(String(dir).replace(/\\/g, '/'));
+      if (installName && name && installName !== name) {
+        // Best-effort forensic signal, not an enforcement decision by itself — resolveModuleIdentity()
+        // below already refuses to trust the claimed name regardless of whether this fires.
+        try {
+          auditLog.write({
+            eventType: 'PACKAGE_IDENTITY_MISMATCH',
+            timestamp: Date.now(),
+            installName,
+            claimedName: name,
+            pkgDir: dir,
+          });
+          emitTelemetry('PACKAGE_IDENTITY_MISMATCH', installName, null, { claimedName: name });
+        } catch (e) {
+          // Never let a forensic-logging failure break module resolution.
+        }
+      }
+      result = { name, version: typeof pkg.version === 'string' ? pkg.version : null, pkgDir: dir, installName };
       break;
     }
     const parent = path.dirname(dir);
@@ -500,12 +529,22 @@ function findPackageJsonInfo(startDir) {
 // walking up from the file's directory; otherwise falls back to the normalized absolute path
 // (never throws — first-party app files with no ancestor package.json still get a sane, stable
 // identity string rather than crashing the hot path).
+//
+// F-1.2 (P0-2): the identity's *name* component is the filesystem/install-derived name
+// (info.installName) whenever one is available, never the package's own self-reported
+// package.json `name` — otherwise a malicious package could spoof a trusted package's name in
+// its manifest to dodge a BLOCK/QUARANTINE rule keyed on its real, installed identity, or to
+// piggyback on an unrelated rule scoped to the name it claims. First-party app code and packages
+// resolved outside any node_modules tree (installName is null — e.g. an npm-workspace symlink
+// Node has already resolved to its real, non-node_modules path) have no install identity to
+// defer to, so the manifest name is used as before.
 function resolveModuleIdentity(filename) {
   const info = findPackageJsonInfo(path.dirname(filename));
-  if (info && info.name) {
+  if (info && (info.installName || info.name)) {
     const relPath = path.relative(info.pkgDir, filename).replace(/\\/g, '/');
     const version = info.version ? `@${info.version}` : '';
-    return `${info.name}${version}:${relPath}`;
+    const name = info.installName || info.name;
+    return `${name}${version}:${relPath}`;
   }
   return String(filename).replace(/\\/g, '/');
 }

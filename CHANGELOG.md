@@ -10,6 +10,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-1.2 / P0-2 (+ P0-6): package-manifest identity can no longer spoof past policy.**
+  `resolveModuleIdentity()`'s canonical `"name@version:relPath"` identity used the package's own
+  self-reported `package.json` `name` — attacker-controlled for any installed dependency. A
+  malicious package could self-report a trusted package's name (and, if that name has an
+  operator-pinned canonical-identity-level rule, an exact version) to make its canonical identity
+  collide with an unrelated, less-restrictive rule; because that rule is checked at *higher*
+  precedence than the folder/packageKey-level rule that would otherwise catch it, the real
+  BLOCK/QUARANTINE rule for the malicious package's actual installed identity was never reached.
+  The identity's name component is now derived purely from **where npm actually put the package
+  on disk** (the node_modules folder segment, nested and scoped packages handled, closest-to-leaf
+  resolution for transitive deps) and the manifest-claimed name can no longer override it; a
+  disagreement between the two is recorded as a `PACKAGE_IDENTITY_MISMATCH` audit/telemetry event
+  (best-effort, never blocking on its own). First-party app code and packages resolved outside any
+  node_modules tree (e.g. an npm-workspace symlink Node has already resolved away) have no install
+  identity to defer to and keep the previous manifest-name behavior — this only closes the gap for
+  packages actually installed under `node_modules`. Also closes P0-6 (ensuring this limitation
+  isn't silently unaddressed) via this code fix. Added regression coverage to
+  `package-identity-unit-test.js`: unscoped/scoped/nested-node_modules spoofing at the identity
+  level, plus two end-to-end spawned-child regressions reproducing the exact BLOCK/QUARANTINE
+  bypass shape described above and confirming it no longer bypasses either rule.
+
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
   (`MAX_SPANS_PER_FILE = 40`), so an attacker could place >40 harmless prescreen-matching decoy
