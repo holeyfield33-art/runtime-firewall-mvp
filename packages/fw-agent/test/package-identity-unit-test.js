@@ -118,6 +118,63 @@ const agent = require(AGENT_PATH);
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ── Part 1b: F-1.2 (P0-2) — manifest identity spoofing cannot override install identity ───────
+// A package physically installed under node_modules/<real-folder-name> can self-report an
+// arbitrary, different `name` in its own package.json. The canonical identity's name component
+// must come from where npm actually put it on disk, never from the (attacker-controlled)
+// manifest, or a malicious package could impersonate a trusted one to dodge policy.
+(function partOneB() {
+  const tmp = mkTmpDir('fw-identity-spoof-unit-');
+
+  check('unscoped package mismatch: install-derived folder name wins over a spoofed manifest name', () => {
+    const pkgDir = writePackage(tmp, path.join('node_modules', 'real-folder-name'), 'claimed-fake-name', '1.0.0', 'module.exports = 1;\n');
+    const identity = agent.resolveModuleIdentity(path.join(pkgDir, 'index.js'));
+    assert.strictEqual(identity, 'real-folder-name@1.0.0:index.js', 'identity must use the install folder name, not the manifest-claimed name');
+  });
+
+  check('scoped package mismatch: install-derived scoped folder name wins over a spoofed manifest name', () => {
+    const pkgDir = writePackage(tmp, path.join('node_modules', '@real-scope', 'real-name'), '@fake-scope/fake-name', '1.0.0', 'module.exports = 1;\n');
+    const identity = agent.resolveModuleIdentity(path.join(pkgDir, 'index.js'));
+    assert.strictEqual(identity, '@real-scope/real-name@1.0.0:index.js', 'identity must use the install scope/name, not the manifest-claimed scope/name');
+  });
+
+  check('nested node_modules: a transitive dependency spoofing its name still resolves to its own nested install identity', () => {
+    const outerDir = writePackage(tmp, path.join('node_modules', 'outer-pkg'), 'outer-pkg', '1.0.0', 'module.exports = 1;\n');
+    const innerDir = writePackage(
+      tmp,
+      path.join('node_modules', 'outer-pkg', 'node_modules', 'inner-real-name'),
+      'inner-claimed-name',
+      '2.0.0',
+      'module.exports = 2;\n'
+    );
+    const innerIdentity = agent.resolveModuleIdentity(path.join(innerDir, 'index.js'));
+    const outerIdentity = agent.resolveModuleIdentity(path.join(outerDir, 'index.js'));
+    assert.strictEqual(innerIdentity, 'inner-real-name@2.0.0:index.js', 'nested dependency must resolve to its own (closest) node_modules folder name');
+    assert.notStrictEqual(innerIdentity, outerIdentity, 'nested spoofed package must not collide with its parent package identity');
+  });
+
+  check('honest package (manifest name matches install folder) resolves exactly as before', () => {
+    const pkgDir = writePackage(tmp, path.join('node_modules', 'honest-pkg'), 'honest-pkg', '1.0.0', 'module.exports = 1;\n');
+    const identity = agent.resolveModuleIdentity(path.join(pkgDir, 'index.js'));
+    assert.strictEqual(identity, 'honest-pkg@1.0.0:index.js', 'no regression for packages whose manifest name matches their install location');
+  });
+
+  check('review finding: a package.json living directly at a scope directory (no name segment beneath it) never produces a malformed "@scope/" identity', () => {
+    // Edge case flagged by automated PR review: packageNameFromNodeModulesPath() split on '/'
+    // could previously return "@scope/" (scope with no package name) when the node_modules path
+    // ends exactly at the scope directory instead of a real scoped-package subfolder underneath
+    // it -- a malformed identity/policy key. installName must come back null (not a real package),
+    // falling back to the manifest name exactly like any other non-node_modules-derivable path.
+    const pkgDir = writePackage(tmp, path.join('node_modules', '@scope-only'), 'whatever-manifest-claims', '1.0.0', 'module.exports = 1;\n');
+    let identity;
+    assert.doesNotThrow(() => { identity = agent.resolveModuleIdentity(path.join(pkgDir, 'index.js')); });
+    assert.ok(!identity.startsWith('@scope-only/'), 'must never produce a malformed scope-only identity (e.g. "@scope-only/"): ' + identity);
+    assert.strictEqual(identity, 'whatever-manifest-claims@1.0.0:index.js', 'falls back to the manifest name when no real install name is derivable');
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 // ── Part 2: TP/collision via a real signed policy + spawned firewalled child ──────────────────
 (function partTwo() {
   const tmp = mkTmpDir('fw-identity-collision-');
@@ -142,6 +199,111 @@ const agent = require(AGENT_PATH);
     assert.ok(result.pkgAError && result.pkgAError.includes('[Firewall]'), 'pkg-a must be blocked: ' + JSON.stringify(result));
     assert.strictEqual(result.pkgBError, null, 'pkg-b must load cleanly: ' + JSON.stringify(result));
     assert.strictEqual(result.pkgBExports, 'pkg-b-loaded', 'pkg-b must actually execute: ' + JSON.stringify(result));
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ── Part 2b: F-1.2 (P0-2) TP — a spoofed manifest name cannot bypass a BLOCK rule ──────────────
+// Real-world bypass shape this closes: an operator has BOTH (1) a BLOCK rule keyed on the real,
+// installed name of a known-malicious package, and (2) an unrelated, less-restrictive
+// canonical-identity-level rule pinned for some OTHER, trusted package at an exact version. Before
+// this fix, a malicious package installed under the BLOCKed folder name could self-report that
+// trusted package's name+version in its own package.json — its canonicalIdentity (manifest-derived)
+// would then collide with the trusted package's pinned rule, which is checked at HIGHER precedence
+// than the folder/packageKey-level BLOCK rule, so the malicious package's real BLOCK rule was never
+// even reached.
+(function partTwoB() {
+  const tmp = mkTmpDir('fw-identity-spoof-block-');
+  // Installed folder name is the one an operator would actually BLOCK.
+  writePackage(tmp, path.join('node_modules', 'evil-pkg'), 'trusted-lib', '1.0.0', 'module.exports = "evil-pkg-loaded";\n');
+
+  const signed = signPolicy({
+    'evil-pkg': 'BLOCK', // keyed on the real, install-derived identity
+    'trusted-lib@1.0.0:index.js': 'OBSERVE', // an unrelated operator-pinned rule for the name being spoofed
+  }, DEV_PRIVATE_KEY);
+  fs.writeFileSync(path.join(tmp, 'policy.signed.json'), JSON.stringify(signed, null, 2));
+
+  const childScript = path.join(tmp, 'child.js');
+  fs.writeFileSync(childScript, `
+    const path = require('path');
+    let error = null, exportsSeen = null;
+    try { exportsSeen = require(path.join(process.cwd(), 'node_modules', 'evil-pkg', 'index.js')); } catch (e) { error = e.message; }
+    console.log('RESULT:' + JSON.stringify({ error, exportsSeen }));
+  `);
+
+  const res = runFirewalledChild(tmp, childScript);
+  check('F-1.2 TP: a manifest self-reporting a trusted, differently-policied name cannot bypass the real package\'s BLOCK rule', () => {
+    const result = parseResult(res.stdout);
+    assert.ok(result.error && result.error.includes('[Firewall]'), 'the malicious package must still be BLOCKed despite the spoofed manifest name: ' + JSON.stringify(result));
+    assert.notStrictEqual(result.exportsSeen, 'evil-pkg-loaded', 'the real quarantined/blocked code must never execute: ' + JSON.stringify(result));
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ── Part 2c: F-1.2 (P0-2) TP — a spoofed manifest name cannot bypass a QUARANTINE rule ─────────
+(function partTwoC() {
+  const tmp = mkTmpDir('fw-identity-spoof-quarantine-');
+  writePackage(tmp, path.join('node_modules', 'evil-pkg-2'), 'trusted-lib-2', '1.0.0', 'module.exports = "evil-pkg-2-loaded";\n');
+
+  const signed = signPolicy({
+    'evil-pkg-2': 'QUARANTINE',
+    'trusted-lib-2@1.0.0:index.js': 'OBSERVE',
+  }, DEV_PRIVATE_KEY);
+  fs.writeFileSync(path.join(tmp, 'policy.signed.json'), JSON.stringify(signed, null, 2));
+
+  const childScript = path.join(tmp, 'child.js');
+  fs.writeFileSync(childScript, `
+    const path = require('path');
+    let error = null, exportsSeen = null;
+    try { exportsSeen = require(path.join(process.cwd(), 'node_modules', 'evil-pkg-2', 'index.js')); } catch (e) { error = e.message; }
+    console.log('RESULT:' + JSON.stringify({ error, exportsType: typeof exportsSeen, exportsSeen: typeof exportsSeen === 'string' ? exportsSeen : '(non-string, quarantine stub)' }));
+  `);
+
+  const res = runFirewalledChild(tmp, childScript);
+  check('F-1.2 TP: a manifest self-reporting a trusted, differently-policied name cannot bypass the real package\'s QUARANTINE rule', () => {
+    const result = parseResult(res.stdout);
+    assert.strictEqual(result.error, null, 'QUARANTINE never throws (F-5.1) -- require() must resolve, not error: ' + JSON.stringify(result));
+    assert.notStrictEqual(result.exportsType, 'string', 'the real evil-pkg-2 export string must never surface -- module.exports must be the inert quarantine stub: ' + JSON.stringify(result));
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ── Part 2d: npm-alias follow-up (found by automated PR review) — an operator rule keyed on a
+// package's TRUE (registry/manifest) identity must still apply to an npm-aliased install ────────
+// npm alias installs (`"my-react": "npm:react@18.0.0"` in the CONSUMING project's OWN
+// package.json -- see npm's package-spec docs on aliases) legitimately install a package under a
+// folder name that differs from its own package.json `name`. Unlike F-1.2's spoofing, the alias
+// is chosen by the trusted consumer, not the dependency -- so install-identity-only resolution
+// (the plain F-1.2 fix, with no manifest fallback at all) would let an aliased install silently
+// dodge an operator's BLOCK rule keyed on the package's true name, a real regression the escalate-
+// only manifest-identity check in resolveModulePolicy() exists to close.
+(function partTwoD() {
+  const tmp = mkTmpDir('fw-identity-alias-');
+  // Simulates `"my-react": "npm:react@18.0.0"`: installed under node_modules/my-react, but its
+  // OWN package.json (published by the real "react" maintainers) truthfully says name: "react".
+  writePackage(tmp, path.join('node_modules', 'my-react'), 'react', '18.0.0', 'module.exports = "aliased-react-loaded";\n');
+
+  // The operator's rule targets the package's TRUE, manifest-declared identity -- not the
+  // consumer-chosen alias folder name, which the operator has no reason to know about in advance.
+  const signed = signPolicy({ 'react@18.0.0:index.js': 'BLOCK' }, DEV_PRIVATE_KEY);
+  fs.writeFileSync(path.join(tmp, 'policy.signed.json'), JSON.stringify(signed, null, 2));
+
+  const childScript = path.join(tmp, 'child.js');
+  fs.writeFileSync(childScript, `
+    const path = require('path');
+    let error = null, exportsSeen = null;
+    try { exportsSeen = require(path.join(process.cwd(), 'node_modules', 'my-react', 'index.js')); } catch (e) { error = e.message; }
+    console.log('RESULT:' + JSON.stringify({ error, exportsSeen }));
+  `);
+
+  const res = runFirewalledChild(tmp, childScript);
+  check('npm-alias TP: a BLOCK rule keyed on the package\'s true manifest identity still applies to an aliased install folder', () => {
+    const result = parseResult(res.stdout);
+    assert.ok(result.error && result.error.includes('[Firewall]'), 'the aliased install must still be blocked via its true manifest identity: ' + JSON.stringify(result));
+    assert.notStrictEqual(result.exportsSeen, 'aliased-react-loaded', 'the real aliased code must never execute: ' + JSON.stringify(result));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
