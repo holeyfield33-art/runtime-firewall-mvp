@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-09-04
+
+Release A — security closure patch. Closes the audit's P0 findings: the sole explicit NO-SHIP
+condition (quarantine proxy crash), a package-identity spoofing bypass, two telemetry-worker
+crash paths, and a required pre-tag disclosure. Every fix below shipped as its own independent
+PR with its own regression tests (each verified to reproduce the underlying bug against the
+pre-fix code and pass only with the fix applied), merged to `main` only after its tests passed;
+this entry rolls them up. `npm test` and both `npm run redteam` / `npm run redteam:ast` are green
+on the combined result with 0 regressions and 0 false positives.
+
 ### Security
 
 - **F-1.1 / P0-5: disclosed the function-indirection correlation limitation and added an
@@ -682,7 +692,8 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.3.0...v0.4.0
