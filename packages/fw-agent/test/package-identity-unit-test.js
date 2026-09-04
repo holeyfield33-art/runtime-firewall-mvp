@@ -159,6 +159,19 @@ const agent = require(AGENT_PATH);
     assert.strictEqual(identity, 'honest-pkg@1.0.0:index.js', 'no regression for packages whose manifest name matches their install location');
   });
 
+  check('review finding: a package.json living directly at a scope directory (no name segment beneath it) never produces a malformed "@scope/" identity', () => {
+    // Edge case flagged by automated PR review: packageNameFromNodeModulesPath() split on '/'
+    // could previously return "@scope/" (scope with no package name) when the node_modules path
+    // ends exactly at the scope directory instead of a real scoped-package subfolder underneath
+    // it -- a malformed identity/policy key. installName must come back null (not a real package),
+    // falling back to the manifest name exactly like any other non-node_modules-derivable path.
+    const pkgDir = writePackage(tmp, path.join('node_modules', '@scope-only'), 'whatever-manifest-claims', '1.0.0', 'module.exports = 1;\n');
+    let identity;
+    assert.doesNotThrow(() => { identity = agent.resolveModuleIdentity(path.join(pkgDir, 'index.js')); });
+    assert.ok(!identity.startsWith('@scope-only/'), 'must never produce a malformed scope-only identity (e.g. "@scope-only/"): ' + identity);
+    assert.strictEqual(identity, 'whatever-manifest-claims@1.0.0:index.js', 'falls back to the manifest name when no real install name is derivable');
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
@@ -253,6 +266,44 @@ const agent = require(AGENT_PATH);
     const result = parseResult(res.stdout);
     assert.strictEqual(result.error, null, 'QUARANTINE never throws (F-5.1) -- require() must resolve, not error: ' + JSON.stringify(result));
     assert.notStrictEqual(result.exportsType, 'string', 'the real evil-pkg-2 export string must never surface -- module.exports must be the inert quarantine stub: ' + JSON.stringify(result));
+  });
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
+// ── Part 2d: npm-alias follow-up (found by automated PR review) — an operator rule keyed on a
+// package's TRUE (registry/manifest) identity must still apply to an npm-aliased install ────────
+// npm alias installs (`"my-react": "npm:react@18.0.0"` in the CONSUMING project's OWN
+// package.json -- see npm's package-spec docs on aliases) legitimately install a package under a
+// folder name that differs from its own package.json `name`. Unlike F-1.2's spoofing, the alias
+// is chosen by the trusted consumer, not the dependency -- so install-identity-only resolution
+// (the plain F-1.2 fix, with no manifest fallback at all) would let an aliased install silently
+// dodge an operator's BLOCK rule keyed on the package's true name, a real regression the escalate-
+// only manifest-identity check in resolveModulePolicy() exists to close.
+(function partTwoD() {
+  const tmp = mkTmpDir('fw-identity-alias-');
+  // Simulates `"my-react": "npm:react@18.0.0"`: installed under node_modules/my-react, but its
+  // OWN package.json (published by the real "react" maintainers) truthfully says name: "react".
+  writePackage(tmp, path.join('node_modules', 'my-react'), 'react', '18.0.0', 'module.exports = "aliased-react-loaded";\n');
+
+  // The operator's rule targets the package's TRUE, manifest-declared identity -- not the
+  // consumer-chosen alias folder name, which the operator has no reason to know about in advance.
+  const signed = signPolicy({ 'react@18.0.0:index.js': 'BLOCK' }, DEV_PRIVATE_KEY);
+  fs.writeFileSync(path.join(tmp, 'policy.signed.json'), JSON.stringify(signed, null, 2));
+
+  const childScript = path.join(tmp, 'child.js');
+  fs.writeFileSync(childScript, `
+    const path = require('path');
+    let error = null, exportsSeen = null;
+    try { exportsSeen = require(path.join(process.cwd(), 'node_modules', 'my-react', 'index.js')); } catch (e) { error = e.message; }
+    console.log('RESULT:' + JSON.stringify({ error, exportsSeen }));
+  `);
+
+  const res = runFirewalledChild(tmp, childScript);
+  check('npm-alias TP: a BLOCK rule keyed on the package\'s true manifest identity still applies to an aliased install folder', () => {
+    const result = parseResult(res.stdout);
+    assert.ok(result.error && result.error.includes('[Firewall]'), 'the aliased install must still be blocked via its true manifest identity: ' + JSON.stringify(result));
+    assert.notStrictEqual(result.exportsSeen, 'aliased-react-loaded', 'the real aliased code must never execute: ' + JSON.stringify(result));
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

@@ -444,7 +444,12 @@ function packageNameFromNodeModulesPath(norm) {
   const idx = norm.lastIndexOf('/node_modules/');
   if (idx === -1) return null;
   const rest = norm.slice(idx + '/node_modules/'.length).split('/');
-  if (rest[0] && rest[0][0] === '@') return rest[0] + '/' + (rest[1] || '');
+  if (rest[0] && rest[0][0] === '@') {
+    // A scope directory with no package segment underneath it (e.g. the path ends at
+    // ".../node_modules/@scope") is not a real installed package — reporting "@scope/" would be a
+    // malformed identity, so treat it as "not a package" (null) rather than a real name.
+    return rest[1] ? rest[0] + '/' + rest[1] : null;
+  }
   return rest[0] || null;
 }
 
@@ -549,6 +554,29 @@ function resolveModuleIdentity(filename) {
   return String(filename).replace(/\\/g, '/');
 }
 
+// F-1.2 follow-up (npm aliases): an alias install (`"my-react": "npm:react@18.0.0"` in the
+// CONSUMING project's own package.json — npm docs: "package-spec#aliases") legitimately installs
+// a package under a folder name that differs from its own registry-published package.json `name`.
+// Unlike spoofing, the alias is chosen by the trusted consuming project, not by the dependency
+// itself, so an operator rule keyed on the package's true, manifest-declared identity (e.g.
+// "react@18.0.0:index.js") must keep applying to an aliased install. resolveModulePolicy() below
+// uses this only to ESCALATE a verdict, never to de-escalate one — so it can restore a rule an
+// alias would otherwise dodge, without reopening the F-1.2 spoofing bypass this file just closed.
+function resolveManifestIdentity(filename) {
+  const info = findPackageJsonInfo(path.dirname(filename));
+  if (info && info.name) {
+    const relPath = path.relative(info.pkgDir, filename).replace(/\\/g, '/');
+    const version = info.version ? `@${info.version}` : '';
+    return `${info.name}${version}:${relPath}`;
+  }
+  return null;
+}
+
+const RULE_SEVERITY = { BLOCK: 3, QUARANTINE: 2, OBSERVE: 1 };
+function moreRestrictiveRule(a, b) {
+  return (RULE_SEVERITY[b] || 0) > (RULE_SEVERITY[a] || 0) ? b : a;
+}
+
 // ── F-79: shared scan-and-policy core (CJS _compile, ESM load, ESM-interop-CJS) ────────────────
 // One implementation for all three so the hook sites cannot drift (the engine-sync discipline).
 // resolveModulePolicy() does the identical policy lookup; scanModuleAndEnforce() does the identical
@@ -571,6 +599,16 @@ function resolveModulePolicy(filename) {
   } else if (policyMap.has(requestName)) {
     configuredRule = policyMap.get(requestName);
   }
+
+  // npm-alias follow-up to F-1.2: escalate-only check against the package's manifest-declared
+  // (registry) identity when it differs from the install-derived one above. Never de-escalates —
+  // that would reopen the exact spoofing bypass F-1.2 closed — but a rule an operator pinned on
+  // the package's TRUE name (e.g. an alias's registry name) must still apply to it.
+  const manifestIdentity = resolveManifestIdentity(filename);
+  if (manifestIdentity && manifestIdentity !== canonicalIdentity && policyMap.has(manifestIdentity)) {
+    configuredRule = moreRestrictiveRule(configuredRule, policyMap.get(manifestIdentity));
+  }
+
   return { requestName, canonicalIdentity, packageKey, configuredRule };
 }
 

@@ -30,6 +30,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `package-identity-unit-test.js`: unscoped/scoped/nested-node_modules spoofing at the identity
   level, plus two end-to-end spawned-child regressions reproducing the exact BLOCK/QUARANTINE
   bypass shape described above and confirming it no longer bypasses either rule.
+  - **Follow-up (found by automated PR review):** (1) `packageNameFromNodeModulesPath()` could
+    return a malformed `"@scope/"` identity for a path ending exactly at a scope directory with no
+    package-name segment beneath it — now returns `null` (not a real package) for that shape,
+    confirmed to reproduce the malformed identity against the prior commit. (2) **npm aliases**
+    (`"my-react": "npm:react@18.0.0"` in the *consuming* project's own package.json) legitimately
+    install a package under a folder name that differs from its own manifest `name` — unlike
+    spoofing, the alias is chosen by the trusted consumer, not the dependency, so an install-
+    identity-only fix would let an aliased install silently dodge an operator's rule keyed on the
+    package's true name. `resolveModulePolicy()` now also checks the manifest-declared identity,
+    but **escalate-only** — it can only make a verdict *more* restrictive than the install-derived
+    one, never less, so it restores alias-targeted rules without reopening the spoofing bypass.
+    Added regression coverage for both.
 
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
