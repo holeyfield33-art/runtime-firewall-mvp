@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-1.2 / P0-2 (+ P0-6): package-manifest identity can no longer spoof past policy.**
+  `resolveModuleIdentity()`'s canonical `"name@version:relPath"` identity used the package's own
+  self-reported `package.json` `name` — attacker-controlled for any installed dependency. A
+  malicious package could self-report a trusted package's name (and, if that name has an
+  operator-pinned canonical-identity-level rule, an exact version) to make its canonical identity
+  collide with an unrelated, less-restrictive rule; because that rule is checked at *higher*
+  precedence than the folder/packageKey-level rule that would otherwise catch it, the real
+  BLOCK/QUARANTINE rule for the malicious package's actual installed identity was never reached.
+  The identity's name component is now derived purely from **where npm actually put the package
+  on disk** (the node_modules folder segment, nested and scoped packages handled, closest-to-leaf
+  resolution for transitive deps) and the manifest-claimed name can no longer override it; a
+  disagreement between the two is recorded as a `PACKAGE_IDENTITY_MISMATCH` audit/telemetry event
+  (best-effort, never blocking on its own). First-party app code and packages resolved outside any
+  node_modules tree (e.g. an npm-workspace symlink Node has already resolved away) have no install
+  identity to defer to and keep the previous manifest-name behavior — this only closes the gap for
+  packages actually installed under `node_modules`. Also closes P0-6 (ensuring this limitation
+  isn't silently unaddressed) via this code fix. Added regression coverage to
+  `package-identity-unit-test.js`: unscoped/scoped/nested-node_modules spoofing at the identity
+  level, plus two end-to-end spawned-child regressions reproducing the exact BLOCK/QUARANTINE
+  bypass shape described above and confirming it no longer bypasses either rule.
+  - **Follow-up (found by automated PR review):** (1) `packageNameFromNodeModulesPath()` could
+    return a malformed `"@scope/"` identity for a path ending exactly at a scope directory with no
+    package-name segment beneath it — now returns `null` (not a real package) for that shape,
+    confirmed to reproduce the malformed identity against the prior commit. (2) **npm aliases**
+    (`"my-react": "npm:react@18.0.0"` in the *consuming* project's own package.json) legitimately
+    install a package under a folder name that differs from its own manifest `name` — unlike
+    spoofing, the alias is chosen by the trusted consumer, not the dependency, so an install-
+    identity-only fix would let an aliased install silently dodge an operator's rule keyed on the
+    package's true name. `resolveModulePolicy()` now also checks the manifest-declared identity,
+    but **escalate-only** — it can only make a verdict *more* restrictive than the install-derived
+    one, never less, so it restores alias-targeted rules without reopening the spoofing bypass.
+    Added regression coverage for both.
+
 - **F-5.1 / P0-1: fixed the QUARANTINE proxy's callable/constructible crash (audit's sole
   explicit NO-SHIP condition).** `QuarantineStub.createProxy()` backed its Proxy with a plain
   object (`{}`) target. A Proxy is only callable/constructible if its *target* is — traps are
