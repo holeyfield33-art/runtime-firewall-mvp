@@ -118,6 +118,16 @@ class QuarantineStub {
         // Record the interception
         this.record(`property_access`, { property: String(prop) });
 
+        // Invariant: get must report the *real* value for a non-configurable, non-writable own
+        // data property (e.g. `prototype` after a consumer hardens the proxy with
+        // Object.freeze()/Object.defineProperty(proxy, 'prototype', {writable:false}) — see the
+        // defineProperty trap below). Everywhere else (the common case) the property is either
+        // forgeable or still writable, so lying with an inert stub is lawful and safe.
+        const real = Reflect.getOwnPropertyDescriptor(target, prop);
+        if (real && real.configurable === false && real.writable === false) {
+          return Reflect.get(target, prop);
+        }
+
         // Return a function that logs further calls
         return (...args) => {
           this.record(`method_call`, {
@@ -130,6 +140,13 @@ class QuarantineStub {
 
       set: (target, prop, value) => {
         this.record(`property_write`, { property: String(prop) });
+        // Mirror the get trap: once a key is genuinely non-configurable+non-writable on the
+        // target, the invariant requires the trap to honestly fail (or no-op) a set to a
+        // different value rather than pretend success — Reflect.set does exactly that.
+        const real = Reflect.getOwnPropertyDescriptor(target, prop);
+        if (real && real.configurable === false && real.writable === false) {
+          return Reflect.set(target, prop, value);
+        }
         return true; // Pretend success
       },
 
@@ -156,13 +173,22 @@ class QuarantineStub {
       // that ownKeys' result must include every non-configurable own key the target actually
       // has — the engine then throws a raw TypeError on the next Object.keys() /
       // Reflect.ownKeys() / Object.getOwnPropertyDescriptors() call, entirely outside the
-      // firewall's control. Pretend success for forgeable keys; for a key that is genuinely
-      // non-configurable on the target (`prototype`), forward to the real target so the
-      // invariant checks the engine performs against Desc are satisfied honestly.
+      // firewall's control. Pretend success for forgeable keys; forward to the real target
+      // (honest success/failure, whichever is actually lawful) whenever pretending would violate
+      // an invariant instead:
+      //   - the key is already genuinely non-configurable on the target (`prototype`);
+      //   - the incoming descriptor itself asks for configurable:false (e.g. Object.freeze()'s
+      //     internal defineProperty calls on every own key, including the forgeable `length`/
+      //     `name` a callable target carries) — claiming success without a matching real
+      //     non-configurable target property is a direct invariant violation;
+      //   - the target has been made non-extensible (Object.preventExtensions(proxy)), where
+      //     pretending to successfully ADD a new property is likewise a violation.
       defineProperty: (target, prop, descriptor) => {
         this.record(`property_define`, { property: String(prop) });
         const real = Reflect.getOwnPropertyDescriptor(target, prop);
-        if (real && !real.configurable) {
+        const mustBeHonest =
+          (real && !real.configurable) || descriptor.configurable === false || !Reflect.isExtensible(target);
+        if (mustBeHonest) {
           return Reflect.defineProperty(target, prop, descriptor);
         }
         return true; // Pretend the definition succeeded; never touch the real target

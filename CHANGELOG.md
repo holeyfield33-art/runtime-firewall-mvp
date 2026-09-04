@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `new proxy()` no longer throw and never execute real code; `prototype`'s presence,
   non-deletability, and descriptor survive `Object.keys()`/`Reflect.ownKeys()`/
   `getOwnPropertyDescriptors()` without an invariant-violation TypeError.
+  - **Follow-up (found by automated PR review, same class of bug):** `defineProperty` still
+    unconditionally pretended success for an explicit `configurable:false` request or for adding a
+    genuinely new key once the proxy is non-extensible — both are invariant violations in their
+    own right, independent of whether the key was already a real target key. This is exactly what
+    `Object.freeze(proxy)`/`Object.seal(proxy)` trigger internally (they `defineProperty` every own
+    key, including the callable target's forgeable `length`/`name`, with `configurable:false`), so
+    hardening a quarantined proxy the ordinary way crashed the host. `defineProperty` now forwards
+    honestly (real success/failure) whenever pretending would violate an invariant — a real
+    non-configurable target key, an explicit `configurable:false` in the incoming descriptor, or a
+    non-extensible target — not just for the one key already forwarded before. `get`/`set` were
+    updated to match: once a key is genuinely non-configurable **and** non-writable on the target
+    (e.g. `prototype` after `Object.freeze()`), they now report/enforce the real value instead of
+    continuing to lie with the synthetic inert stub, which is itself an invariant violation once a
+    property is that hardened. Added regression coverage for `Object.freeze`/`Object.seal`, for
+    `defineProperty` adding a new key on a non-extensible proxy, and for `get`/`set` against a
+    directly-hardened `prototype` — confirmed to reproduce the exact TypeError against the
+    prior fix and pass only with this follow-up applied.
 
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
