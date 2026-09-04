@@ -371,16 +371,54 @@ try {
 // ── Telemetry worker thread ───────────────────────────────────────────────────────────────────
 const telemetryEnabled = process.env.FW_TELEMETRY === '1';
 const telemetryWorkerPath = path.join(__dirname, 'sync-worker.js');
-const telemetryWorker = telemetryEnabled ? (() => {
-  // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
-  // telemetry worker must never be re-injected with a fresh copy of the agent.
-  const w = new Worker(telemetryWorkerPath);
-  w.unref();
-  return w;
-})() : null;
+// Mutable: F-21.1/F-21.2 degrade this to null on construction failure or a later worker crash.
+// Telemetry is optional/best-effort observability, never an enforcement mechanism — nothing in
+// the block/quarantine/lockdown decision path reads this, so degrading it never weakens
+// enforcement, only observability.
+let telemetryWorker = null;
 
 // ── Audit log (persistent) ────────────────────────────────────────────────────────────────────
 const auditLog = getAuditLog();
+
+// F-21.1/F-21.2: telemetry construction failure or a later async worker crash must degrade
+// telemetry, not the protected host. Logs (once — never spammed on repeated failures) and audits,
+// then leaves telemetryWorker null so emitTelemetry() below silently no-ops from then on.
+let telemetryDegradedLogged = false;
+function degradeTelemetry(reason, err) {
+  const worker = telemetryWorker;
+  telemetryWorker = null;
+  if (worker) {
+    try { worker.terminate(); } catch (e) { /* already dead; nothing to clean up */ }
+  }
+  if (telemetryDegradedLogged) return;
+  telemetryDegradedLogged = true;
+  console.warn(`[Firewall] Telemetry worker ${reason} — continuing without telemetry (enforcement unaffected).${err ? ' ' + err.message : ''}`);
+  try {
+    auditLog.write({ eventType: 'TELEMETRY_DEGRADED', timestamp: Date.now(), reason, error: err ? err.message : null });
+  } catch (e) {
+    // Never let a forensic-logging failure cascade into a second crash.
+  }
+}
+
+if (telemetryEnabled) {
+  try {
+    // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
+    // telemetry worker must never be re-injected with a fresh copy of the agent.
+    const w = new Worker(telemetryWorkerPath);
+    w.unref();
+    // F-21.2: an uncaught exception inside the worker thread surfaces here as an 'error' event.
+    // Without a listener attached, Node treats a Worker 'error' as fatal to the *parent* process
+    // (an EventEmitter 'error' with no listener throws) — a telemetry-only failure must never take
+    // the protected host down with it.
+    w.on('error', (err) => degradeTelemetry('crashed', err));
+    telemetryWorker = w;
+  } catch (err) {
+    // F-21.1: synchronous Worker construction can itself throw (resource exhaustion, missing
+    // worker file, sandboxing/permission errors, etc.) — telemetry is optional/best-effort and
+    // must never take down the protected host on startup.
+    degradeTelemetry('failed to start', err);
+  }
+}
 
 // ── Policy loading & continuous integrity watcher ────────────────────────────────────────────
 let policyMap = new Map();
@@ -415,10 +453,17 @@ const detector = new Detector(policyMap);
 // ── Telemetry helpers ─────────────────────────────────────────────────────────────────────────
 function emitTelemetry(eventType, packageName, parentPackage, metadata = {}) {
   if (!telemetryWorker) return;
-  telemetryWorker.postMessage({
-    type: 'TELEMETRY_EVENT',
-    payload: { eventType, packageName, parentPackage, timestamp: Date.now(), ...metadata },
-  });
+  try {
+    telemetryWorker.postMessage({
+      type: 'TELEMETRY_EVENT',
+      payload: { eventType, packageName, parentPackage, timestamp: Date.now(), ...metadata },
+    });
+  } catch (err) {
+    // F-21.1/F-21.2 defense-in-depth: postMessage() can itself throw (e.g. a terminated worker).
+    // emitTelemetry() is called from the hot enforcement path (_compile, ESM hooks) — a telemetry
+    // failure here must degrade telemetry, never propagate into and crash that path.
+    degradeTelemetry('failed', err);
+  }
 }
 
 // ── Compilation metrics ───────────────────────────────────────────────────────────────────────
