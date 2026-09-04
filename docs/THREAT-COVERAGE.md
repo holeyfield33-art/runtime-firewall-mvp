@@ -150,9 +150,15 @@ boundary ever shifts. Grouped by root cause, with which tier (if any) closes it:
 > signals in a module's source text fall within a bounded structural window — at most
 > `CORRELATION_MAX_SEPARATORS` (5) statement/line boundaries apart **and** at most
 > `CORRELATION_MAX_CHARS` (8000) characters apart (see `buildSeparatorPrefix()`/`withinContext()`
-> in `behavior-tracker.js`). This is a genuinely padding-resistant *proximity* measure (F-69) —
-> it is not defeated by comment/whitespace padding between two co-located signals — but it is not
-> a call-graph or interprocedural data-flow analysis. Two signals that are each individually
+> in `behavior-tracker.js`). The *separator* half of this is a genuinely padding-resistant
+> proximity measure (F-69) — comment/whitespace padding between two co-located signals adds zero
+> separator distance, so it cannot defeat that cap at any size — but the *character* half is a
+> hard, disclosed ceiling regardless of padding composition: comment/whitespace padding large
+> enough to exceed `CORRELATION_MAX_CHARS` (8000) between the two signals still falls outside the
+> window (see the `CORRECTED CLAIM (PENTEST-003 finding)` note directly in `behavior-tracker.js`
+> for the full accounting). Neither half of this proximity measure is a call-graph or
+> interprocedural data-flow analysis, which is F-1.1's actual subject here. Two signals that are
+> each individually
 > unremarkable-looking, placed in **separate, ordinary named functions** far enough apart in the
 > same file (more than a handful of intervening statements, or a large module), correlate exactly
 > as if they were entirely unrelated code, even though a third function calls both in sequence at
