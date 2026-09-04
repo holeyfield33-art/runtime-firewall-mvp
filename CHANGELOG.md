@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-5.1 / P0-1: fixed the QUARANTINE proxy's callable/constructible crash (audit's sole
+  explicit NO-SHIP condition).** `QuarantineStub.createProxy()` backed its Proxy with a plain
+  object (`{}`) target. A Proxy is only callable/constructible if its *target* is — traps are
+  never consulted otherwise — so calling or `new`-ing a function/class-shaped quarantined
+  dependency threw a native, uncatchable-by-the-firewall TypeError instead of being safely
+  neutered. The target is now a real function (both callable and constructible), with new
+  `apply`/`construct` traps that record the interception and gracefully degrade (return `null`
+  / a fresh inert quarantine proxy) without ever executing the real quarantined code. That
+  target unavoidably owns one non-configurable own property (`prototype`, spec-mandated for
+  every ordinary function); the `ownKeys`/`getOwnPropertyDescriptor`/`has`/`deleteProperty`/
+  `defineProperty` traps now defer to the target's real descriptor for any non-configurable (or,
+  once frozen, any real) own key instead of unconditionally pretending it's absent — the same
+  Proxy-invariant-violation crash class as F-63, now closed for the one key that a callable
+  target inescapably carries. Existing property/read/write/enumeration behavior for every other
+  (forgeable) key is unchanged. Added regression coverage to `quarantine-unit-test.js`: proxy()
+  and `new proxy()` no longer throw and never execute real code; `prototype`'s presence,
+  non-deletability, and descriptor survive `Object.keys()`/`Reflect.ownKeys()`/
+  `getOwnPropertyDescriptors()` without an invariant-violation TypeError.
+
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
   (`MAX_SPANS_PER_FILE = 40`), so an attacker could place >40 harmless prescreen-matching decoy
