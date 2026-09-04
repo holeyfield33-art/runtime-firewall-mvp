@@ -68,8 +68,8 @@ honestly:
 
 | Configuration | Malicious caught | Known bypasses | False positives* |
 |---|---|---|---|
-| **Default** (`FW_ENABLE_AST` unset) | **105/142 (73.9%)** | 37 | 0 / 36 controls |
-| **`FW_ENABLE_AST=1`** (opt-in) | **127/142 (89.4%)** | 15 | 0 / 36 controls |
+| **Default** (`FW_ENABLE_AST` unset) | **105/143 (73.4%)** | 38 | 0 / 36 controls |
+| **`FW_ENABLE_AST=1`** (opt-in) | **127/143 (88.8%)** | 16 | 0 / 36 controls |
 
 \* "0 false positives" means zero across the **36 curated benign controls** — it is **not** a
 measured general false-positive rate on arbitrary packages, which is one reason the AST tier ships
@@ -91,7 +91,7 @@ Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md)
 |----------|---------|-------------|
 | `FW_ENABLE_DETECTION` | `0` | Set to `1` to activate the firewall (required) |
 | `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass while keeping signature scanning active. Useful as an escape hatch if behavioral detection produces false positives. Note: several detections (credential exfiltration, dynamic-code/exec chains, base64→eval obfuscation) rely on the behavioral pass — disabling it falls back to signature-only coverage. |
-| `FW_ENABLE_AST` | `0` | Set to `1` to enable the opt-in AST obfuscation tier (`src/ast-scan.js`). Folds/resolves bracket-, alias-, unicode-escape-, concat-, decode-, and constructor-based obfuscation of `eval`/`Function`/`require`. Raises malicious coverage from 73.9% to 89.4% on the corpus (see the table above). Off by default pending a broader benign-package soak; it is internally fail-open (any error falls back to signature+behavioral). |
+| `FW_ENABLE_AST` | `0` | Set to `1` to enable the opt-in AST obfuscation tier (`src/ast-scan.js`). Folds/resolves bracket-, alias-, unicode-escape-, concat-, decode-, and constructor-based obfuscation of `eval`/`Function`/`require`. Raises malicious coverage from 73.4% to 88.8% on the corpus (see the table above). Off by default pending a broader benign-package soak; it is internally fail-open (any error falls back to signature+behavioral). |
 | `FW_AST_INCOMPLETE_POLICY` | `quarantine` | Only relevant when `FW_ENABLE_AST=1`. Governs what happens when a module is so densely packed with high-risk obfuscation shapes that the AST tier could not fully analyze it (an *incomplete* scan — the span-exhaustion attack shape). Defaults to **fail-closed** (`quarantine`/`block`): an un-analyzable suspicious module is treated as block-tier, so the bypass is closed by default rather than only for operators who opt in. Set `observe` to opt down to WARN-only telemetry (module still runs) if you prefer availability. Only fires on pathological saturation (>256 rare high-risk spans in one module); ordinary large bundles never reach it. |
 | `FW_ENABLE_CROSSFILE` | `0` | Set to `1` to enable cross-file behavioral correlation within a package (capabilities split across files). Off by default: it false-positives on large legitimate packages that legitimately split credential reads, metadata fetches, and code-gen/spawn across files. Intended for curated dependency sets and the registry batch scanner. |
 | `FW_CACHE_POLICY` | `block` under `FW_MODE=enforce`, else `audit` | How `require.cache`/`Module._load` pre-seeding (a forged cache entry that bypasses `_compile` entirely) is handled: `block` refuses the substitution, `audit` allows it but logs, `allow` disables the check. |

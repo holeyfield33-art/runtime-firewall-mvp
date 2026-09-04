@@ -60,9 +60,13 @@ A machine-readable `results/redteam-summary.json` is written on every run
 
 ## Corpus
 
-**178 payloads** across 7 threat categories (142 malicious, 36 benign — the
-extra 14 malicious and 3 benign entries beyond the original 128/33 come from
-`redteam-kit-adapter`, see [Redteam-kit adapter](#redteam-kit-adapter) below),
+**179 payloads** across 7 threat categories (143 malicious, 36 benign — 14 of
+the extra 15 malicious entries and all 3 extra benign entries beyond the
+original 128/33 come from `redteam-kit-adapter` (see
+[Redteam-kit adapter](#redteam-kit-adapter) below); the 15th is
+`krc-function-indirection-exfil` in `credential-exfil.js`, an unrelated
+fixture for the F-1.1 function-indirection correlation gap — see
+`docs/THREAT-COVERAGE.md`),
 each of the original 6 categories split into a core catalog and an
 `-extended` catalog under `corpus/`, all aggregated by `corpus/index.js`
 (which validates every entry and rejects duplicate ids):
@@ -71,7 +75,7 @@ each of the original 6 categories split into a core catalog and an
 |---------------------|:-----:|------------------------------------------------------------------------------------|
 | `crypto-miner`      |  26   | stratum pools, coinhive/xmr-stak/cryptonight/nicehash, uncovered brands, concat/hex/wasm evasions |
 | `reverse-shell`     |  22   | `/dev/tcp` + curl\|bash (caught); nc/ncat/socat/php/ruby/powershell/lua, http-beacon, mkfifo (bypass) |
-| `credential-exfil`  |  28   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require evasions |
+| `credential-exfil`  |  29   | `.env`/`.ssh`/`.aws`/`.npmrc`/shadow/passwd theft over http/ws/tls/udp; docker/kube/cookie stores + DNS/beacon/inline-require/function-indirection evasions |
 | `dynamic-code-exec` |  33   | eval/Function/vm+exec, base64/hex/atob→exec; bracket/alias/unicode/fromCharCode/constructor/wasm evasions, AST span-exhaustion decoy-flood (front/middle/end) |
 | `supply-chain`      |  21   | pastebin/paste.ee/postinstall (caught); raw-github/transfer.sh/ngrok/telegram/IP-literal/base64-domain beacons (bypass) |
 | `benign-controls`   |  31   | axios/dotenv/JWT/npm-tooling/word-list, ws/udp/tls clients, git/ffprobe wrappers, template compilers, bundled npmrc/host/far-egress, Phase 3 AST false-positive guards (constructor typecheck, fromCharCode i18n, base64 data decode, array-join message, computed-property config, standalone indirect-eval) — must **not** block |
@@ -133,24 +137,31 @@ set `knownBypass: true` and it's logged under `gap_report` as `[known]`.
 Two numbers matter here, depending on configuration — `npm run redteam` measures the
 first, `npm run redteam:ast` the second:
 
-- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **105/142** malicious
-  payloads caught (**73.9%**), **zero false positives** on the 36 benign controls, after two
+- **Default** (signature + behavioral tiers, `FW_ENABLE_AST` unset): **105/143** malicious
+  payloads caught (**73.4%**), **zero false positives** on the 36 benign controls, after two
   hardening rounds plus the `redteam-kit-adapter` addition (see `docs/THREAT-COVERAGE.md` →
   "Phased hardening roadmap"; baseline before round 1 was 69/125 ≈ 55% on the original corpus).
-  **37** documented bypasses remain.
+  **38** documented bypasses remain.
 - **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak): adds a narrow, hand-rolled
-  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **22** of those 37 —
-  **127/142** caught (**89.4%**), still **zero false positives**. **15** bypasses remain
+  AST pass (`packages/fw-agent/src/ast-scan.js`) that closes **22** of those 38 —
+  **127/143** caught (**88.8%**), still **zero false positives**. **16** bypasses remain
   even with it enabled.
 
 > "Zero false positives" is measured against the **36 curated benign controls only** — it is not
 > evidence of a general 0% false-positive rate on arbitrary packages. A broader benign-package soak
 > is a release gate before the AST tier could ship on by default.
 
-The 15 that remain regardless of configuration are fundamental limits of static/AST
-analysis and require runtime/dataflow instrumentation to close. They cluster into these
-classes:
+The 16 that remain regardless of configuration are fundamental limits of static/AST
+analysis and require runtime/dataflow (or, for the function-indirection case, bounded
+interprocedural) instrumentation to close. They cluster into these classes:
 
+- **Function-indirection (same-file)** — a credential-read signal and a network-egress
+  signal, each individually plain and un-obfuscated, placed in separate ordinary named
+  functions far enough apart in the same file that they fall outside the default
+  proximity-based correlation window, even though a third function calls both in sequence
+  (`krc-function-indirection-exfil`). Not an obfuscation gap — the AST tier's fold-and-
+  re-match model doesn't apply. See `docs/THREAT-COVERAGE.md` § "F-1.1" for the full
+  writeup and the tracked (non-blocking) future P2 item.
 - **WASM / GeneratorFunction cores** — GeneratorFunction/`constructor.constructor` shapes
   are now closed by the AST tier; WASM (`WebAssembly.instantiate`) is not and architecturally
   cannot be — there is no JS source text to parse inside a wasm binary.

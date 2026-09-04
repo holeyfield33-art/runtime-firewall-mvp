@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **F-1.1 / P0-5: disclosed the function-indirection correlation limitation and added an
+  adversarial fixture for it, ahead of tag.** The behavioral-correlation rules
+  (`CREDENTIAL_EXFILTRATION`, `DYNAMIC_CODE_EXEC_CHAIN`, etc.) fire when two or more signals'
+  source-text positions fall within a bounded, padding-resistant proximity window (F-69) — not
+  via a call-graph or interprocedural data-flow analysis. Signals placed in separate, ordinary
+  named functions far enough apart in the same file (structurally normal code, nothing
+  obfuscated) fall outside that window and go uncorrelated, even though a third function calls
+  both in sequence at runtime — a different root cause than the padding bypass F-69 already
+  closed. Documented in `docs/THREAT-COVERAGE.md` (new callout ahead of the bypass table,
+  explicit that this is a disclosed architectural boundary, not partial/incomplete
+  interprocedural analysis) and added `krc-function-indirection-exfil` to
+  `red-team/corpus/credential-exfil.js`, tracked as an accepted `knownBypass: true` fixture
+  (confirmed not closed by `FW_ENABLE_AST=1` either — it isn't an obfuscation/resolution gap the
+  AST tier's fold-and-re-match model addresses). Corpus stats updated across `README.md`,
+  `packages/fw-agent/README.md`, `docs/THREAT-COVERAGE.md`, and `red-team/README.md`:
+  105/143 (73.4%) default, 127/143 (88.8%) with `FW_ENABLE_AST=1`, 38/16 known bypasses
+  respectively (was 105/142, 127/142, 37/15 before this one fixture). A bounded, narrow one-hop
+  AST function-correlation pass is tracked as a separate future enhancement (not a pre-release
+  blocker) — see the "Phased hardening roadmap" P2 entry.
+
 - **F-21.1 / P0-3 + F-21.2 / P0-4: telemetry worker failures can no longer crash the protected
   host.** Telemetry is optional/best-effort observability — nothing in the block/quarantine/
   lockdown enforcement path reads it. Two failure modes previously bypassed that guarantee:

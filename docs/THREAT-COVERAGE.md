@@ -96,11 +96,11 @@ eval-only, comment-only-decode, config-built `.npmrc` URL, hardcoded real-regist
 Two configurations now matter here, and they give genuinely different numbers — always say which
 one a figure describes:
 
-- **Default** (`FW_ENABLE_AST` unset): signature + behavioral tiers only. **73.9%** (105/142
-  malicious payloads caught), **37** known bypasses, **0** false positives on the 36 benign
+- **Default** (`FW_ENABLE_AST` unset): signature + behavioral tiers only. **73.4%** (105/143
+  malicious payloads caught), **38** known bypasses, **0** false positives on the 36 benign
   controls. This is what a fresh install does out of the box — `npm run redteam`.
 - **`FW_ENABLE_AST=1`** (opt-in, off by default pending soak — see §"AST-level detection" below):
-  adds a narrow, hand-rolled AST pass. **89.4%** (127/142 caught), **15** known bypasses, **0**
+  adds a narrow, hand-rolled AST pass. **88.8%** (127/143 caught), **16** known bypasses, **0**
   false positives (the same 36 benign controls, including six added specifically to guard the new
   fold/resolve surface). `npm run redteam:ast`.
 
@@ -144,8 +144,41 @@ The remaining bypasses genuinely require dynamic (runtime) analysis beyond eithe
 asserted as an **expected bypass** in the adversarial and red-team suites so we notice if the
 boundary ever shifts. Grouped by root cause, with which tier (if any) closes it:
 
+> **F-1.1 — the default correlation model is text-proximity, not interprocedural.** The
+> behavioral-correlation rules in `behavior-tracker.js` (`CREDENTIAL_EXFILTRATION`,
+> `DYNAMIC_CODE_EXEC_CHAIN`, `REMOTE_FETCH_EXEC`, etc.) fire when the *positions* of two or more
+> signals in a module's source text fall within a bounded structural window — at most
+> `CORRELATION_MAX_SEPARATORS` (5) statement/line boundaries apart **and** at most
+> `CORRELATION_MAX_CHARS` (8000) characters apart (see `buildSeparatorPrefix()`/`withinContext()`
+> in `behavior-tracker.js`). The *separator* half of this is a genuinely padding-resistant
+> proximity measure (F-69) — comment/whitespace padding between two co-located signals adds zero
+> separator distance, so it cannot defeat that cap at any size — but the *character* half is a
+> hard, disclosed ceiling regardless of padding composition: comment/whitespace padding large
+> enough to exceed `CORRELATION_MAX_CHARS` (8000) between the two signals still falls outside the
+> window (see the `CORRECTED CLAIM (PENTEST-003 finding)` note directly in `behavior-tracker.js`
+> for the full accounting). Neither half of this proximity measure is a call-graph or
+> interprocedural data-flow analysis, which is F-1.1's actual subject here. Two signals that are
+> each individually
+> unremarkable-looking, placed in **separate, ordinary named functions** far enough apart in the
+> same file (more than a handful of intervening statements, or a large module), correlate exactly
+> as if they were entirely unrelated code, even though a third function calls both in sequence at
+> runtime. This is structurally different from the *padding* limitation F-69 already closed:
+> padding tries to widen the textual gap between two signals that would otherwise sit together;
+> function indirection is two signals that were never textually close to begin with, because
+> ordinary program structure (function decomposition) put them in different places. Neither the
+> signature tier nor the AST tier addresses this — the AST tier resolves *obfuscated or folded*
+> signals back to their plain-text form so the existing regex/proximity checks can re-match them;
+> it does not trace calls between functions. See `krc-function-indirection-exfil` in
+> `red-team/corpus/credential-exfil.js` for a fixture reproducing this with concrete, otherwise
+> real credential-exfiltration signals, tracked as an accepted, expected bypass (confirmed not
+> closed by `FW_ENABLE_AST=1` either). Do not read this as arbitrary interprocedural or dataflow
+> analysis being partially present and merely incomplete — none exists today; a bounded, narrow
+> one-hop AST-level function-correlation pass is tracked as a separate future P2 enhancement, not
+> a pre-release blocker (see the roadmap below).
+
 | Technique | Example | Why it bypasses | Closed by |
 |---|---|---|---|
+| Function-indirection (same-file) | credential read and network egress each in their own ordinary named function, called from a third wiring function, with several unrelated statements between the two function definitions | correlation is text-proximity within a bounded window (≤5 statement boundaries, ≤8000 chars); functions placed apart in normal program structure fall outside it even though nothing is obfuscated | **Neither tier** — needs bounded interprocedural (one-hop call) correlation, tracked as future work |
 | String-reassembly eval / require | `this["ev"+"al"](code)`, `global["ev"+"al"]`, `const fn = eval`, `Object.getPrototypeOf(eval).constructor`, `require(["ch","ild"].join(""))`, `String.fromCharCode`, unicode-escape, reversed strings | trigger token assembled at runtime; no literal call site in source | **AST tier** (`FW_ENABLE_AST=1`) |
 | GeneratorFunction / constructor.constructor | `GeneratorFunction(code)`, `constructor.constructor(code)()` | no JS `eval`/`Function` literal at all — but a real, parseable JS *shape* | **AST tier** (`FW_ENABLE_AST=1`) |
 | WASM | `WebAssembly.instantiate(bytes)` | no JS source text exists to parse or fold — architecturally unreachable by any JS-source AST, not merely unimplemented | **Not closeable by AST at all** — would need runtime/native instrumentation |
@@ -179,14 +212,16 @@ overclaiming risk this project's docs otherwise go out of their way to avoid): `
 `krc-confusable-identifier-evasion` (22 total — run `npm run redteam:ast` to reproduce the full
 list against `results/redteam-summary.json`).
 
-**Still open under `FW_ENABLE_AST=1`** (15): `miner-hex-pool`'s config-driven sibling
+**Still open under `FW_ENABLE_AST=1`** (16): `miner-hex-pool`'s config-driven sibling
 `miner-env-pool`; `miner-wasm`/`dce-wasm-code`; `revsh-node-net-spawn`, `revsh-node-http-beacon`,
 `revsh-bash-i-only`; `exfil-env-via-curl`; `sc-ngrok-beacon`, `sc-telegram-bot`,
 `sc-ip-literal-c2`, `sc-dependency-confusion`, `sc-setimmediate-beacon`;
 `krc-env-secret-exfiltration`, `krc-registry-mirror-substitution`, `krc-cross-sandbox-pivot` — all
 documented above (the last three added by `redteam-kit-adapter`, reproducing the same
 env-egress/dependency-confusion/lone-socket-egress gaps in this list under new ids) as needing
-dynamic taint tracking or runtime egress allow-listing, not AST.
+dynamic taint tracking or runtime egress allow-listing, not AST; and `krc-function-indirection-exfil`
+(F-1.1, documented in the callout above this table), which needs bounded interprocedural
+correlation rather than either tier's fold-and-re-match or taint-tracking approach.
 
 ### Phased hardening roadmap
 
@@ -211,7 +246,8 @@ numbering schemes; stated explicitly here to stop conflating them.
   `decodeURIComponent→eval`, and literal string/path reassembly. → **74.2% → 90.6%** on the
   original 128-payload corpus when enabled (was 76.0% → 90.4% before the F-91 span-exhaustion
   regression fixtures were added to the corpus; see the note above for the current combined-corpus
-  figures after `redteam-kit-adapter` was added — 73.9% → 89.4% on 142 payloads).
+  figures after `redteam-kit-adapter` and the F-1.1 function-indirection fixture were added —
+  73.4% → 88.8% on 143 payloads).
   Deliberately does NOT attempt WASM (no JS text exists to parse), env-sourced values (nothing in
   source to fold), or network+process-exec taint chains (needs cross-statement dataflow with real
   FP guards, a different problem than AST parsing) — seen below and in the table above as still
@@ -220,6 +256,14 @@ numbering schemes; stated explicitly here to stop conflating them.
   for the low-and-slow C2 class a static scanner (AST included) cannot separate from legitimate
   telemetry; and cross-statement taint tracking for the network+process-exec chain and
   shell-out-command classes.
+- **P2 (future, investigate only) — bounded one-hop AST function correlation.** F-1.1's
+  function-indirection gap (see the callout above): investigate whether the AST tier can extend
+  its existing per-span analysis to a deliberately *narrow* interprocedural step — resolving a
+  direct, unambiguous call from function A to function B within the same module (one hop, no
+  recursion, no dynamic dispatch) so a signal in A and a signal in B reached through that single
+  call are treated as correlated. Explicitly NOT a general call-graph or dataflow engine — scope
+  creep into that territory is exactly what this line item exists to avoid before it's even
+  started. Not a pre-release blocker; tracked as future work only.
 
 ### Cross-file correlation (opt-in: `FW_ENABLE_CROSSFILE=1`, default OFF)
 
