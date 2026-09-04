@@ -168,7 +168,10 @@ function parseResult(stdout) {
           }
           unref() {}
           postMessage() {}
-          terminate() { return Promise.resolve(0); }
+          // Review finding: worker.terminate() returns a Promise and can itself reject (the
+          // worker is already dead/mid-teardown). An unhandled rejection here is exactly the
+          // "telemetry failure crashes the host" hazard this whole file exists to close.
+          terminate() { return Promise.reject(new Error('simulated terminate() rejection (test)')); }
         }
         return Object.assign({}, real, { Worker: CrashingWorker });
       }

@@ -33,6 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   EventEmitter unhandled-`'error'`-throws hazard, confirmed to reproduce the pre-fix crash and
   pass only with the fix; each also asserts a BLOCK-policy module load still gets blocked after
   telemetry degrades, proving enforcement is unaffected.
+  - **Follow-up (found by automated PR review):** `degradeTelemetry()`'s cleanup call to
+    `worker.terminate()` returns a Promise that can itself reject (the worker is already dead or
+    mid-teardown) — an unhandled rejection there would reintroduce the exact "telemetry failure
+    crashes the host" hazard this fix exists to close; the original try/catch only covered a
+    synchronous throw, not a rejected Promise. Now explicitly swallowed. The F-21.2 regression
+    test's simulated worker now rejects on `terminate()`, confirmed to reproduce an unhandled
+    rejection crash against the prior commit and pass only with this follow-up applied.
 
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count

@@ -388,7 +388,13 @@ function degradeTelemetry(reason, err) {
   const worker = telemetryWorker;
   telemetryWorker = null;
   if (worker) {
-    try { worker.terminate(); } catch (e) { /* already dead; nothing to clean up */ }
+    // worker.terminate() returns a Promise (rejects if the worker is already dead/mid-teardown);
+    // an unhandled rejection here would itself crash the process -- the exact hazard this whole
+    // function exists to close. try/catch alone only covers a synchronous throw.
+    try {
+      const result = worker.terminate();
+      if (result && typeof result.catch === 'function') result.catch(() => {});
+    } catch (e) { /* already dead; nothing to clean up */ }
   }
   if (telemetryDegradedLogged) return;
   telemetryDegradedLogged = true;
