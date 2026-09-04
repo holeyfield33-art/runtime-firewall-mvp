@@ -127,10 +127,15 @@ const { QuarantineStub } = require('../src/quarantine');
     Object.defineProperty(proxy, 'x', { value: 1 });
   }, 'defineProperty on the quarantine proxy must not throw');
 
-  assert.deepStrictEqual(Object.keys(proxy), [], 'ownKeys must still report no keys after defineProperty');
-  assert.deepStrictEqual(Reflect.ownKeys(proxy), [], 'Reflect.ownKeys must still report no keys after defineProperty');
+  assert.deepStrictEqual(Object.keys(proxy), [], 'ownKeys must still report no *enumerable* keys after defineProperty');
+  // `prototype` is a real, non-configurable own key on the callable target (F-5.1) — the
+  // Proxy invariants require ownKeys to include it, so it is the one key that legitimately
+  // survives enumeration (Object.keys excludes it above because it is non-enumerable).
+  assert.deepStrictEqual(Reflect.ownKeys(proxy), ['prototype'], 'Reflect.ownKeys must report the target\'s one non-configurable key');
   assert.doesNotThrow(() => {
-    assert.deepStrictEqual(Object.getOwnPropertyDescriptors(proxy), {}, 'getOwnPropertyDescriptors must report no descriptors');
+    const descriptors = Object.getOwnPropertyDescriptors(proxy);
+    assert.deepStrictEqual(Object.keys(descriptors), ['prototype'], 'getOwnPropertyDescriptors must report only the non-configurable key');
+    assert.strictEqual(descriptors.prototype.configurable, false, 'reported prototype descriptor must be non-configurable, matching the real target');
   }, 'getOwnPropertyDescriptors must not throw after defineProperty');
 
   assert.ok(stub.interceptCount > 0, 'defineProperty must be recorded');
@@ -152,6 +157,138 @@ const { QuarantineStub } = require('../src/quarantine');
   assert.strictEqual(Object.isExtensible(proxy), false, 'isExtensible must reflect the real preventExtensions() call');
 
   console.log('  ✓ preventExtensions/isExtensible remain untrapped and correct (F-63 non-regression)');
+}
+
+// ── Test 3f: proxy() is callable and does not crash the host (F-5.1) ─────────
+// Before the fix, the proxy target was `{}` — a plain object has no [[Call]] internal
+// method, so calling the proxy threw a native, uncatchable-by-the-firewall
+// "proxy is not a function" TypeError for any function/class-shaped quarantined
+// dependency, regardless of the apply trap defined below (traps are never consulted
+// unless the target itself supports the operation). This is the audit's sole
+// explicit NO-SHIP condition.
+{
+  const stub = new QuarantineStub('callable-pkg', null);
+  const proxy = stub.createProxy();
+
+  assert.strictEqual(typeof proxy, 'function', 'quarantine proxy must report as callable');
+
+  let result;
+  assert.doesNotThrow(() => { result = proxy('real-arg'); }, 'calling the quarantine proxy must not throw');
+  assert.strictEqual(result, null, 'calling the proxy must gracefully degrade to null, never execute real code');
+  assert.ok(stub.interceptCount > 0, 'the call must be recorded for forensics');
+
+  console.log('  ✓ proxy() is callable, does not execute real code, and does not crash the host (F-5.1)');
+}
+
+// ── Test 3g: new proxy() is constructible and does not crash the host (F-5.1) ─
+{
+  const stub = new QuarantineStub('constructible-pkg', null);
+  const proxy = stub.createProxy();
+
+  let instance;
+  assert.doesNotThrow(() => { instance = new proxy('real-arg'); }, 'constructing the quarantine proxy must not throw');
+  // The Proxy invariant only requires an Object (functions are objects too — the constructed
+  // instance is itself another callable/constructible quarantine proxy, per design below).
+  assert.ok(instance !== null && (typeof instance === 'object' || typeof instance === 'function'),
+    'construct trap must return an Object per Proxy invariants');
+  assert.ok(stub.interceptCount > 0, 'the construct call must be recorded for forensics');
+
+  // The constructed instance is itself inert — real quarantined constructors never run,
+  // so any method the caller invokes on the "instance" degrades gracefully too.
+  assert.doesNotThrow(() => {
+    const methodResult = instance.someMethod();
+    assert.strictEqual(methodResult, null, 'methods on the constructed instance must gracefully degrade to null');
+  }, 'using the constructed instance must not throw or execute real code');
+
+  console.log('  ✓ new proxy() is constructible, does not execute real code, and does not crash the host (F-5.1)');
+}
+
+// ── Test 3h: `prototype` Proxy invariants are honored, not just papered over (F-5.1) ─
+// The callable target has one real, non-configurable own key: `prototype`. Lying about its
+// presence (as the pre-fix `ownKeys: () => []` pattern would for a callable target) violates
+// the Proxy spec's invariants and throws a raw TypeError straight out of the engine.
+{
+  const stub = new QuarantineStub('prototype-invariant-pkg', null);
+  const proxy = stub.createProxy();
+
+  assert.strictEqual('prototype' in proxy, true, '`prototype` is a real non-configurable own key and must not be reported absent');
+  assert.strictEqual('someOtherProp' in proxy, false, 'forgeable, non-existent keys must still be reported absent');
+
+  assert.strictEqual(Reflect.deleteProperty(proxy, 'prototype'), false, 'a non-configurable own key must not be reportable as deleted');
+  assert.doesNotThrow(() => { delete proxy.someOtherProp; }, 'deleting a forgeable key must still succeed silently');
+
+  assert.doesNotThrow(() => { Object.keys(proxy); }, 'enumerating the proxy must never throw a raw invariant-violation TypeError');
+  assert.doesNotThrow(() => { Reflect.ownKeys(proxy); }, 'Reflect.ownKeys must never throw a raw invariant-violation TypeError');
+  assert.doesNotThrow(() => { Object.getOwnPropertyDescriptors(proxy); }, 'getOwnPropertyDescriptors must never throw a raw invariant-violation TypeError');
+
+  console.log('  ✓ `prototype` Proxy invariants are honored without crashing the host (F-5.1)');
+}
+
+// ── Test 3i: Object.freeze(proxy)/Object.seal(proxy) do not crash the host (review finding) ──
+// Object.freeze()/seal() call preventExtensions() then defineProperty() with configurable:false
+// (freeze also adds writable:false) for EVERY own key the target reports — including the
+// forgeable `length`/`name` a callable target carries, which are configurable on the target until
+// this exact call. Blindly returning `true` (pretend success) for a defineProperty call that
+// explicitly demands configurable:false violates the Proxy invariant ("a property cannot be
+// reported non-configurable unless the target's own property already is") independently of
+// whether the key was already forwarded/real -- this is a second route into the same crash class
+// F-5.1 exists to close, reported after the initial fix by automated PR review.
+{
+  const stub = new QuarantineStub('freeze-pkg', null);
+  const proxy = stub.createProxy();
+  assert.doesNotThrow(() => { Object.freeze(proxy); }, 'Object.freeze(proxy) must not throw a raw invariant-violation TypeError');
+  assert.strictEqual(Object.isFrozen(proxy), true, 'the proxy must genuinely report as frozen afterward');
+  assert.doesNotThrow(() => { Object.keys(proxy); }, 'enumerating a frozen quarantine proxy must not throw');
+  assert.doesNotThrow(() => { Reflect.ownKeys(proxy); }, 'Reflect.ownKeys on a frozen quarantine proxy must not throw');
+
+  const stub2 = new QuarantineStub('seal-pkg', null);
+  const proxy2 = stub2.createProxy();
+  assert.doesNotThrow(() => { Object.seal(proxy2); }, 'Object.seal(proxy) must not throw a raw invariant-violation TypeError');
+  assert.strictEqual(Object.isSealed(proxy2), true, 'the proxy must genuinely report as sealed afterward');
+
+  console.log('  ✓ Object.freeze(proxy)/Object.seal(proxy) do not crash the host (review finding)');
+}
+
+// ── Test 3j: defineProperty on a non-extensible proxy cannot forge a NEW property (review finding) ──
+// After Object.preventExtensions(proxy), the target genuinely cannot gain new own keys. Blindly
+// returning `true` (pretend success) for defineProperty on a key that ISN'T already a real target
+// key violates the "cannot add a property to a non-extensible target" invariant.
+{
+  const stub = new QuarantineStub('nonext-define-pkg', null);
+  const proxy = stub.createProxy();
+  Object.preventExtensions(proxy);
+
+  assert.doesNotThrow(() => {
+    assert.strictEqual(Reflect.defineProperty(proxy, 'brandNewProp', { value: 1 }), false,
+      'defining a genuinely new property on a non-extensible proxy must honestly fail, not pretend success');
+  }, 'defineProperty on a non-extensible proxy must never throw a raw invariant-violation TypeError');
+
+  console.log('  ✓ defineProperty cannot forge a new property on a non-extensible proxy (review finding)');
+}
+
+// ── Test 3k: get/set honor a hardened `prototype` (non-configurable + non-writable) (review finding) ──
+// Once `prototype` is made non-writable (directly, or via Object.freeze() above), the get trap
+// must report the REAL value and the set trap must honestly fail/no-op a differing value --
+// continuing to lie (synthetic stub / blind pretend-success) violates the get/set invariants for
+// a non-configurable, non-writable own data property and throws a raw TypeError.
+{
+  const stub = new QuarantineStub('hardened-prototype-pkg', null);
+  const proxy = stub.createProxy();
+  Object.defineProperty(proxy, 'prototype', { writable: false });
+
+  let readValue;
+  assert.doesNotThrow(() => { readValue = proxy.prototype; }, 'reading a hardened `prototype` must not throw an invariant-violation TypeError');
+  assert.strictEqual(typeof readValue, 'object', 'a hardened `prototype` must report its real value, not the synthetic inert stub');
+
+  // The whole file is already strict-mode (top-of-file 'use strict'), so a failed [[Set]] throws
+  // here rather than silently no-op-ing -- a genuine TypeError reflecting the real, honest
+  // failure (the set trap now returns Reflect.set()'s real false), not the crash class this test
+  // guards against (an unhandled Proxy-invariant violation thrown by the engine itself).
+  assert.throws(() => {
+    proxy.prototype = 'attacker-controlled-value';
+  }, TypeError, 'assigning a different value to a hardened `prototype` must fail like a real frozen property, not silently lie');
+
+  console.log('  ✓ get/set honor a hardened `prototype` without crashing the host (review finding)');
 }
 
 console.log('All quarantine unit tests passed.');

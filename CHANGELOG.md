@@ -30,6 +30,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   AST function-correlation pass is tracked as a separate future enhancement (not a pre-release
   blocker) — see the "Phased hardening roadmap" P2 entry.
 
+- **F-21.1 / P0-3 + F-21.2 / P0-4: telemetry worker failures can no longer crash the protected
+  host.** Telemetry is optional/best-effort observability — nothing in the block/quarantine/
+  lockdown enforcement path reads it. Two failure modes previously bypassed that guarantee:
+  - **F-21.1**: `new Worker(sync-worker.js)` construction is synchronous and can itself throw
+    (resource exhaustion, a missing worker file, sandbox/permission errors); unwrapped, that
+    exception propagated straight out of module load and crashed the host on startup.
+  - **F-21.2**: `Worker` is an `EventEmitter`; with no `'error'` listener attached, an uncaught
+    exception inside the worker thread surfaced as an unhandled `'error'` event, which Node
+    re-throws into the *parent* process — a telemetry crash minutes into a long-running process
+    could take the protected host down with it.
+
+  Worker construction is now wrapped, an `'error'` listener is attached immediately after a
+  successful construction, and `emitTelemetry()`'s `postMessage()` call is guarded too (defense in
+  depth against a terminated-worker edge case). Either failure now degrades telemetry to a null,
+  inert state — `console.warn` once (never spammed on repeated failures) plus a
+  `TELEMETRY_DEGRADED` audit/telemetry event — while firewall enforcement keeps running
+  unaffected; the existing shutdown/exit handlers' `if (telemetryWorker)` guards already no-op
+  correctly once degraded. Added `telemetry-worker-failure-test.js`: two real, spawned
+  `--require`-preloaded firewalled-child regressions (one per finding) that monkeypatch
+  `Module._load` to intercept `require('worker_threads')` and exercise the actual Node
+  EventEmitter unhandled-`'error'`-throws hazard, confirmed to reproduce the pre-fix crash and
+  pass only with the fix; each also asserts a BLOCK-policy module load still gets blocked after
+  telemetry degrades, proving enforcement is unaffected.
+  - **Follow-up (found by automated PR review):** `degradeTelemetry()`'s cleanup call to
+    `worker.terminate()` returns a Promise that can itself reject (the worker is already dead or
+    mid-teardown) — an unhandled rejection there would reintroduce the exact "telemetry failure
+    crashes the host" hazard this fix exists to close; the original try/catch only covered a
+    synchronous throw, not a rejected Promise. Now explicitly swallowed. The F-21.2 regression
+    test's simulated worker now rejects on `terminate()`, confirmed to reproduce an unhandled
+    rejection crash against the prior commit and pass only with this follow-up applied.
+
+- **F-1.2 / P0-2 (+ P0-6): package-manifest identity can no longer spoof past policy.**
+  `resolveModuleIdentity()`'s canonical `"name@version:relPath"` identity used the package's own
+  self-reported `package.json` `name` — attacker-controlled for any installed dependency. A
+  malicious package could self-report a trusted package's name (and, if that name has an
+  operator-pinned canonical-identity-level rule, an exact version) to make its canonical identity
+  collide with an unrelated, less-restrictive rule; because that rule is checked at *higher*
+  precedence than the folder/packageKey-level rule that would otherwise catch it, the real
+  BLOCK/QUARANTINE rule for the malicious package's actual installed identity was never reached.
+  The identity's name component is now derived purely from **where npm actually put the package
+  on disk** (the node_modules folder segment, nested and scoped packages handled, closest-to-leaf
+  resolution for transitive deps) and the manifest-claimed name can no longer override it; a
+  disagreement between the two is recorded as a `PACKAGE_IDENTITY_MISMATCH` audit/telemetry event
+  (best-effort, never blocking on its own). First-party app code and packages resolved outside any
+  node_modules tree (e.g. an npm-workspace symlink Node has already resolved away) have no install
+  identity to defer to and keep the previous manifest-name behavior — this only closes the gap for
+  packages actually installed under `node_modules`. Also closes P0-6 (ensuring this limitation
+  isn't silently unaddressed) via this code fix. Added regression coverage to
+  `package-identity-unit-test.js`: unscoped/scoped/nested-node_modules spoofing at the identity
+  level, plus two end-to-end spawned-child regressions reproducing the exact BLOCK/QUARANTINE
+  bypass shape described above and confirming it no longer bypasses either rule.
+  - **Follow-up (found by automated PR review):** (1) `packageNameFromNodeModulesPath()` could
+    return a malformed `"@scope/"` identity for a path ending exactly at a scope directory with no
+    package-name segment beneath it — now returns `null` (not a real package) for that shape,
+    confirmed to reproduce the malformed identity against the prior commit. (2) **npm aliases**
+    (`"my-react": "npm:react@18.0.0"` in the *consuming* project's own package.json) legitimately
+    install a package under a folder name that differs from its own manifest `name` — unlike
+    spoofing, the alias is chosen by the trusted consumer, not the dependency, so an install-
+    identity-only fix would let an aliased install silently dodge an operator's rule keyed on the
+    package's true name. `resolveModulePolicy()` now also checks the manifest-declared identity,
+    but **escalate-only** — it can only make a verdict *more* restrictive than the install-derived
+    one, never less, so it restores alias-targeted rules without reopening the spoofing bypass.
+    Added regression coverage for both.
+
+- **F-5.1 / P0-1: fixed the QUARANTINE proxy's callable/constructible crash (audit's sole
+  explicit NO-SHIP condition).** `QuarantineStub.createProxy()` backed its Proxy with a plain
+  object (`{}`) target. A Proxy is only callable/constructible if its *target* is — traps are
+  never consulted otherwise — so calling or `new`-ing a function/class-shaped quarantined
+  dependency threw a native, uncatchable-by-the-firewall TypeError instead of being safely
+  neutered. The target is now a real function (both callable and constructible), with new
+  `apply`/`construct` traps that record the interception and gracefully degrade (return `null`
+  / a fresh inert quarantine proxy) without ever executing the real quarantined code. That
+  target unavoidably owns one non-configurable own property (`prototype`, spec-mandated for
+  every ordinary function); the `ownKeys`/`getOwnPropertyDescriptor`/`has`/`deleteProperty`/
+  `defineProperty` traps now defer to the target's real descriptor for any non-configurable (or,
+  once frozen, any real) own key instead of unconditionally pretending it's absent — the same
+  Proxy-invariant-violation crash class as F-63, now closed for the one key that a callable
+  target inescapably carries. Existing property/read/write/enumeration behavior for every other
+  (forgeable) key is unchanged. Added regression coverage to `quarantine-unit-test.js`: proxy()
+  and `new proxy()` no longer throw and never execute real code; `prototype`'s presence,
+  non-deletability, and descriptor survive `Object.keys()`/`Reflect.ownKeys()`/
+  `getOwnPropertyDescriptors()` without an invariant-violation TypeError.
+  - **Follow-up (found by automated PR review, same class of bug):** `defineProperty` still
+    unconditionally pretended success for an explicit `configurable:false` request or for adding a
+    genuinely new key once the proxy is non-extensible — both are invariant violations in their
+    own right, independent of whether the key was already a real target key. This is exactly what
+    `Object.freeze(proxy)`/`Object.seal(proxy)` trigger internally (they `defineProperty` every own
+    key, including the callable target's forgeable `length`/`name`, with `configurable:false`), so
+    hardening a quarantined proxy the ordinary way crashed the host. `defineProperty` now forwards
+    honestly (real success/failure) whenever pretending would violate an invariant — a real
+    non-configurable target key, an explicit `configurable:false` in the incoming descriptor, or a
+    non-extensible target — not just for the one key already forwarded before. `get`/`set` were
+    updated to match: once a key is genuinely non-configurable **and** non-writable on the target
+    (e.g. `prototype` after `Object.freeze()`), they now report/enforce the real value instead of
+    continuing to lie with the synthetic inert stub, which is itself an invariant violation once a
+    property is that hardened. Added regression coverage for `Object.freeze`/`Object.seal`, for
+    `defineProperty` adding a new key on a non-extensible proxy, and for `get`/`set` against a
+    directly-hardened `prototype` — confirmed to reproduce the exact TypeError against the
+    prior fix and pass only with this follow-up applied.
+
 - **F-91: closed a span-exhaustion bypass in the AST tier (`FW_ENABLE_AST=1`).** The scanner
   processed candidate spans in **file-position order** and hard-stopped after a fixed count
   (`MAX_SPANS_PER_FILE = 40`), so an attacker could place >40 harmless prescreen-matching decoy
