@@ -692,7 +692,8 @@ Source files: `results/bench-n10-run-*.txt` (EPYC 9V74), `results/gate-3x-epyc-2
 
 The gate enforces the **median only** at a 25% budget. P95 is reported for operational transparency but is not a fail condition; it reflects shared-CPU scheduler contention on multi-tenant hardware, not firewall algorithmic cost, and is not stable across hosts.
 
-[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.0...HEAD
+[unreleased]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/holeyfield33-art/runtime-firewall-mvp/compare/v0.3.0...v0.4.0
