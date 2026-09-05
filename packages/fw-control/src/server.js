@@ -39,16 +39,28 @@ const LOG_DIR = process.env.HELIOS_LOG_DIR ||
   (process.platform !== 'win32' ? '/var/log/helios' : path.join(os.tmpdir(), 'helios'));
 const LOG_PATH = path.join(LOG_DIR, 'audit.log');
 
+// F-6.2 (P1-3): mirrors the same fix in packages/fw-agent/src/audit-log.js -- fs.openSync()
+// defaults to mode 0o666 when omitted, leaving the actual on-disk permissions entirely
+// dependent on the host's umask. 0600 (owner read/write only) is requested at open time and
+// re-asserted with an explicit chmod, since `mode` is only honored when open() actually creates
+// the file, not when it opens a pre-existing one with looser permissions.
+const SECURE_FILE_MODE = 0o600;
+function openSecure(filePath) {
+  const fd = fs.openSync(filePath, 'a', SECURE_FILE_MODE);
+  try { fs.chmodSync(filePath, SECURE_FILE_MODE); } catch (e) { /* best-effort on platforms without POSIX modes */ }
+  return fd;
+}
+
 let logFd = null;
 (function openLog() {
   try {
     fs.mkdirSync(LOG_DIR, { recursive: true });
-    logFd = fs.openSync(LOG_PATH, 'a');
+    logFd = openSecure(LOG_PATH);
   } catch (e) {
     const fallback = path.join(os.tmpdir(), 'helios');
     try {
       fs.mkdirSync(fallback, { recursive: true });
-      logFd = fs.openSync(path.join(fallback, 'audit.log'), 'a');
+      logFd = openSecure(path.join(fallback, 'audit.log'));
     } catch (e2) {
       logFd = null;
     }

@@ -235,19 +235,74 @@ const fwMode = resolveFwMode();
 // production when the bundled (public) dev key would be used to verify policies.
 assertProductionKeyConfig();
 
+// F-6.1 (P1-4): the lifecycle scanner below used to log the full, unmodified script command
+// text verbatim -- to both stderr and the persistent audit log. A lifecycle script legitimately
+// embedding a credential (a private-registry auth token piped to curl, an inline NPM_TOKEN=...
+// env assignment, a Bearer header) had that secret permanently captured on disk and printed to
+// the console the moment it happened to also match one of the suspicious-shape patterns below.
+// redactSecrets() scrubs known credential SHAPES (never full-command omission, so operators keep
+// enough context to understand what was blocked and why) before the command reaches either sink;
+// sanitizeScriptForLogging() also bounds the logged length and attaches a SHA-256 of the ORIGINAL
+// (pre-redaction) command so an operator can still confirm two log entries are the same script,
+// or hash-compare against a known-leaked secret's script, without the raw text ever being
+// persisted. This hash has no integrity/trust role (unlike pristineCreateHash's uses elsewhere
+// in this file) -- it is a forensic convenience computed before any code from the scanned
+// package.json has had a chance to run, so the ambient crypto.createHash binding is fine here.
+function redactSecrets(text) {
+  return String(text)
+    // Authorization header, however it's spelled in a shell command -- consumes an optional
+    // "Bearer " prefix as PART of this same match (preserved in the replacement) so it can never
+    // overlap with the standalone Bearer rule below and double-process the same token. Value
+    // char class excludes quote characters so it stops before a closing '"'/"'" instead of
+    // eating it, which would otherwise corrupt the surrounding shell quoting.
+    .replace(/Authorization\s*[:=]\s*['"]?(Bearer\s+)?[^\s'"]+/gi, (_m, bearer) => `Authorization: ${bearer ? 'Bearer ' : ''}[REDACTED]`)
+    // A bearer token appearing WITHOUT a preceding "Authorization:" (e.g. a custom header name).
+    // Idempotent against the rule above: re-matching an already-redacted "Bearer [REDACTED]" just
+    // reproduces the same text.
+    .replace(/\bBearer\s+[^\s'"]+/gi, 'Bearer [REDACTED]')
+    // .npmrc-style and common env-var-style token/password/secret assignments.
+    .replace(/(_authToken|_auth|_password|npm_token|api[_-]?key|access[_-]?token|secret|token)\s*[:=]\s*['"]?[^\s'"]+/gi, '$1=[REDACTED]')
+    // Basic-auth credentials embedded in a URL (https://user:pass@host/...).
+    .replace(/(https?:\/\/[^:@/\s]+):[^@/\s]+@/gi, '$1:[REDACTED]@')
+    // curl/wget basic-auth flags (-u user:pass, -uuser:pass, --user user:pass,
+    // --user=user:pass) -- a credential passed this way never touches a vendor-prefix or
+    // key=value shape, so without this rule it only got redacted if it happened to also match
+    // one of the other patterns. Requires the flag be preceded by start-of-string/whitespace so
+    // it doesn't misfire inside an unrelated flag that merely contains "-u" (e.g. "--url").
+    .replace(/(^|\s)(-u|--user)([= ]?)['"]?([^:\s'"]+):[^\s'"]+/gi, (_m, pre, flag, sep, user) => `${pre}${flag}${sep}${user}:[REDACTED]`)
+    // Common vendor token prefixes, redacted even outside a key=value shape.
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[REDACTED-TOKEN]')
+    .replace(/\bsk-[A-Za-z0-9]{20,}\b/g, '[REDACTED-TOKEN]')
+    .replace(/\bAKIA[A-Z0-9]{12,}\b/g, '[REDACTED-AWS-KEY]')
+    .replace(/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/gi, '[REDACTED-SLACK-TOKEN]');
+}
+
+const MAX_LOGGED_SCRIPT_LENGTH = 500;
+
+function sanitizeScriptForLogging(cmd) {
+  const commandHash = crypto.createHash('sha256').update(cmd).digest('hex');
+  const redacted = redactSecrets(cmd);
+  const command = redacted.length > MAX_LOGGED_SCRIPT_LENGTH
+    ? redacted.slice(0, MAX_LOGGED_SCRIPT_LENGTH) + '…[truncated]'
+    : redacted;
+  return { command, commandHash };
+}
+
 // ── npm lifecycle script scanning ────────────────────────────────────────────────────────────
 (function scanNpmLifecycleScripts() {
   const pkgPath = path.join(process.cwd(), 'package.json');
   if (!fs.existsSync(pkgPath)) return;
 
+  // F-6.1: each pattern now carries a detectionCategory so the audit record stays understandable
+  // to an operator (what kind of thing tripped this?) without needing the raw command text.
   const SUSPICIOUS_SCRIPT_PATTERNS = [
-    /curl\s+.*\|\s*(ba)?sh/i,
-    /wget\s+.*\|\s*(ba)?sh/i,
-    /node\s+.*download/i,
-    /python\s+.*http/i,
-    /bash\s+-c\s+['"]/i,
-    /eval\s*\$/i,
-    /base64\s+--decode/i,
+    { category: 'pipe-to-shell', pattern: /curl\s+.*\|\s*(ba)?sh/i },
+    { category: 'pipe-to-shell', pattern: /wget\s+.*\|\s*(ba)?sh/i },
+    { category: 'node-download', pattern: /node\s+.*download/i },
+    { category: 'python-http', pattern: /python\s+.*http/i },
+    { category: 'inline-shell-exec', pattern: /bash\s+-c\s+['"]/i },
+    { category: 'shell-eval', pattern: /eval\s*\$/i },
+    { category: 'base64-decode', pattern: /base64\s+--decode/i },
   ];
 
   let pkg;
@@ -256,9 +311,11 @@ assertProductionKeyConfig();
 
   for (const [scriptName, cmd] of Object.entries(pkg.scripts)) {
     if (typeof cmd !== 'string') continue;
-    if (SUSPICIOUS_SCRIPT_PATTERNS.some(p => p.test(cmd))) {
-      console.error(`[HELIOS] Suspicious npm lifecycle script blocked: "${scriptName}" = "${cmd}"`);
-      getAuditLog().write({ eventType: 'SUSPICIOUS_SCRIPT', scriptName, command: cmd });
+    const hit = SUSPICIOUS_SCRIPT_PATTERNS.find(({ pattern }) => pattern.test(cmd));
+    if (hit) {
+      const { command, commandHash } = sanitizeScriptForLogging(cmd);
+      console.error(`[HELIOS] Suspicious npm lifecycle script blocked: "${scriptName}" (${hit.category}) = "${command}"`);
+      getAuditLog().write({ eventType: 'SUSPICIOUS_SCRIPT', scriptName, detectionCategory: hit.category, command, commandHash });
       if (process.env.HELIOS_BLOCK_SCRIPTS !== '0') {
         process.exit(1);
       }
