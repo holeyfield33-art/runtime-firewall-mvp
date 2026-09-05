@@ -145,7 +145,7 @@ function runChild(tmp, logDir) {
     const postinstall = suspiciousEvents.find((e) => e.scriptName === 'postinstall');
     assert.ok(postinstall, 'expected a postinstall event: ' + JSON.stringify(suspiciousEvents));
     assert.ok(postinstall.command.includes('curl'), 'non-secret shell verb must survive redaction: ' + postinstall.command);
-    assert.ok(postinstall.command.includes('example.com'), 'non-secret destination must survive redaction: ' + postinstall.command);
+    assert.ok(/https:\/\/example\.com\/x\b/.test(postinstall.command), 'non-secret destination must survive redaction: ' + postinstall.command);
     assert.ok(postinstall.command.includes('[REDACTED'), 'the secret must be visibly redacted, not silently vanished: ' + postinstall.command);
   });
 
