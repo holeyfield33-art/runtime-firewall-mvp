@@ -264,6 +264,12 @@ function redactSecrets(text) {
     .replace(/(_authToken|_auth|_password|npm_token|api[_-]?key|access[_-]?token|secret|token)\s*[:=]\s*['"]?[^\s'"]+/gi, '$1=[REDACTED]')
     // Basic-auth credentials embedded in a URL (https://user:pass@host/...).
     .replace(/(https?:\/\/[^:@/\s]+):[^@/\s]+@/gi, '$1:[REDACTED]@')
+    // curl/wget basic-auth flags (-u user:pass, -uuser:pass, --user user:pass,
+    // --user=user:pass) -- a credential passed this way never touches a vendor-prefix or
+    // key=value shape, so without this rule it only got redacted if it happened to also match
+    // one of the other patterns. Requires the flag be preceded by start-of-string/whitespace so
+    // it doesn't misfire inside an unrelated flag that merely contains "-u" (e.g. "--url").
+    .replace(/(^|\s)(-u|--user)([= ]?)['"]?([^:\s'"]+):[^\s'"]+/gi, (_m, pre, flag, sep, user) => `${pre}${flag}${sep}${user}:[REDACTED]`)
     // Common vendor token prefixes, redacted even outside a key=value shape.
     .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, '[REDACTED-TOKEN]')
     .replace(/\bsk-[A-Za-z0-9]{20,}\b/g, '[REDACTED-TOKEN]')

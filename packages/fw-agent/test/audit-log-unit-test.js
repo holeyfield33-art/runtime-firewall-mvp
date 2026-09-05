@@ -111,9 +111,15 @@ if (process.platform !== 'win32') {
   assert.strictEqual(mode, 0o600, `rotated-in audit.log must still be mode 0600, got ${mode.toString(8)}`);
   assert.ok(fs.existsSync(`${log.filePath}.1`), 'the rotated-out segment must exist at .1');
 
+  // The rotated-out segment (.1) is the file that was loosened to 0644 above, renamed but
+  // otherwise untouched -- it still contains real audit data, so it must be re-secured too, not
+  // just the freshly-created active file.
+  const rotatedMode = fs.statSync(`${log.filePath}.1`).mode & 0o777;
+  assert.strictEqual(rotatedMode, 0o600, `rotated-out .1 segment must also be re-secured to 0600, got ${rotatedMode.toString(8)}`);
+
   log.close();
   try { fs.rmSync(testDir, { recursive: true }); } catch (e) {}
-  console.log('  ✓ AuditLog rotation preserves the secure 0600 mode on the new active segment (F-6.2)');
+  console.log('  ✓ AuditLog rotation preserves the secure 0600 mode on both the new active segment and the rotated-out .1 segment (F-6.2)');
 } else {
   console.log('  (skipped) rotation-mode check is POSIX-only; not meaningful on win32 (F-6.2)');
 }

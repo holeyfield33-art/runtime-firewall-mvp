@@ -69,7 +69,15 @@ class AuditLog {
           try { fs.renameSync(src, dst); } catch (e) {}
         }
       }
-      try { fs.renameSync(this.logPath, `${this.logPath}.1`); } catch (e) {}
+      try {
+        const rotatedPath = `${this.logPath}.1`;
+        fs.renameSync(this.logPath, rotatedPath);
+        // F-6.2 (P1-3): the pre-rotation file may have had its permissions loosened externally
+        // (e.g. tampering, or a host default that predates this fix) -- it still contains real
+        // audit data after being renamed to .1, so re-secure it too, not just the fresh active
+        // segment below.
+        try { fs.chmodSync(rotatedPath, SECURE_FILE_MODE); } catch (e) { /* best-effort */ }
+      } catch (e) {}
       // F-6.2 (P1-3): rotation must preserve the secure mode on the newly-created active
       // segment, not just inherit whatever the pre-rotation file happened to have.
       this.fd = openSecure(this.logPath);
