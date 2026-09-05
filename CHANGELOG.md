@@ -20,6 +20,39 @@ on the combined result with 0 regressions and 0 false positives.
 
 ### Security
 
+- **F-6.1/F-6.2 (P1-3 #94, P1-4 #95): audit-log data minimization — restrictive file
+  permissions and secret redaction.** Two follow-up findings from the same review pass that
+  produced the P0 batch above, bundled together as "audit log data minimization" per their own
+  linked acceptance criteria.
+  - **F-6.2 (#94):** `fs.openSync()`'s `mode` argument defaults to `0o666`, so audit-log file
+    permissions were entirely dependent on the host's umask — a permissive umask left forensic
+    data world-readable or worse. `packages/fw-agent/src/audit-log.js` and
+    `packages/fw-control/src/server.js` now request `0600` explicitly at every open and
+    re-assert it with an explicit `chmod` immediately after (the `mode` argument to `open()` is
+    only honored when the call actually creates the file, so a pre-existing file needs the
+    explicit chmod too). Rotation (`AuditLog._rotate()`) preserves the secure mode on the newly
+    created active segment, not just whatever the pre-rotation file happened to have. Best-effort
+    on Windows (no POSIX owner/group/other bits), per the finding's own "or equivalent supported
+    behavior" acceptance criterion.
+  - **F-6.1 (#95):** the npm lifecycle-script scanner used to log the full, unmodified script
+    command verbatim to both stderr and the persistent audit log — a script legitimately
+    embedding a credential (an inline `NPM_TOKEN=...`, a private-registry `Authorization: Bearer
+    ...` header, a basic-auth URL) had that secret permanently captured on disk the moment it
+    also happened to match a suspicious-shape pattern. Added `redactSecrets()` (scrubs known
+    credential shapes — Authorization/Bearer headers, `.npmrc`-style token/password assignments,
+    basic-auth URLs, and common vendor token prefixes `ghp_`/`sk-`/`AKIA`/`xox[baprs]-`) and
+    `sanitizeScriptForLogging()` (bounds the logged length, attaches a SHA-256 of the
+    *original* command for forensic correlation without ever persisting the raw text) in
+    `packages/fw-agent/index.js`. Each `SUSPICIOUS_SCRIPT` audit event now also carries a
+    `detectionCategory` (e.g. `pipe-to-shell`, `shell-eval`) so the record stays understandable
+    to an operator without the raw command.
+  - Added `audit-log-unit-test.js` Tests 4–5 (fresh-file mode is `0600`; rotation re-asserts
+    `0600` even after the file was deliberately loosened to `0644` beforehand) and a new
+    `lifecycle-script-redaction-test.js` (9 checks) that spawns a real firewalled child with
+    synthetic secrets embedded in suspicious lifecycle scripts and asserts none of them appear
+    verbatim in the audit log or on stderr, that redaction doesn't suppress detection, and that
+    non-secret context survives for forensics. Wired into `test:unit`.
+
 - **F-21.1/F-21.2 follow-up / #108: verified telemetry degraded-state resilience against
   attacker-controlled content, not just synthetic Worker failures.** The P0-3/P0-4 fix (below)
   proved that a telemetry Worker *failure* degrades gracefully. This closes the sharper question

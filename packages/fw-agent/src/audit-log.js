@@ -13,6 +13,23 @@ const DEFAULT_LOG_DIR =
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB per rotation segment
 const MAX_ROTATIONS = 5;
 
+// F-6.2 (P1-3): fs.openSync()'s mode argument defaults to 0o666 when omitted, so the file's
+// actual on-disk permissions were entirely at the mercy of the host's umask -- a permissive
+// umask (or none) left forensic audit data world-readable, or worse, world-writable. 0600
+// (owner read/write only) is now requested explicitly at every open, and re-asserted with an
+// explicit chmod immediately after, since the `mode` argument to open() is only honored when the
+// call actually CREATES the file -- a pre-existing file opened with 'a' keeps whatever mode it
+// already had otherwise. Windows does not have POSIX owner/group/other permission bits, so
+// chmod there is a best-effort, partial no-op (only the read-only attribute is meaningfully
+// affected) -- "or equivalent supported behavior" per this finding's own acceptance criteria.
+const SECURE_FILE_MODE = 0o600;
+
+function openSecure(filePath) {
+  const fd = fs.openSync(filePath, 'a', SECURE_FILE_MODE);
+  try { fs.chmodSync(filePath, SECURE_FILE_MODE); } catch (e) { /* best-effort on platforms without POSIX modes */ }
+  return fd;
+}
+
 class AuditLog {
   constructor(logDir = DEFAULT_LOG_DIR) {
     this.logDir = logDir;
@@ -28,7 +45,7 @@ class AuditLog {
         fs.mkdirSync(dir, { recursive: true });
         this.logDir = dir;
         this.logPath = path.join(dir, 'audit.log');
-        this.fd = fs.openSync(this.logPath, 'a');
+        this.fd = openSecure(this.logPath);
         return;
       } catch (e) {
         // Try next fallback
@@ -53,10 +70,12 @@ class AuditLog {
         }
       }
       try { fs.renameSync(this.logPath, `${this.logPath}.1`); } catch (e) {}
-      this.fd = fs.openSync(this.logPath, 'a');
+      // F-6.2 (P1-3): rotation must preserve the secure mode on the newly-created active
+      // segment, not just inherit whatever the pre-rotation file happened to have.
+      this.fd = openSecure(this.logPath);
     } catch (e) {
       // If rotation fails, attempt a fresh open
-      try { this.fd = fs.openSync(this.logPath, 'a'); } catch (e2) { this.fd = null; }
+      try { this.fd = openSecure(this.logPath); } catch (e2) { this.fd = null; }
     }
   }
 
