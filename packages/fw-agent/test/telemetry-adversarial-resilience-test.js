@@ -30,7 +30,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execFileSync } = require('child_process');
 const { signPolicy } = require('../../../scripts/sign-policy');
 
 const AGENT_PATH = path.join(__dirname, '..', 'index.js');
@@ -55,6 +55,31 @@ function readAuditEvents(logDir) {
   const logPath = path.join(logDir, 'audit.log');
   if (!fs.existsSync(logPath)) return [];
   return fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+// Binds an OS-assigned port and closes it immediately, so "unreachable control plane" targets a
+// genuinely free port instead of a hardcoded one that could coincidentally already be in use on
+// some CI/dev machine (which would silently turn the network-failure case into a no-op). Runs in
+// a child process via execFileSync so this stays a plain synchronous helper for the caller.
+function getFreePort() {
+  const out = execFileSync(process.execPath, ['-e',
+    "const net=require('net');const s=net.createServer();" +
+    "s.listen(0,'127.0.0.1',()=>{process.stdout.write(String(s.address().port));s.close(()=>process.exit(0));});"
+  ], { encoding: 'utf8' });
+  const port = parseInt(out.trim(), 10);
+  if (!Number.isInteger(port) || port <= 0) throw new Error('getFreePort() failed, got: ' + out);
+  return port;
+}
+
+// Proves the telemetry Worker was genuinely alive and exercised throughout a case, rather than
+// having silently degraded (or never started) before the adversarial content was even pushed
+// through it -- which would make the "host survives" assertions above pass vacuously.
+function assertNoTelemetryDegraded(logDir, res) {
+  const degraded = readAuditEvents(logDir).filter((e) => e.eventType === 'TELEMETRY_DEGRADED');
+  assert.strictEqual(degraded.length, 0,
+    'expected no TELEMETRY_DEGRADED audit event -- the worker must stay alive under adversarial pressure, not silently degrade: ' + JSON.stringify(degraded));
+  assert.ok(!/Telemetry worker (failed to start|crashed)/.test(res.stderr || ''),
+    'expected no telemetry-degraded warning on stderr, got:\n' + res.stderr);
 }
 
 // Sets up: a QUARANTINE-policy'd "attacker" package (the adversarial fixture drives its proxy),
@@ -89,8 +114,10 @@ function runChild(tmp, logDir, childScriptPath, extraEnv) {
       FW_TELEMETRY: '1',
       FW_POLICY_PUBKEY: TEST_PUBLIC_KEY,
       HELIOS_LOG_DIR: logDir,
-      // Nothing listens here -- the real sync-worker.js HTTP POST genuinely fails to connect.
-      FW_CONTROL_PORT: '18291',
+      // Freshly-freed port, allocated per-call -- nothing listens here, so the real sync-worker.js
+      // HTTP POST genuinely fails to connect, without risking collision with a hardcoded port that
+      // some CI/dev machine happens to already have bound.
+      FW_CONTROL_PORT: String(getFreePort()),
     }, extraEnv),
     timeout: 20000,
   });
@@ -140,6 +167,9 @@ function parseResult(stdout) {
     const events = readAuditEvents(logDir);
     assert.ok(events.some((e) => e.eventType === 'QUARANTINE_ACTIVE'), 'expected the quarantine activation to be locally audited regardless of telemetry outcome');
   });
+  check('adversarial: the telemetry worker was not degraded by huge property-name content', () => {
+    assertNoTelemetryDegraded(logDir, res);
+  });
 
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(logDir, { recursive: true, force: true });
@@ -173,6 +203,9 @@ function parseResult(stdout) {
     const result = parseResult(res.stdout);
     assert.ok(result.canaryError && result.canaryError.includes('[Firewall]'), 'canary-pkg must still be blocked: ' + JSON.stringify(result));
   });
+  check('adversarial: the telemetry worker was not degraded by exotic property names', () => {
+    assertNoTelemetryDegraded(logDir, res);
+  });
 
   fs.rmSync(tmp, { recursive: true, force: true });
   fs.rmSync(logDir, { recursive: true, force: true });
@@ -203,6 +236,9 @@ function parseResult(stdout) {
   check('adversarial: enforcement (BLOCK policy) still runs after the flood', () => {
     const result = parseResult(res.stdout);
     assert.ok(result.canaryError && result.canaryError.includes('[Firewall]'), 'canary-pkg must still be blocked: ' + JSON.stringify(result));
+  });
+  check('adversarial: the telemetry worker was not degraded by the flood', () => {
+    assertNoTelemetryDegraded(logDir, res);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
@@ -239,6 +275,9 @@ function parseResult(stdout) {
   check('adversarial: local audit logging is independent of remote telemetry reachability', () => {
     const events = readAuditEvents(logDir);
     assert.ok(events.some((e) => e.eventType === 'QUARANTINE_ACTIVE'), 'expected local audit events regardless of whether the remote POST succeeded');
+  });
+  check('adversarial: an unreachable control plane is a fail-open network error, not a worker degradation', () => {
+    assertNoTelemetryDegraded(logDir, res);
   });
 
   fs.rmSync(tmp, { recursive: true, force: true });
