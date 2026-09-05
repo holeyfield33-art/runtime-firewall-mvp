@@ -20,6 +20,27 @@ on the combined result with 0 regressions and 0 false positives.
 
 ### Security
 
+- **F-21.1/F-21.2 follow-up / #108: verified telemetry degraded-state resilience against
+  attacker-controlled content, not just synthetic Worker failures.** The P0-3/P0-4 fix (below)
+  proved that a telemetry Worker *failure* degrades gracefully. This closes the sharper question
+  a post-fix review raised: can a malicious package's own behavior — content it actually
+  controls (quarantine-proxy property-access names, its own package identity, detection-match
+  labels) — *intentionally* trigger that same path, handing it an observability-denial primitive
+  even without bypassing containment? Investigated with real, non-simulated adversarial
+  pressure — a real `FW_TELEMETRY=1` worker, no `Module._load` shim: extremely long property
+  names (a Symbol description or string key up to 2,000,000 characters), exotic/prototype-
+  pollution-shaped property names (`__proto__`, `constructor`, `toString`, direct
+  `__proto__` assignment), a 50,000-access flood against the real worker mailbox (well past the
+  existing rate limiter), and a genuinely unreachable control-plane target (not a mocked
+  network error). **No attacker-controlled crash was reproduced** across any vector — the
+  F-21.1/F-21.2 fail-open defenses hold under real adversarial content, not only the two
+  synthetic failure shims that originally motivated them; local audit logging remained
+  unaffected by remote telemetry reachability throughout. Per the issue's own acceptance
+  criteria (don't fix a hypothetical bug — mirrors #93's discipline), no Worker restart/backoff
+  logic was added, since none was needed. Added `telemetry-adversarial-resilience-test.js` (10
+  checks) as permanent regression coverage proving this negative holds going forward; wired
+  into `test:unit`.
+
 - **F-1.1 / P0-5: disclosed the function-indirection correlation limitation and added an
   adversarial fixture for it, ahead of tag.** The behavioral-correlation rules
   (`CREDENTIAL_EXFILTRATION`, `DYNAMIC_CODE_EXEC_CHAIN`, etc.) fire when two or more signals'
