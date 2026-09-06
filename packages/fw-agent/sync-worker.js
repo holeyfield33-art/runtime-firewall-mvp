@@ -28,7 +28,7 @@ function flushEvents(callback) {
   const payload = JSON.stringify({ agentId, events: batch, schemaVersion: 1 });
 
   const options = {
-    hostname: 'localhost',
+    hostname: '127.0.0.1',
     port: process.env.FW_CONTROL_PORT || 3000,
     path: '/v1/telemetry',
     method: 'POST',
@@ -45,6 +45,13 @@ function flushEvents(callback) {
 
   const req = http.request(options, (res) => {
     res.resume();
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      parentPort.postMessage({
+        type: 'TELEMETRY_DELIVERY_FAILURE',
+        statusCode: res.statusCode,
+        eventCount: batch.length,
+      });
+    }
     if (callback) callback();
   });
 

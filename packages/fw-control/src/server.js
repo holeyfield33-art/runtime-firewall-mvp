@@ -15,6 +15,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { TELEMETRY_EVENT_TYPES } = require('../../fw-agent/src/telemetry-protocol');
 
 const PORT = process.env.FW_CONTROL_PORT || 3000;
 // Always enforce authentication on /logs.
@@ -99,11 +100,7 @@ const telemetrySchema = {
           properties: {
             eventType: {
               type: 'string',
-              enum: [
-                'OBSERVE', 'WARN', 'QUARANTINE_ACTIVE', 'QUARANTINE_BREACH', 'BLOCK',
-                'DETECTION_TRIGGERED', 'QUARANTINE_BLOCK_REQUIRE', 'POLICY_TAMPER_LOCKDOWN',
-                'SUSPICIOUS_SCRIPT', 'AGENT_START', 'AGENT_SHUTDOWN',
-              ],
+              enum: TELEMETRY_EVENT_TYPES,
             },
             packageName: { type: 'string' },
             parentPackage: { type: ['string', 'null'] },

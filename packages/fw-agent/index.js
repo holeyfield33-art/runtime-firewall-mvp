@@ -81,6 +81,7 @@ if (process.env.FW_ENABLE_DETECTION !== '1') {
 })();
 
 const { Detector } = require('./src/detector');
+const { isTelemetryEventType } = require('./src/telemetry-protocol');
 const { QuarantineStub } = require('./src/quarantine');
 const { PolicyWatcher, assertProductionKeyConfig } = require('./src/policy-watcher');
 const { getAuditLog } = require('./src/audit-log');
@@ -460,13 +461,43 @@ if (telemetryEnabled) {
   try {
     // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
     // telemetry worker must never be re-injected with a fresh copy of the agent.
-    const w = new Worker(telemetryWorkerPath);
-    w.unref();
+    //
+    // Also strip inherited `--require` preload flags from this internal worker's execArgv. The
+    // parent process may itself be running with `--require <fw-agent>`; if inherited unchanged, the
+    // telemetry worker preloads the agent before running sync-worker.js, recursively bootstraps
+    // another telemetry worker, and can keep short-lived hosts from exiting.
+    const telemetryExecArgv = [];
+    for (let i = 0; i < process.execArgv.length; i++) {
+      const arg = process.execArgv[i];
+      if (arg === '--require' || arg === '-r') {
+        i++; // Skip the paired value too.
+        continue;
+      }
+      if (arg.startsWith('--require=') || arg.startsWith('-r=')) continue;
+      telemetryExecArgv.push(arg);
+    }
+    const w = new Worker(telemetryWorkerPath, { execArgv: telemetryExecArgv });
+    w.on('message', (message) => {
+      if (message && message.type === 'TELEMETRY_DELIVERY_FAILURE') {
+        try {
+          auditLog.write({
+            eventType: 'TELEMETRY_DELIVERY_FAILURE',
+            timestamp: Date.now(),
+            reason: 'control-plane rejected batch',
+            statusCode: message.statusCode,
+            eventCount: message.eventCount,
+          });
+        } catch (e) {}
+      }
+    });
     // F-21.2: an uncaught exception inside the worker thread surfaces here as an 'error' event.
     // Without a listener attached, Node treats a Worker 'error' as fatal to the *parent* process
     // (an EventEmitter 'error' with no listener throws) — a telemetry-only failure must never take
     // the protected host down with it.
     w.on('error', (err) => degradeTelemetry('crashed', err));
+    // Keep telemetry fully best-effort: once listeners are attached, unref the worker so it can
+    // never keep an otherwise-idle host process alive.
+    w.unref();
     telemetryWorker = w;
   } catch (err) {
     // F-21.1: synchronous Worker construction can itself throw (resource exhaustion, missing
@@ -509,6 +540,12 @@ const detector = new Detector(policyMap);
 // ── Telemetry helpers ─────────────────────────────────────────────────────────────────────────
 function emitTelemetry(eventType, packageName, parentPackage, metadata = {}) {
   if (!telemetryWorker) return;
+  if (!isTelemetryEventType(eventType)) {
+    try {
+      auditLog.write({ eventType: 'TELEMETRY_DELIVERY_FAILURE', timestamp: Date.now(), reason: 'unknown event type', rejectedEventType: eventType });
+    } catch (e) {}
+    return;
+  }
   try {
     telemetryWorker.postMessage({
       type: 'TELEMETRY_EVENT',
@@ -787,7 +824,7 @@ Module.prototype._compile = function (content, filename) {
     emitTelemetry('QUARANTINE_ACTIVE', canonicalIdentity, null, { source: 'policy' });
     quarantinedModules.add(filename);
     // Return a stub without executing the module's code
-    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, canonicalIdentity, null, d) });
+    const stub = new QuarantineStub(requestName, { emit: (_t, d) => emitTelemetry('QUARANTINE_BREACH', canonicalIdentity, null, d) });
     this.exports = stub.createProxy();
     // F-58: this was a deliberate, definitive decision by our own hook -- verified.
     verifiedModulePaths.add(filename);

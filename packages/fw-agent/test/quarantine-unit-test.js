@@ -109,10 +109,23 @@ const { QuarantineStub } = require('../src/quarantine');
   console.warn = origWarn;
 
   assert.ok(emitted.length >= 1, 'telemetry.emit must be called with a forensic object');
-  assert.strictEqual(emitted[0].type, 'quarantine_event', 'emit event type');
+  assert.strictEqual(emitted[0].type, 'QUARANTINE_BREACH', 'emit event type');
   assert.ok(emitted[0].payload.hash && /^[0-9a-f]{64}$/.test(emitted[0].payload.hash), 'forensic hash attached');
   assert.ok(warnedFirstBreach, 'first breach must log a [Quarantine Intercept] line');
   console.log('  ✓ telemetry.emit + first-breach console path covered');
+}
+
+// ── Test 3e: attacker-controlled property names are bounded before forensic work ─────────────
+{
+  const emitted = [];
+  const stub = new QuarantineStub('bounded-pkg', { emit: (type, payload) => emitted.push({ type, payload }) });
+  const proxy = stub.createProxy();
+  proxy['x'.repeat(2_000_000)];
+
+  assert.ok(emitted.length >= 1, 'large property access must still emit a forensic event');
+  assert.ok(emitted[0].payload.value.details.property.endsWith('...[truncated]'), 'large property must be truncated');
+  assert.strictEqual(emitted[0].payload.value.details.propertyLength, 2_000_000, 'original property length must be retained');
+  console.log('  ✓ attacker-controlled quarantine property names are bounded before telemetry');
 }
 
 // ── Test 3d: defineProperty trap is pretend-success, never forwards to target (F-63) ─────────
