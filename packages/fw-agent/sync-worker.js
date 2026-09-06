@@ -28,7 +28,7 @@ function flushEvents(callback) {
   const payload = JSON.stringify({ agentId, events: batch, schemaVersion: 1 });
 
   const options = {
-    hostname: 'localhost',
+    hostname: '127.0.0.1',
     port: process.env.FW_CONTROL_PORT || 3000,
     path: '/v1/telemetry',
     method: 'POST',

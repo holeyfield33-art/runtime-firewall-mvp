@@ -15,6 +15,8 @@ const { Worker } = require('worker_threads');
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 
+  assert.strictEqual(server.address().address, '127.0.0.1', 'delivery fixture must use the same loopback family as the worker');
+
   const worker = new Worker(path.join(__dirname, '..', 'sync-worker.js'), {
     env: { ...process.env, FW_CONTROL_PORT: String(server.address().port) },
   });
