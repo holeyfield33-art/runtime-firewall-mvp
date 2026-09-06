@@ -3,20 +3,26 @@ const { hashMemoryObject, createForensicObject } = require('./policy');
 
 const MAX_FORENSIC_PROPERTY_LENGTH = 256;
 
+// Single source of truth for bounding an attacker-controlled property name before it is
+// hashed, logged, or serialized. Returns { property, propertyLength } — propertyLength is
+// only present when truncation actually occurred, carrying the true original length.
 function formatPropertyForForensics(property) {
   if (typeof property === 'string') {
-    return property.length > MAX_FORENSIC_PROPERTY_LENGTH
-      ? `${property.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated]`
-      : property;
+    if (property.length <= MAX_FORENSIC_PROPERTY_LENGTH) return { property };
+    return {
+      property: `${property.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated]`,
+      propertyLength: property.length,
+    };
   }
   if (typeof property === 'symbol') {
     const description = property.description || '';
-    const boundedDescription = description.length > MAX_FORENSIC_PROPERTY_LENGTH
-      ? `${description.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated]`
-      : description;
-    return `Symbol(${boundedDescription})`;
+    if (description.length <= MAX_FORENSIC_PROPERTY_LENGTH) return { property: `Symbol(${description})` };
+    return {
+      property: `Symbol(${description.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated])`,
+      propertyLength: description.length,
+    };
   }
-  return String(property);
+  return { property: String(property) };
 }
 
 /**
@@ -38,16 +44,7 @@ class QuarantineStub {
   record(operation, details = {}) {
     this.interceptCount++;
 
-    // Property names are attacker-controlled. Bound them before hashing, logging, or
-    // structured-cloning the forensic event so a huge key cannot exhaust the host.
-    if (typeof details.property === 'string' && details.property.length > MAX_FORENSIC_PROPERTY_LENGTH) {
-      details = {
-        ...details,
-        property: `${details.property.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated]`,
-        propertyLength: details.property.length,
-      };
-    }
-    
+
     // Detect rapid-fire intercepts (>100 calls in <1ms) as a potential exhaustion attack.
     // Do NOT kill the host process — rate-limit logs and return to preserve availability.
     const currentDelta = Number(process.hrtime.bigint() - this.initTime) / 1e6;
@@ -144,7 +141,7 @@ class QuarantineStub {
         }
 
         // Record the interception
-        this.record(`property_access`, { property: formatPropertyForForensics(prop) });
+        this.record(`property_access`, { ...formatPropertyForForensics(prop) });
 
         // Invariant: get must report the *real* value for a non-configurable, non-writable own
         // data property (e.g. `prototype` after a consumer hardens the proxy with
@@ -159,7 +156,7 @@ class QuarantineStub {
         // Return a function that logs further calls
         return (...args) => {
           this.record(`method_call`, {
-            property: formatPropertyForForensics(prop),
+            ...formatPropertyForForensics(prop),
             args: args.length
           });
           return null; // Graceful degradation
@@ -167,7 +164,7 @@ class QuarantineStub {
       },
 
       set: (target, prop, value) => {
-        this.record(`property_write`, { property: formatPropertyForForensics(prop) });
+        this.record(`property_write`, { ...formatPropertyForForensics(prop) });
         // Mirror the get trap: once a key is genuinely non-configurable+non-writable on the
         // target, the invariant requires the trap to honestly fail (or no-op) a set to a
         // different value rather than pretend success — Reflect.set does exactly that.
@@ -179,13 +176,13 @@ class QuarantineStub {
       },
 
       has: (target, prop) => {
-        this.record(`property_check`, { property: formatPropertyForForensics(prop) });
+        this.record(`property_check`, { ...formatPropertyForForensics(prop) });
         // Cannot report a non-configurable (or, once frozen, any real) own key as absent.
         return isRealOwnKey(prop);
       },
 
       deleteProperty: (target, prop) => {
-        this.record(`property_delete`, { property: formatPropertyForForensics(prop) });
+        this.record(`property_delete`, { ...formatPropertyForForensics(prop) });
         const real = Reflect.getOwnPropertyDescriptor(target, prop);
         if (real && !real.configurable) {
           return false; // Cannot delete a non-configurable own property (e.g. `prototype`)
@@ -212,7 +209,7 @@ class QuarantineStub {
       //   - the target has been made non-extensible (Object.preventExtensions(proxy)), where
       //     pretending to successfully ADD a new property is likewise a violation.
       defineProperty: (target, prop, descriptor) => {
-        this.record(`property_define`, { property: formatPropertyForForensics(prop) });
+        this.record(`property_define`, { ...formatPropertyForForensics(prop) });
         const real = Reflect.getOwnPropertyDescriptor(target, prop);
         const mustBeHonest =
           (real && !real.configurable) || descriptor.configurable === false || !Reflect.isExtensible(target);
@@ -228,7 +225,7 @@ class QuarantineStub {
       },
 
       getOwnPropertyDescriptor: (target, prop) => {
-        this.record(`descriptor_query`, { property: formatPropertyForForensics(prop) });
+        this.record(`descriptor_query`, { ...formatPropertyForForensics(prop) });
         return isRealOwnKey(prop) ? Reflect.getOwnPropertyDescriptor(target, prop) : undefined;
       }
     });
