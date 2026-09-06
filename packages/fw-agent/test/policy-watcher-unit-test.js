@@ -606,6 +606,54 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
     console.log('  ok F-84: canonicalPayload\'s Object.create(null) call uses a pristine capture -- Object.create monkeypatched AFTER module load does not forge a policy past verification');
   }
 
+  // Test 14: P0 regression -- canonicalization must not invoke captured functions through the
+  // mutable Function.prototype.call. The attacker reuses a valid empty-policy signature after
+  // injecting a rule into the signed JSON, then replaces Function.prototype.call so a vulnerable
+  // `pristineSort.call(...)` path sees an empty key list. The verifier must reject the forged
+  // policy, while an honestly signed policy and the offline signer remain functional.
+  {
+    const signedEmpty = signPolicy({}, DEV_PRIVATE_KEY);
+    const forged = {
+      version: 1,
+      rules: { 'p0-forged-pkg': 'BLOCK' },
+      signedAt: signedEmpty.signedAt,
+      signature: signedEmpty.signature,
+    };
+    const forgedPath = freshPolicyPath();
+    fs.writeFileSync(forgedPath, JSON.stringify(forged, null, 2) + '\n', 'utf8');
+
+    const realCall = Function.prototype.call;
+    const realApply = Reflect.apply;
+    const realSort = Array.prototype.sort;
+    // eslint-disable-next-line no-extend-native
+    Function.prototype.call = function (...args) {
+      if (this === realSort) return [];
+      return realApply(realCall, this, args);
+    };
+    try {
+      assert.strictEqual(
+        new PolicyWatcher(forgedPath, {}).verify(), false,
+        'P0: a stale empty-policy signature must not validate forged rules when Function.prototype.call is tampered'
+      );
+
+      const validPath = freshPolicyPath();
+      const signedValid = signPolicy({ 'p0-valid-pkg': 'OBSERVE' }, DEV_PRIVATE_KEY);
+      assert.ok(
+        Object.prototype.hasOwnProperty.call(signedValid.rules, 'p0-valid-pkg'),
+        'P0: signPolicy must retain rules while Function.prototype.call is tampered'
+      );
+      fs.writeFileSync(validPath, JSON.stringify(signedValid, null, 2) + '\n', 'utf8');
+      assert.strictEqual(
+        new PolicyWatcher(validPath, {}).verify(), true,
+        'P0: a legitimately signed policy must still verify while Function.prototype.call is tampered'
+      );
+    } finally {
+      Function.prototype.call = realCall;
+    }
+
+    console.log('  ok P0: Function.prototype.call tampering cannot forge policy canonicalization');
+  }
+
   try { fs.rmSync(tmpBase, { recursive: true }); } catch (e) {}
 
   console.log('All policy-watcher unit tests passed.');

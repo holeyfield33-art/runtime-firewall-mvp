@@ -102,6 +102,8 @@ const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim()
 const pristineStringify = JSON.stringify;
 const pristineKeys = Object.keys;
 const pristineSort = Array.prototype.sort;
+const pristineCall = Function.prototype.call;
+const pristineApply = Reflect.apply;
 const pristineBufferFrom = Buffer.from;
 const pristineCreate = Object.create;
 
@@ -190,7 +192,7 @@ const pristineCreate = Object.create;
  */
 function canonicalPayload(version, rules, signedAt) {
   const sorted = pristineCreate(null);
-  const keys = pristineSort.call(pristineKeys(rules));
+  const keys = pristineApply(pristineCall, pristineSort, [pristineKeys(rules)]);
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));
 }
