@@ -52,7 +52,7 @@ class QuarantineStub {
     // Only emit telemetry if it exists (may be disabled during benchmarks)
     if (this.telemetry && this.telemetry.emit) {
       // Emit telemetry with the hash for immutable audit trail
-      this.telemetry.emit('quarantine_event', {
+      this.telemetry.emit('QUARANTINE_BREACH', {
         ...forensicObject,
         hash: eventHash  // Tamper-evident anchor
       });

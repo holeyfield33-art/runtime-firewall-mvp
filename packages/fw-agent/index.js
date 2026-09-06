@@ -37,6 +37,7 @@ if (process.env.FW_ENABLE_DETECTION !== '1') {
 }
 
 const { Detector } = require('./src/detector');
+const { isTelemetryEventType } = require('./src/telemetry-protocol');
 const { QuarantineStub } = require('./src/quarantine');
 const { PolicyWatcher, assertProductionKeyConfig } = require('./src/policy-watcher');
 const { getAuditLog } = require('./src/audit-log');
@@ -469,6 +470,19 @@ if (telemetryEnabled) {
     // telemetry worker must never be re-injected with a fresh copy of the agent.
     const w = new Worker(telemetryWorkerPath);
     w.unref();
+    w.on('message', (message) => {
+      if (message && message.type === 'TELEMETRY_DELIVERY_FAILURE') {
+        try {
+          auditLog.write({
+            eventType: 'TELEMETRY_DELIVERY_FAILURE',
+            timestamp: Date.now(),
+            reason: 'control-plane rejected batch',
+            statusCode: message.statusCode,
+            eventCount: message.eventCount,
+          });
+        } catch (e) {}
+      }
+    });
     // F-21.2: an uncaught exception inside the worker thread surfaces here as an 'error' event.
     // Without a listener attached, Node treats a Worker 'error' as fatal to the *parent* process
     // (an EventEmitter 'error' with no listener throws) — a telemetry-only failure must never take
@@ -516,6 +530,12 @@ const detector = new Detector(policyMap);
 // ── Telemetry helpers ─────────────────────────────────────────────────────────────────────────
 function emitTelemetry(eventType, packageName, parentPackage, metadata = {}) {
   if (!telemetryWorker) return;
+  if (!isTelemetryEventType(eventType)) {
+    try {
+      auditLog.write({ eventType: 'TELEMETRY_DELIVERY_FAILURE', timestamp: Date.now(), reason: 'unknown event type', rejectedEventType: eventType });
+    } catch (e) {}
+    return;
+  }
   try {
     telemetryWorker.postMessage({
       type: 'TELEMETRY_EVENT',
@@ -794,7 +814,7 @@ Module.prototype._compile = function (content, filename) {
     emitTelemetry('QUARANTINE_ACTIVE', canonicalIdentity, null, { source: 'policy' });
     quarantinedModules.add(filename);
     // Return a stub without executing the module's code
-    const stub = new QuarantineStub(requestName, { emit: (t, d) => emitTelemetry(t, canonicalIdentity, null, d) });
+    const stub = new QuarantineStub(requestName, { emit: (_t, d) => emitTelemetry('QUARANTINE_BREACH', canonicalIdentity, null, d) });
     this.exports = stub.createProxy();
     // F-58: this was a deliberate, definitive decision by our own hook -- verified.
     verifiedModulePaths.add(filename);

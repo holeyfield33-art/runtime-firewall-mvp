@@ -45,6 +45,13 @@ function flushEvents(callback) {
 
   const req = http.request(options, (res) => {
     res.resume();
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      parentPort.postMessage({
+        type: 'TELEMETRY_DELIVERY_FAILURE',
+        statusCode: res.statusCode,
+        eventCount: batch.length,
+      });
+    }
     if (callback) callback();
   });
 

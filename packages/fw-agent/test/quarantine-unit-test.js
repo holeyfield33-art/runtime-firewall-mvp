@@ -109,7 +109,7 @@ const { QuarantineStub } = require('../src/quarantine');
   console.warn = origWarn;
 
   assert.ok(emitted.length >= 1, 'telemetry.emit must be called with a forensic object');
-  assert.strictEqual(emitted[0].type, 'quarantine_event', 'emit event type');
+  assert.strictEqual(emitted[0].type, 'QUARANTINE_BREACH', 'emit event type');
   assert.ok(emitted[0].payload.hash && /^[0-9a-f]{64}$/.test(emitted[0].payload.hash), 'forensic hash attached');
   assert.ok(warnedFirstBreach, 'first breach must log a [Quarantine Intercept] line');
   console.log('  ✓ telemetry.emit + first-breach console path covered');
