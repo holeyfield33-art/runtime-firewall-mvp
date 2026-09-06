@@ -920,7 +920,10 @@ Module._load = function (request, parent, isMain) {
     return originalModuleLoad.apply(this, arguments);
   }
 
-  if (CACHE_GATED_EXTENSIONS.has(path.extname(resolvedPath))) {
+  // Case-normalized: path.extname() preserves the filesystem's literal case (`.JS`, `.Js`), and
+  // on a case-insensitive filesystem (Windows, default macOS) a module resolved with unusual
+  // extension casing must not silently dodge the cache-substitution gate this check exists for.
+  if (CACHE_GATED_EXTENSIONS.has(path.extname(resolvedPath).toLowerCase())) {
     const cacheEntry = Module._cache[resolvedPath];
     if (cacheEntry !== undefined && !verifiedModulePaths.has(resolvedPath)) {
       const policy = resolveCachePolicy();
