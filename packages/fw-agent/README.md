@@ -97,6 +97,7 @@ Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md)
 | `FW_CACHE_POLICY` | `block` under `FW_MODE=enforce`, else `audit` | How `require.cache`/`Module._load` pre-seeding (a forged cache entry that bypasses `_compile` entirely) is handled: `block` refuses the substitution, `audit` allows it but logs, `allow` disables the check. |
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
+| `FW_TELEMETRY_TOKEN` | *(none)* | Bearer token sent with every `/v1/telemetry` request when `FW_TELEMETRY=1`. Must match the control plane's own `FW_TELEMETRY_TOKEN`; required if the control plane is reachable beyond the local host. |
 | `FW_MODE` | `dev` | `enforce` fails closed (`process.exit(1)`) when not preloaded via `--require`; `dev` (default) warns loudly and continues. See the root README's "Enforcement mode vs Development mode" section. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze built-in prototypes (prototype-pollution hardening; opt-in because it breaks some polyfills and test frameworks) |
