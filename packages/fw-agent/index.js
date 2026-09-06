@@ -461,8 +461,22 @@ if (telemetryEnabled) {
   try {
     // Uses the top-level `Worker` binding captured before the patch above ran — the agent's own
     // telemetry worker must never be re-injected with a fresh copy of the agent.
-    const w = new Worker(telemetryWorkerPath);
-    w.unref();
+    //
+    // Also strip inherited `--require` preload flags from this internal worker's execArgv. The
+    // parent process may itself be running with `--require <fw-agent>`; if inherited unchanged, the
+    // telemetry worker preloads the agent before running sync-worker.js, recursively bootstraps
+    // another telemetry worker, and can keep short-lived hosts from exiting.
+    const telemetryExecArgv = [];
+    for (let i = 0; i < process.execArgv.length; i++) {
+      const arg = process.execArgv[i];
+      if (arg === '--require' || arg === '-r') {
+        i++; // Skip the paired value too.
+        continue;
+      }
+      if (arg.startsWith('--require=') || arg.startsWith('-r=')) continue;
+      telemetryExecArgv.push(arg);
+    }
+    const w = new Worker(telemetryWorkerPath, { execArgv: telemetryExecArgv });
     w.on('message', (message) => {
       if (message && message.type === 'TELEMETRY_DELIVERY_FAILURE') {
         try {
@@ -481,6 +495,9 @@ if (telemetryEnabled) {
     // (an EventEmitter 'error' with no listener throws) — a telemetry-only failure must never take
     // the protected host down with it.
     w.on('error', (err) => degradeTelemetry('crashed', err));
+    // Keep telemetry fully best-effort: once listeners are attached, unref the worker so it can
+    // never keep an otherwise-idle host process alive.
+    w.unref();
     telemetryWorker = w;
   } catch (err) {
     // F-21.1: synchronous Worker construction can itself throw (resource exhaustion, missing
