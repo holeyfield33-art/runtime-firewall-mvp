@@ -24,6 +24,12 @@ const fs = require('fs');
 // This file runs offline in a trusted signer process, so it is not the live attack surface (the
 // verify-side copy in policy-watcher.js is), but it must stay byte-identical to that side.
 const pristineCreate = Object.create;
+const pristineKeys = Object.keys;
+const pristineSort = Array.prototype.sort;
+const pristineCall = Function.prototype.call;
+const pristineApply = Reflect.apply;
+const pristineStringify = JSON.stringify;
+const pristineBufferFrom = Buffer.from;
 
 /**
  * Sort rules keys alphabetically for a deterministic canonical form.
@@ -51,9 +57,9 @@ const pristineCreate = Object.create;
  */
 function canonicalPayload(version, rules, signedAt) {
   const sorted = pristineCreate(null);
-  const keys = Object.keys(rules).sort();
+  const keys = pristineApply(pristineCall, pristineSort, [pristineKeys(rules)]);
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
-  return Buffer.from(JSON.stringify({ version, rules: sorted, signedAt }));
+  return pristineBufferFrom(pristineStringify({ version, rules: sorted, signedAt }));
 }
 
 /**
@@ -83,7 +89,7 @@ function signPolicy(rules, privateKeyPem, signedAt) {
   // get back a validly-signed policy.signed.json silently missing that exact rule, with no error.
   // Fixed identically to canonicalPayload() -- index-based iteration, immune to Symbol.iterator.
   const sorted = pristineCreate(null);
-  const keys = Object.keys(rules).sort();
+  const keys = pristineApply(pristineCall, pristineSort, [pristineKeys(rules)]);
   for (let i = 0; i < keys.length; i++) sorted[keys[i]] = rules[keys[i]];
   const payload = canonicalPayload(version, sorted, ts);
   const sigBuffer = crypto.sign(null, payload, { key: privateKeyPem, format: 'pem', type: 'pkcs8' });
