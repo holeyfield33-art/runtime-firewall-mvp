@@ -254,4 +254,46 @@ function parseResult(stdout) {
   fs.rmSync(tmp, { recursive: true, force: true });
 })();
 
+// ── 5. Case-sensitivity regression: the gate must apply regardless of extension casing ─────────
+// CACHE_GATED_EXTENSIONS only ever stored lowercase '.js'/'.cjs', but path.extname() preserves
+// the filesystem's literal case. On a case-insensitive filesystem (Windows, default macOS) --
+// or simply a request string spelled with unusual casing -- a resolved path ending in '.JS',
+// '.Js', '.CJS', or '.CjS' would fail the Set.has() lookup and dodge the cache-substitution gate
+// entirely, even though Module.prototype._compile still processes these extensions identically
+// to their lowercase forms. Fixed: the gate now lowercases the extension before the lookup.
+(function caseSensitivityRegression() {
+  const tmp = mkTmpDir('fw-cache-case-');
+
+  for (const ext of ['.js', '.JS', '.Js', '.cjs', '.CJS', '.CjS']) {
+    const target = path.join(tmp, 'forged-target' + ext);
+    fs.writeFileSync(target, 'module.exports = { legitimate: true };\n');
+
+    const attackScript = `
+      const Module = require('module');
+      require(${JSON.stringify(AGENT_PATH)});
+      const target = ${JSON.stringify(target)};
+      const forged = new Module(target, null);
+      forged.filename = target;
+      forged.loaded = true;
+      forged.exports = { stolen: true };
+      require.cache[target] = forged;
+      let result, threw = null;
+      try { result = require(target); } catch (e) { threw = e.message; }
+      console.log('RESULT:' + JSON.stringify({ result, threw }));
+    `;
+
+    check(`extension "${ext}": forged cache entry + FW_CACHE_POLICY=block is refused (gate applies regardless of case)`, () => {
+      const res = runChild(tmp, attackScript, { FW_CACHE_POLICY: 'block' });
+      const result = parseResult(res.stdout);
+      assert.strictEqual(result.result, undefined, `require() must not return the forged exports for "${ext}"`);
+      assert.ok(result.threw && /unverified require\.cache entry/.test(result.threw), `expected a cache-substitution refusal for "${ext}", got: ` + result.threw);
+      const evt = res.auditEvents.find(e => e.eventType === 'CACHE_SUBSTITUTION_DETECTED');
+      assert.ok(evt, `audit log must record CACHE_SUBSTITUTION_DETECTED for "${ext}": ` + JSON.stringify(res.auditEvents));
+      assert.strictEqual(evt.action, 'BLOCK');
+    });
+  }
+
+  fs.rmSync(tmp, { recursive: true, force: true });
+})();
+
 console.log(`\n${passed} cache-poisoning (F-58) checks passed.`);
