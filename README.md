@@ -140,7 +140,7 @@ Every 60 seconds, the policy file is reloaded and its Ed25519 signature is verif
 
 ### 5. Self-Integrity Check
 
-On every startup the firewall computes a SHA-256 hash across all its own source files (`index.js`, `detector.js`, `behavior-tracker.js`, etc.) and compares it to `.helios-baseline`. If the firewall code has been tampered with, startup is aborted. The hash is computed over line-ending-normalized (`\r\n` → `\n`) UTF-8 content, so the check is stable across Linux, macOS, Windows, and CI checkouts (a `.gitattributes` at the repo root also enforces LF for text files).
+On every startup the firewall computes a SHA-256 hash across all its own source files (`index.js`, `detector.js`, `behavior-tracker.js`, etc.) and compares it to `.helios-baseline` **before loading the local security-critical implementation modules**. If the firewall code has been tampered with, startup is aborted before those modules' top-level code executes. The early verifier is a minimal bootstrap boundary built from Node built-ins, `fs`, `path`, and a captured hash primitive; it still assumes the entrypoint itself, Node runtime, and launcher are trusted. This is package self-integrity, not external authentication of an already-executing entrypoint. The hash is computed over line-ending-normalized (`\r\n` → `\n`) UTF-8 content, so the check is stable across Linux, macOS, Windows, and CI checkouts (a `.gitattributes` at the repo root also enforces LF for text files).
 
 ### 6. Runtime Detection (Bun / Deno)
 
