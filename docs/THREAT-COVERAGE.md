@@ -10,8 +10,8 @@ architectural scope boundary documented below.
 - Enforcement mapping: HIGH/CRITICAL → hard block (`require()` throws); WARN/MEDIUM → `OBSERVE` telemetry, module runs.
 
 Last verified against the adversarial suite (all passing) and the engine-core coverage gate
-(≥99% lines, 100% functions, ≥90% branches — the `ast-scan.js` addition in Phase 3 pulled
-aggregate branch coverage down from the prior ≥95% floor to just above the gate's 90% minimum;
+(≥95% lines, ≥95% functions, ≥90% branches — the `ast-scan.js` addition in Phase 3 pulled
+aggregate branch coverage down to just above the gate's 90% minimum;
 see `npm run test:coverage`).
 
 ---
@@ -330,6 +330,6 @@ npm run test:unit          # detector + behavior-tracker + policy + quarantine u
 npm run test:matrix        # execution-surface matrix (which code paths reach a hook at all)
 npm run test:coverage      # engine-core coverage gate (95%)
 npm run test:live          # end-to-end: miner + base64→eval both blocked (Blocked: 2)
-npm run redteam            # 151-payload red-team suite: logs caught vs. bypassed + gap report
+npm run redteam            # 179-payload red-team suite: logs caught vs. bypassed + gap report
 bash scripts/audit-1-policy.sh && bash scripts/audit-2-interception.sh && bash scripts/audit-3-runtime.sh
 ```

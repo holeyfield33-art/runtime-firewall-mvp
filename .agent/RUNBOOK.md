@@ -19,8 +19,7 @@ JSON Schema subset validator — nothing in `.agent/scripts/` needs `npm install
 CLI) is only needed if you're opening a PR at the end; not needed to run the graph itself.
 
 **One thing that will surprise you if you don't know it going in:** if your directive touches
-any of `packages/fw-agent/{index.js,src/detector.js,src/behavior-tracker.js,src/policy-watcher.js,
-src/quarantine.js,src/audit-log.js,src/policy.js}`, you MUST run `npm run baseline` before your
+any of `packages/fw-agent/{index.js,sync-worker.js,src/aho-corasick.js,src/ast-scan.js,src/detector.js,src/behavior-tracker.js,src/policy-watcher.js,src/quarantine.js,src/audit-log.js,src/policy.js}` (the full 10-file self-integrity set), you MUST run `npm run baseline` before your
 candidate can even start (self-integrity check) — and that regenerated file
 (`packages/fw-agent/.helios-baseline`) has to be in your `changed_files`, or `release-warden.js`
 FREEZEs on missing evidence... no wait, it FREEZEs because `.helios-baseline` is a forbidden path

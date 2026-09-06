@@ -205,12 +205,13 @@ settings, since that reflects true out-of-the-box behavior — see each entry's
 `dce-bracket-eval`, `dce-alias-eval`, `dce-join-require`, `dce-unicode-escape-eval`,
 `dce-eval-decodeuri`, `dce-fromcharcode-eval`, `dce-reverse-eval`,
 `dce-constructor-constructor`, `dce-generatorfunction`, `dce-indirect-eval-decodeuri`,
+`dce-span-exhaustion-front`, `dce-span-exhaustion-middle`, `dce-span-exhaustion-end`,
 `miner-concat-stratum`, `miner-base64-pool`, `miner-charcode-coinhive`,
 `miner-concat-cryptonight`, `miner-hex-pool`, `revsh-base64-devtcp`, `exfil-concat-path`,
-`exfil-concat-etc-shadow`.
+`exfil-concat-etc-shadow`, `krc-confusable-identifier-evasion` (22 total).
 
 These remaining gaps are intentional trade-offs the detector makes to keep false
 positives at zero on the benign corpus. The value of logging them is a live,
 regression-guarded inventory of the firewall's real blind spots — the full
 machine-readable list is the `gap_report` array in `results/redteam-summary.json`
-(regenerate with `npm run redteam` for default, `npm run redteam:ast` for the AST tier).
+(`results/` is in `.gitignore`, but the summary artifacts are force-added and committed, so the file is present in the repo; regenerate with `npm run redteam` for default, `npm run redteam:ast` for the AST tier).

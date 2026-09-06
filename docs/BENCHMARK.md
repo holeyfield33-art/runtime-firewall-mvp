@@ -76,7 +76,7 @@ Fields are deliberately explicit: raw arrays contain steady-state samples only (
 
 ## 9. Reproducibility
 
-- Harness MUST write artifacts to `results/benchmarks/raw/` using a timestamped filename.
+- Harness MUST write artifacts to `results/benchmarks/` using a timestamped filename.
 - Also produce a human-readable console summary but never replace raw samples with summarized values.
 
 ## 10. Notes

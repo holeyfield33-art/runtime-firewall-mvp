@@ -11,8 +11,9 @@ the rework loop works, and how to read a `FREEZE`. This document (`README.md`) i
 **Scope of this directory:** a local three-agent development-loop contract for the
 `runtime-firewall-mvp` repository (package name on npm: `aletheia-firewall`). This is an
 orchestration contract/prototype, **not** a general-purpose autonomous agent platform, and it
-does not modify, wrap, or depend on MRN-CRS in any way — MRN-CRS does not exist in this
-repository.
+does not modify, wrap, or depend on MRN-CRS in any way — MRN-CRS is not part of this
+repository's product code or runtime (the string `mrn-crs` appears only as a hardcoded
+defense-in-depth pattern in `release-warden.js`'s `FORBIDDEN_PATH_PATTERNS`).
 
 ## Why this exists
 
