@@ -155,8 +155,14 @@ fastify.post('/v1/telemetry', { schema: telemetrySchema, bodyLimit: MAX_TELEMETR
 
   // Admission requires both an item-count budget AND a byte budget -- a queue full of
   // large-but-individually-valid requests must not exhaust memory before MAX_QUEUE_SIZE is
-  // reached (the ~900 KB single-request case the audit reproduced).
-  const incomingBytes = Buffer.byteLength(JSON.stringify(request.body));
+  // reached (the ~900 KB single-request case the audit reproduced). Prefer the agent's own
+  // Content-Length over re-serializing request.body -- the body is already bounded by
+  // bodyLimit, but stringifying it again here would still cost an extra full allocation on
+  // every request; the header is authoritative for the bytes actually received on the wire.
+  const contentLength = Number(request.headers['content-length']);
+  const incomingBytes = Number.isFinite(contentLength) && contentLength >= 0
+    ? contentLength
+    : Buffer.byteLength(JSON.stringify(request.body));
   if (telemetryQueue.length >= MAX_QUEUE_SIZE || queueBytes + incomingBytes > MAX_QUEUE_BYTES) {
     return reply.code(503).send({ status: 'QUEUE_FULL' });
   }
@@ -224,7 +230,7 @@ const _drainTimer = setInterval(() => {
   if (telemetryQueue.length === 0) return;
   const batch = telemetryQueue.splice(0, 100);
   for (const item of batch) queueBytes -= item.bytes;
-  console.log(`[Background Worker] Drained ${batch.length} events (queue depth: ${telemetryQueue.length}, queue bytes: ${queueBytes})`);
+  console.log(`[Background Worker] Drained ${batch.length} requests (queue depth: ${telemetryQueue.length}, queue bytes: ${queueBytes})`);
 }, 1000);
 if (_drainTimer.unref) _drainTimer.unref();
 

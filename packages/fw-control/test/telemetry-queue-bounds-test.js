@@ -81,8 +81,8 @@ const DRAIN_WAIT_MS = 1100;
   });
 
   await check('request over the per-request body-size limit is rejected (413)', async () => {
-    // Each event stays under the 2048-char per-field cap, but three of them together exceed
-    // the 2500-byte MAX_TELEMETRY_MAX_BODY_BYTES -- isolates the body-size check from the
+    // Each event stays under the 2048-char per-field cap, but two of them together exceed
+    // the 2500-byte FW_TELEMETRY_MAX_BODY_BYTES -- isolates the body-size check from the
     // per-field and per-batch-count checks above (both of which would also reject this shape).
     const events = [
       event({ packageName: 'x'.repeat(1200) }),
