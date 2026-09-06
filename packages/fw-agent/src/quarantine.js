@@ -1,6 +1,8 @@
 // packages/fw-agent/src/quarantine.js
 const { hashMemoryObject, createForensicObject } = require('./policy');
 
+const MAX_FORENSIC_PROPERTY_LENGTH = 256;
+
 /**
  * QuarantineStub - A Proxy that intercepts all method calls on quarantined modules
  * Every intercept is hashed and logged for forensic analysis
@@ -19,6 +21,16 @@ class QuarantineStub {
    */
   record(operation, details = {}) {
     this.interceptCount++;
+
+    // Property names are attacker-controlled. Bound them before hashing, logging, or
+    // structured-cloning the forensic event so a huge key cannot exhaust the host.
+    if (typeof details.property === 'string' && details.property.length > MAX_FORENSIC_PROPERTY_LENGTH) {
+      details = {
+        ...details,
+        property: `${details.property.slice(0, MAX_FORENSIC_PROPERTY_LENGTH)}...[truncated]`,
+        propertyLength: details.property.length,
+      };
+    }
     
     // Detect rapid-fire intercepts (>100 calls in <1ms) as a potential exhaustion attack.
     // Do NOT kill the host process — rate-limit logs and return to preserve availability.
