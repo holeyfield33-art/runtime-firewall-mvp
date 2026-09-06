@@ -36,6 +36,50 @@ if (process.env.FW_ENABLE_DETECTION !== '1') {
   return;
 }
 
+// ── Trusted bootstrap boundary / self-integrity check ────────────────────────────────────────
+// This verifier intentionally runs before any local firewall implementation module is loaded.
+// Its dependency surface is limited to Node built-ins already required above plus fs, path, and
+// the pristine hash primitive captured at module start. It can detect a modified local module
+// before that module's top-level code executes. This is not external package authentication:
+// index.js and the built-ins used by this bootstrap must already be trusted by the launcher.
+(function verifySelfIntegrity() {
+  const baselineFile = path.join(__dirname, '.helios-baseline');
+  const selfFiles = [
+    path.join(__dirname, 'index.js'),
+    path.join(__dirname, 'src', 'detector.js'),
+    path.join(__dirname, 'src', 'behavior-tracker.js'),
+    path.join(__dirname, 'src', 'policy-watcher.js'),
+    path.join(__dirname, 'src', 'quarantine.js'),
+    path.join(__dirname, 'src', 'audit-log.js'),
+    path.join(__dirname, 'src', 'policy.js'),
+    path.join(__dirname, 'src', 'aho-corasick.js'),
+    path.join(__dirname, 'src', 'ast-scan.js'),
+    path.join(__dirname, 'sync-worker.js'),
+  ];
+
+  function computeSelfHash() {
+    const hash = pristineCreateHash('sha256');
+    for (const file of selfFiles) {
+      try {
+        const content = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+        hash.update(content, 'utf8');
+      } catch (e) {}
+    }
+    return hash.digest('hex');
+  }
+
+  if (fs.existsSync(baselineFile)) {
+    const stored = fs.readFileSync(baselineFile, 'utf8').trim();
+    if (stored !== computeSelfHash()) {
+      console.error('[CRITICAL] Firewall self-integrity check FAILED. Helios code has been tampered with. Refusing to run.');
+      process.exit(1);
+    }
+  } else {
+    console.error('[CRITICAL] Firewall self-integrity baseline (.helios-baseline) is missing. Cannot verify agent integrity. Refusing to run.');
+    process.exit(1);
+  }
+})();
+
 const { Detector } = require('./src/detector');
 const { isTelemetryEventType } = require('./src/telemetry-protocol');
 const { QuarantineStub } = require('./src/quarantine');
@@ -177,57 +221,6 @@ const fwMode = resolveFwMode();
         try { Object.defineProperty(proto, prop, { writable: false, configurable: false }); } catch (e) {}
       });
     } catch (e) {}
-  }
-})();
-
-// ── Self-integrity check ──────────────────────────────────────────────────────────────────────
-(function verifySelfIntegrity() {
-  const baselineFile = path.join(__dirname, '.helios-baseline');
-  const selfFiles = [
-    path.join(__dirname, 'index.js'),
-    path.join(__dirname, 'src', 'detector.js'),
-    path.join(__dirname, 'src', 'behavior-tracker.js'),
-    path.join(__dirname, 'src', 'policy-watcher.js'),
-    path.join(__dirname, 'src', 'quarantine.js'),
-    path.join(__dirname, 'src', 'audit-log.js'),
-    path.join(__dirname, 'src', 'policy.js'),
-    // aho-corasick.js is the signature-matching engine required by both detector.js and
-    // behavior-tracker.js; sync-worker.js is the telemetry worker loaded at runtime. Both ship
-    // in the npm manifest and are security-critical, so they must be covered here — omitting
-    // them let a tampered aho-corasick silently defeat detection while self-integrity passed.
-    path.join(__dirname, 'src', 'aho-corasick.js'),
-    // ast-scan.js (Phase 3) is required by detector.js and feeds signal positions directly into
-    // detector.js's block-tier decisions — equally security-critical, same reasoning as
-    // aho-corasick.js above. This list is duplicated in three other places that must stay in
-    // lockstep — see the self-integrity-lockstep test in .agent/scripts/__tests__/.
-    path.join(__dirname, 'src', 'ast-scan.js'),
-    path.join(__dirname, 'sync-worker.js'),
-  ];
-
-  function computeSelfHash() {
-    const hash = pristineCreateHash('sha256');
-    for (const f of selfFiles) {
-      try {
-        const content = fs.readFileSync(f, 'utf8').replace(/\r\n/g, '\n');
-        hash.update(content, 'utf8');
-      } catch (e) {}
-    }
-    return hash.digest('hex');
-  }
-
-  if (fs.existsSync(baselineFile)) {
-    const stored = fs.readFileSync(baselineFile, 'utf8').trim();
-    const current = computeSelfHash();
-    if (stored !== current) {
-      console.error('[CRITICAL] Firewall self-integrity check FAILED. Helios code has been tampered with. Refusing to run.');
-      process.exit(1);
-    }
-  } else {
-    // Baseline is committed to the repo and shipped in the npm manifest.
-    // A missing baseline means the file was deleted or the package was tampered with.
-    // Never silently re-baseline — fail closed so the operator knows something is wrong.
-    console.error('[CRITICAL] Firewall self-integrity baseline (.helios-baseline) is missing. Cannot verify agent integrity. Refusing to run.');
-    process.exit(1);
   }
 })();
 
