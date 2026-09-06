@@ -203,6 +203,16 @@ FW_ENABLE_DETECTION=1 FW_TELEMETRY=1 node --require=./packages/fw-agent app.js
 > `HELIOS_DASHBOARD_TOKEN`, or the server prints an auto-generated one at
 > startup). Check it's up with `curl http://127.0.0.1:3000/v1/health`.
 
+> **Deployment posture:** the control plane binds to `127.0.0.1` and is intended
+> for localhost/private use — it is not designed or hardened as an
+> internet-facing service. `/v1/telemetry` is unauthenticated by default (see
+> `FW_TELEMETRY_TOKEN` below); if you rebind or proxy the control plane beyond
+> its intended localhost binding, set `FW_TELEMETRY_TOKEN` so agents must
+> authenticate. Telemetry ingestion is also bounded (per-request body size,
+> events-per-batch, per-field string length, and a queue item/byte budget) so a
+> single request or a backlog of requests cannot exhaust control-plane memory —
+> see `FW_TELEMETRY_MAX_*` below.
+
 > **Preload note:** `--require=./packages/fw-agent` loads the agent *before* your
 > app's code, so every `require()` your app makes is screened from the very first
 > module. Loading the agent with a plain `require('./packages/fw-agent')` inside
@@ -280,6 +290,11 @@ and troubleshooting.
 | `FW_ENABLE_BEHAVIORAL` | `1` | Set to `0` to disable the behavioral pass (signature scan always runs) |
 | `FW_TELEMETRY` | `0` | Set to `1` to forward events to the control plane |
 | `FW_CONTROL_PORT` | `3000` | Control plane port |
+| `FW_TELEMETRY_TOKEN` | *(none)* | Bearer token agents must send to `/v1/telemetry` (fw-control only). Unset by default (backward-compatible); set this if the control plane is reachable from anywhere other than the same host. |
+| `FW_TELEMETRY_MAX_BODY_BYTES` | `262144` (256 KB) | Maximum size of a single `/v1/telemetry` request body (fw-control only); oversized requests get a deterministic `413` |
+| `FW_TELEMETRY_MAX_EVENTS` | `500` | Maximum events accepted in one `/v1/telemetry` batch (fw-control only) |
+| `FW_TELEMETRY_MAX_QUEUE_ITEMS` | `5000` | Maximum queued telemetry requests awaiting background processing (fw-control only) |
+| `FW_TELEMETRY_MAX_QUEUE_BYTES` | `10485760` (10 MB) | Maximum total bytes of queued-but-unprocessed telemetry requests (fw-control only); admission requires both the item and byte budgets to have room |
 | `FW_MODE` | `dev` | `enforce` fails closed (exits) when not preloaded via `--require`; `dev` warns and continues. See "Enforcement mode vs Development mode" above. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze `Object/Array/Function/Promise/RegExp` prototypes on load (hardens against prototype pollution; may break libraries that extend built-ins) |

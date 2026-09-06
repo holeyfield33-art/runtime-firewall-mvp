@@ -78,41 +78,70 @@ function persistEvent(event) {
 
 // In-memory queue for async processing
 const telemetryQueue = [];
-const MAX_QUEUE_SIZE = 5000;
+let queueBytes = 0;
+// P1 (Issue 4): bounded-resource controls, independent of item count. The audit accepted a
+// single ~900 KB telemetry request; a queue full of similarly large-but-individually-valid
+// bodies exhausts memory long before an item-count ceiling is reached. All limits are
+// env-overridable; defaults are generous for every event shape fw-agent actually emits (see
+// emitTelemetry() call sites) while closing the unbounded-field/unbounded-queue DoS.
+const MAX_QUEUE_SIZE = parseInt(process.env.FW_TELEMETRY_MAX_QUEUE_ITEMS, 10) || 5000;
+const MAX_QUEUE_BYTES = parseInt(process.env.FW_TELEMETRY_MAX_QUEUE_BYTES, 10) || 10 * 1024 * 1024; // 10 MB
+const MAX_TELEMETRY_BODY_BYTES = parseInt(process.env.FW_TELEMETRY_MAX_BODY_BYTES, 10) || 256 * 1024; // 256 KB/request
+const MAX_EVENTS_PER_BATCH = parseInt(process.env.FW_TELEMETRY_MAX_EVENTS, 10) || 500;
+const MAX_TELEMETRY_STRING_LENGTH = 2048; // bounds named + unknown string-valued fields
 const serverStartTime = Date.now();
 
 // Keep a rolling window of the last 1000 events for the dashboard
 const recentEvents = [];
 const MAX_RECENT = 1000;
 
+// additionalProperties bounds any UNKNOWN string-valued field (e.g. a future/optional
+// "message"-shaped key) without constraining the non-string metadata shapes real event types
+// already send (DETECTION_TRIGGERED's `detections` array, OBSERVE's `warnMatches` array,
+// QUARANTINE_BREACH's nested forensic object). Explicit `anyOf` (not a bare `maxLength`) so
+// ajv strict mode doesn't warn about an untyped keyword; non-string branches are otherwise
+// unconstrained here. Nested string values several levels deep inside those shapes are bounded
+// only by MAX_TELEMETRY_BODY_BYTES, not per-field -- a deliberate trade-off to avoid a
+// brittle, hand-maintained per-event-type schema.
+const telemetryEventSchema = {
+  type: 'object',
+  required: ['eventType', 'packageName', 'timestamp'],
+  properties: {
+    eventType: { type: 'string', enum: TELEMETRY_EVENT_TYPES },
+    packageName: { type: 'string', maxLength: MAX_TELEMETRY_STRING_LENGTH },
+    parentPackage: { type: ['string', 'null'], maxLength: MAX_TELEMETRY_STRING_LENGTH },
+    timestamp: { type: 'number' },
+  },
+  additionalProperties: {
+    anyOf: [
+      { type: 'string', maxLength: MAX_TELEMETRY_STRING_LENGTH },
+      { type: 'number' },
+      { type: 'boolean' },
+      { type: 'null' },
+      { type: 'object' },
+      { type: 'array' },
+    ],
+  },
+};
+
 const telemetrySchema = {
   body: {
     type: 'object',
     required: ['agentId', 'events', 'schemaVersion'],
+    additionalProperties: false,
     properties: {
-      agentId: { type: 'string' },
+      agentId: { type: 'string', maxLength: MAX_TELEMETRY_STRING_LENGTH },
       schemaVersion: { type: 'integer', enum: [1] },
       events: {
         type: 'array',
-        items: {
-          type: 'object',
-          required: ['eventType', 'packageName', 'timestamp'],
-          properties: {
-            eventType: {
-              type: 'string',
-              enum: TELEMETRY_EVENT_TYPES,
-            },
-            packageName: { type: 'string' },
-            parentPackage: { type: ['string', 'null'] },
-            timestamp: { type: 'number' },
-          },
-        },
+        maxItems: MAX_EVENTS_PER_BATCH,
+        items: telemetryEventSchema,
       },
     },
   },
 };
 
-fastify.post('/v1/telemetry', { schema: telemetrySchema }, async (request, reply) => {
+fastify.post('/v1/telemetry', { schema: telemetrySchema, bodyLimit: MAX_TELEMETRY_BODY_BYTES }, async (request, reply) => {
   // F-19: Optional bearer-token auth. Active only when FW_TELEMETRY_TOKEN is set.
   if (TELEMETRY_TOKEN) {
     const authHeader = request.headers.authorization || '';
@@ -124,11 +153,22 @@ fastify.post('/v1/telemetry', { schema: telemetrySchema }, async (request, reply
     }
   }
 
-  if (telemetryQueue.length >= MAX_QUEUE_SIZE) {
+  // Admission requires both an item-count budget AND a byte budget -- a queue full of
+  // large-but-individually-valid requests must not exhaust memory before MAX_QUEUE_SIZE is
+  // reached (the ~900 KB single-request case the audit reproduced). Prefer the agent's own
+  // Content-Length over re-serializing request.body -- the body is already bounded by
+  // bodyLimit, but stringifying it again here would still cost an extra full allocation on
+  // every request; the header is authoritative for the bytes actually received on the wire.
+  const contentLength = Number(request.headers['content-length']);
+  const incomingBytes = Number.isFinite(contentLength) && contentLength >= 0
+    ? contentLength
+    : Buffer.byteLength(JSON.stringify(request.body));
+  if (telemetryQueue.length >= MAX_QUEUE_SIZE || queueBytes + incomingBytes > MAX_QUEUE_BYTES) {
     return reply.code(503).send({ status: 'QUEUE_FULL' });
   }
 
-  telemetryQueue.push(request.body);
+  telemetryQueue.push({ body: request.body, bytes: incomingBytes });
+  queueBytes += incomingBytes;
 
   // Persist each event to audit log immediately
   for (const event of request.body.events) {
@@ -146,6 +186,8 @@ fastify.get('/v1/health', async () => ({
   uptime: Math.round((Date.now() - serverStartTime) / 1000),
   queueDepth: telemetryQueue.length,
   maxQueueSize: MAX_QUEUE_SIZE,
+  queueBytes,
+  maxQueueBytes: MAX_QUEUE_BYTES,
   logPath: logFd ? LOG_PATH : null,
 }));
 
@@ -182,11 +224,13 @@ fastify.get('/logs', async (request, reply) => {
   return reply.code(200).send({ events, total: recentEvents.length });
 });
 
-// Background drain: process the queue in batches
+// Background drain: process the queue in batches. Queued-byte accounting must decrease as
+// items are drained, or the byte budget would only ever grow and permanently wedge admission.
 const _drainTimer = setInterval(() => {
   if (telemetryQueue.length === 0) return;
   const batch = telemetryQueue.splice(0, 100);
-  console.log(`[Background Worker] Drained ${batch.length} events (queue depth: ${telemetryQueue.length})`);
+  for (const item of batch) queueBytes -= item.bytes;
+  console.log(`[Background Worker] Drained ${batch.length} requests (queue depth: ${telemetryQueue.length}, queue bytes: ${queueBytes})`);
 }, 1000);
 if (_drainTimer.unref) _drainTimer.unref();
 
