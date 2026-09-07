@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+Post-`0.6.1` hardening. Five independent follow-up fixes, each shipped as its own PR with
+regression tests, closing findings from the post-merge audit of `main`:
+
+- **#112 — harden policy canonicalization against call tampering.** Policy-rule
+  canonicalization dispatched sorting/joining through the mutable `Function.prototype.call`,
+  so later-loaded code that monkeypatched it could alter the canonical payload a signature is
+  verified against. Fixed via the pristine-primitive capture pattern (`Reflect.apply` over
+  references captured at module load).
+
+- **#113 — verify self-integrity before loading modules.** The self-integrity check previously
+  ran after security-critical module imports, so a tampered engine file could be loaded before
+  its hash was checked. `verifySelfIntegrity()` now runs earlier in `packages/fw-agent/index.js`,
+  ahead of those imports (documenting the trusted bootstrap boundary).
+
+- **#114 — synchronize telemetry event protocol.** The agent and the control plane had drifted
+  to different event-schema understandings. Added a single-source-of-truth
+  `telemetry-protocol.js` shared by both, closing the drift.
+
+- **#115 — bound telemetry ingestion.** The control plane previously accepted telemetry
+  requests of unbounded body size, event count, field length, and queue memory (a single ~900 KB
+  request was accepted). `packages/fw-control/src/server.js` now enforces byte-bounded body
+  size, event-count, field-length, and queue-memory limits.
+
+- **#116 — Aho-Corasick Unicode aliasing + cache-gate case-sensitivity.** Two narrow
+  robustness fixes:
+  - `src/aho-corasick.js` folded any character code via `code & 0x7f`, truncating non-ASCII
+    code points into the ASCII range — a sequence of non-ASCII characters whose low 7 bits
+    matched an ASCII signature (e.g. U+00F3 `ó` = 243, `243 & 0x7f` = 115 = `s`) could alias an
+    entire signature (e.g. `stratum+tcp`) and falsely trigger BLOCK/QUARANTINE on benign
+    non-ASCII text. Non-ASCII code points now fold to a dedicated, keyword-unreachable bucket
+    instead of aliasing a real ASCII index.
+  - The `Module._load` require.cache-substitution gate (F-58) checked
+    `CACHE_GATED_EXTENSIONS.has(path.extname(resolvedPath))` against a lowercase-only set, so a
+    resolved path ending in an unusually-cased extension (`.JS`, `.Js`, `.CJS`, `.CjS`) — possible
+    on case-insensitive filesystems — would dodge the gate. The extension is now lowercased
+    before the lookup.
+
 ## [0.6.1] - 2026-09-04
 
 Release A — security closure patch. Closes the audit's P0 findings: the sole explicit NO-SHIP

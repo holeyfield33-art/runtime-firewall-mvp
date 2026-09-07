@@ -145,7 +145,7 @@ The repo maintains a 25% median compilation-overhead gate budget, but this is a 
 
 | Metric | Budget | Enforced? |
 |--------|--------|-----------|
-| Median module-compile overhead | 25% | **Yes** |
+| Median module-compile overhead | 25% | Manual only — the gate is not wired into CI (AUDIT.md finding #4) |
 | P95 overhead | 30% (informational only) | No |
 
 The gate is a **regression guard**, not a performance target. If the median exceeds 25%, the change needs review.

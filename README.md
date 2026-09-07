@@ -339,9 +339,10 @@ node packages/fw-agent/test/bench-honest.js
 
 ### Red-team attack suite
 
-A standalone adversarial harness fires **151 malicious/benign JavaScript module
-payloads** at the detector and logs what gets **blocked (QUARANTINE)** vs. what
-gets **through (OBSERVE)**, with per-category gap analysis and a false-positive
+A standalone adversarial harness fires **179 malicious/benign JavaScript module
+payloads** (143 malicious, 36 benign) at the detector and logs what gets **blocked
+(QUARANTINE)** vs. what gets **through (OBSERVE)**, with per-category gap analysis and a
+false-positive
 check. It writes a machine-readable `results/redteam-summary.json` and fails
 only on a new bypass (regression) or an over-block, so it doubles as a CI
 guardrail.

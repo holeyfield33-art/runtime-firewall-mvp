@@ -6,7 +6,7 @@ Thank you for contributing. This document encodes the non-negotiable rules for t
 
 ### 1. Engine-file edits require a baseline regeneration in the same PR
 
-The nine self-hashed engine files are:
+The ten self-hashed engine files are:
 
 - `packages/fw-agent/index.js`
 - `packages/fw-agent/sync-worker.js`
@@ -17,6 +17,7 @@ The nine self-hashed engine files are:
 - `packages/fw-agent/src/quarantine.js`
 - `packages/fw-agent/src/audit-log.js`
 - `packages/fw-agent/src/policy.js`
+- `packages/fw-agent/src/ast-scan.js`
 
 Any edit to any of these files MUST be accompanied by a regenerated `.helios-baseline` committed in the same PR. If they diverge, the firewall will refuse to start.
 
@@ -104,7 +105,7 @@ PowerShell, cmd, or the VS Code integrated terminal.
 # Unit tests (Aho-Corasick automaton + detector logic)
 npm test
 
-# Adversarial bypass suite (14 test cases; all must pass)
+# Adversarial bypass suite (53 test cases; all must pass)
 npm run test:adversarial
 
 # Both (from repo root)
