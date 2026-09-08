@@ -116,8 +116,8 @@ Before opening a PR, confirm that:
 
 1. `npm test` passes from `packages/fw-agent`.
 2. `npm run test:adversarial` passes from `packages/fw-agent`.
-3. `npm pack --dry-run` from `packages/fw-agent` shows exactly 13 files.
-4. If you touched any of the nine engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
+3. `npm pack --dry-run` from `packages/fw-agent` shows exactly 15 files.
+4. If you touched any of the ten engine files, `.helios-baseline` has been regenerated and the self-integrity CI step passes.
 
 ### CI is split by package Node version
 
