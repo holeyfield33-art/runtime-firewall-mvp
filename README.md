@@ -11,6 +11,8 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 > **See it in 30 seconds:** clone the repo, run `npm install`, then `bash demo/demo.sh`. It loads a crypto-miner and a credential stealer with the firewall off (they run) and on (both blocked), plus a normal analytics module that is correctly allowed. See [Demo](#demo) below.
 
+![Terminal recording of demo/demo.sh: firewall off lets a crypto-miner and credential-stealer run, firewall on blocks both, and a normal analytics dependency still loads with no false alarm](docs/demo.svg)
+
 ---
 
 ## Coverage & Limitations
