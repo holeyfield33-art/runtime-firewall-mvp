@@ -11,6 +11,8 @@ A runtime security firewall for Node.js that intercepts module compilation to de
 
 > **See it in 30 seconds:** clone the repo, run `npm install`, then `bash demo/demo.sh`. It loads a crypto-miner and a credential stealer with the firewall off (they run) and on (both blocked), plus a normal analytics module that is correctly allowed. See [Demo](#demo) below.
 
+![Terminal recording of demo/demo.sh: firewall off lets a crypto-miner and credential-stealer run, firewall on blocks both, and a normal analytics dependency still loads with no false alarm](docs/demo.svg)
+
 ---
 
 ## Coverage & Limitations
@@ -316,7 +318,7 @@ and troubleshooting.
 # Unit tests (Aho-Corasick + Detector)
 npm run test:unit
 
-# Adversarial bypass test suite (52 cases, all passing)
+# Adversarial bypass test suite (53 cases, all passing)
 npm run test:adversarial
 
 # Control-plane authentication tests (dashboard + telemetry auth)
@@ -434,7 +436,7 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 | Quarantined module cannot read `process.env` or make network calls | ✅ `QuarantineStub` Proxy replaces exports; child requires blocked |
 | Telemetry persists across restarts | ✅ Append-only JSON log at `/var/log/helios/audit.log` |
 | SIGTERM shuts down workers cleanly | ✅ Worker `TERMINATE` message + `Promise.all` await |
-| Adversarial test suite passes or documents remaining bypasses | ✅ 52 tests, bypasses documented in `docs/THREAT-COVERAGE.md` |
+| Adversarial test suite passes or documents remaining bypasses | ✅ 53 tests, bypasses documented in `docs/THREAT-COVERAGE.md` |
 
 ---
 

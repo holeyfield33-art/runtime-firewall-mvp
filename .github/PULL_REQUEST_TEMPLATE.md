@@ -12,14 +12,14 @@
 
 ## Engine file and baseline checklist
 
-The 9 self-hashed engine files are:
+The 10 self-hashed engine files are:
 `packages/fw-agent/index.js`, `sync-worker.js`, `src/aho-corasick.js`,
 `src/detector.js`, `src/behavior-tracker.js`, `src/policy-watcher.js`,
-`src/quarantine.js`, `src/audit-log.js`, `src/policy.js`
+`src/quarantine.js`, `src/audit-log.js`, `src/policy.js`, `src/ast-scan.js`
 
-- [ ] I did NOT edit any of the 9 engine files (baseline unchanged)
+- [ ] I did NOT edit any of the 10 engine files (baseline unchanged)
 - [ ] OR: I edited one or more engine files AND regenerated `.helios-baseline`
-      by running `node packages/fw-agent/scripts/gen-baseline.js` and committing
+      by running `npm run baseline` from the repo root and committing
       the new hash
 
 If engine files changed, paste the new baseline hash here: `<hash>`
@@ -27,7 +27,7 @@ If engine files changed, paste the new baseline hash here: `<hash>`
 ## Tests
 
 - [ ] `npm run test:unit` passes
-- [ ] `npm run test:adversarial` passes (14/14)
+- [ ] `npm run test:adversarial` passes (53/53)
 - [ ] `npm run gate` passes (median < 25%)
 - [ ] New detection rules have a corresponding adversarial test case
 

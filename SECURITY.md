@@ -2,11 +2,13 @@
 
 ## Supported Versions
 
+Pre-1.0, only the latest published minor release receives security fixes — there is no
+long-term-support branch yet.
+
 | Version | Supported           |
 |---------|---------------------|
-| 0.2.x   | Yes                 |
-| 0.1.x   | Security fixes only |
-| < 0.1   | No                  |
+| 0.6.x   | Yes                 |
+| < 0.6.0 | No                  |
 
 ## Reporting a Vulnerability
 

@@ -9,6 +9,9 @@ letting a normal package through.
 bash demo/demo.sh
 ```
 
+A recording of this exact run is embedded in the root [README](../README.md#aletheia-firewall)
+(`docs/demo.svg`, generated from `docs/demo.cast` — see that file's header for how to regenerate it).
+
 ## What's here
 
 - `modules/evil-miner.js` - cryptojacker (crypto-miner signature)
