@@ -1,7 +1,7 @@
 # Aletheia Firewall
 
-[![CI](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/holeyfield33-art/runtime-firewall-mvp/actions/workflows/ci.yml)
-[![CodeQL](https://img.shields.io/github/actions/workflow/status/holeyfield33-art/runtime-firewall-mvp/dynamic/github-code-scanning/codeql?branch=main&label=CodeQL)](https://github.com/holeyfield33-art/runtime-firewall-mvp/security/code-scanning)
+[![CI](https://img.shields.io/github/actions/workflow/status/Enkidagoat/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/Enkidagoat/runtime-firewall-mvp/actions/workflows/ci.yml)
+[![CodeQL](https://img.shields.io/github/actions/workflow/status/Enkidagoat/runtime-firewall-mvp/dynamic/github-code-scanning/codeql?branch=main&label=CodeQL)](https://github.com/Enkidagoat/runtime-firewall-mvp/security/code-scanning)
 [![npm version](https://img.shields.io/npm/v/aletheia-firewall)](https://www.npmjs.com/package/aletheia-firewall)
 [![Provenance: SLSA](https://img.shields.io/badge/provenance-SLSA%20attested-2ea44f)](https://www.npmjs.com/package/aletheia-firewall?activeTab=code)
 
@@ -177,7 +177,7 @@ HELIOS_LOG_DIR=/data/logs node --require=aletheia-firewall app.js
 The optional fw-control dashboard/telemetry server requires Node.js ≥ 20 (Fastify 5); the firewall agent itself only needs Node.js ≥ 18. That floor covers CommonJS `require()` coverage, which is this project's core guarantee. ESM (`import`/`import()`) interception needs a newer Node — ≥22.15.0 or ≥23.5.0 — and runs as a disclosed, unprotected bypass below that floor; CommonJS coverage is unaffected either way. See the Coverage table above and `packages/fw-agent/README.md` for the full breakdown.
 
 ```bash
-git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
+git clone https://github.com/Enkidagoat/runtime-firewall-mvp
 cd runtime-firewall-mvp
 npm install
 

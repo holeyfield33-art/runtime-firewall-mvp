@@ -10,7 +10,7 @@ Copy-paste walkthrough from a fresh clone. Takes about 2 minutes.
 ## Setup
 
 ```bash
-git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
+git clone https://github.com/Enkidagoat/runtime-firewall-mvp
 cd runtime-firewall-mvp
 npm install
 ```

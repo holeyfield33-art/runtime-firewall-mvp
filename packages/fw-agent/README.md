@@ -192,7 +192,7 @@ See the monorepo's `docs/THREAT-COVERAGE.md` for the full, test-backed protectio
 Tests live in the monorepo root — they are not included in the published package. To run them:
 
 ```bash
-git clone https://github.com/holeyfield33-art/runtime-firewall-mvp
+git clone https://github.com/Enkidagoat/runtime-firewall-mvp
 cd runtime-firewall-mvp
 npm install
 npm run test:unit         # Aho-Corasick + Detector

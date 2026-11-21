@@ -5,13 +5,13 @@
   "main": "index.js",
   "license": "Apache-2.0",
   "author": "Aletheia contributors",
-  "homepage": "https://github.com/holeyfield33-art/runtime-firewall-mvp#readme",
+  "homepage": "https://github.com/Enkidagoat/runtime-firewall-mvp#readme",
   "bugs": {
-    "url": "https://github.com/holeyfield33-art/runtime-firewall-mvp/issues"
+    "url": "https://github.com/Enkidagoat/runtime-firewall-mvp/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/holeyfield33-art/runtime-firewall-mvp.git"
+    "url": "git+https://github.com/Enkidagoat/runtime-firewall-mvp.git"
   },
   "keywords": [
     "security",
