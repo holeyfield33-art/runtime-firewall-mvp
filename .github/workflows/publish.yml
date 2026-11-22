@@ -95,6 +95,11 @@ jobs:
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
+          # Restored (SRS-FW-004): present in the last successful provenance publish (v0.6.0) and in
+          # npm's Trusted Publishing example. Removing it (bdf0663) did not fix v0.6.1's failure; it
+          # only changed npm's symptom from E404 to ENEEDAUTH. No token is configured: with Trusted
+          # Publishing the npm CLI replaces the placeholder with the OIDC-exchanged credential.
+          registry-url: 'https://registry.npmjs.org'
 
       # Trusted Publishing requires npm CLI >=11.5.1. Node 22's bundled npm version drifts by patch
       # release, so pin an EXACT npm version (not @latest, which is mutable and would silently change
@@ -148,6 +153,44 @@ jobs:
           SMOKE_DIR="$(mktemp -d)"
           ( cd "$SMOKE_DIR" && npm init -y >/dev/null && npm install "$TARBALL_ABS" )
           node "$GITHUB_WORKSPACE/scripts/smoke-tarball.js" "$SMOKE_DIR"
+
+      # SRS-FW-004: npm 11.5.1 does not surface a rejected OIDC exchange -- it silently falls back to
+      # token auth and fails later with a misleading E404 (v0.6.1) or ENEEDAUTH (v0.6.2). These two
+      # preflights fail early with the actual reason. No long-lived token is created or stored.
+      - name: Preflight -- package.json repository matches this repository (required for provenance)
+        working-directory: packages/fw-agent
+        run: |
+          EXPECTED="git+https://github.com/${GITHUB_REPOSITORY}.git"
+          ACTUAL=$(node -p "require('./package.json').repository.url")
+          if [ "$(echo "$ACTUAL" | tr '[:upper:]' '[:lower:]')" != "$(echo "$EXPECTED" | tr '[:upper:]' '[:lower:]')" ]; then
+            echo "::error::packages/fw-agent/package.json repository.url ($ACTUAL) does not match $EXPECTED; npm rejects provenance from a different repository."
+            exit 1
+          fi
+          echo "OK: repository.url matches $GITHUB_REPOSITORY."
+
+      - name: Preflight -- npm accepts this workflow's OIDC identity (Trusted Publisher config)
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "::error::No GitHub OIDC token is available to this job (is 'id-token: write' granted?)."
+            exit 1
+          fi
+          ID_TOKEN=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=npm:registry.npmjs.org" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>process.stdout.write(JSON.parse(d).value))")
+          echo "::add-mask::${ID_TOKEN}"
+          # Print only the non-secret identity claims npm matches against (never the token itself).
+          echo "$ID_TOKEN" | node -e "let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{const c=JSON.parse(Buffer.from(d.trim().split('.')[1],'base64url'));for(const k of ['repository','repository_owner','repository_owner_id','workflow_ref','environment','ref'])console.log('OIDC claim '+k+': '+c[k])})"
+          BODY=$(mktemp)
+          STATUS=$(curl -sS -o "$BODY" -w '%{http_code}' -X POST -H "Authorization: Bearer ${ID_TOKEN}" \
+            "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/aletheia-firewall")
+          if [ "${STATUS:0:1}" != "2" ]; then
+            echo "::error::npm rejected the OIDC token exchange (HTTP ${STATUS}): $(cat "$BODY")"
+            echo "::error::Check npmjs.com > aletheia-firewall > Settings > Trusted Publisher: owner/user, repository, workflow filename 'publish.yml', environment 'npm-publish' must match the claims above."
+            rm -f "$BODY"
+            exit 1
+          fi
+          rm -f "$BODY"   # contains a short-lived publish credential; never printed
+          echo "OK: npm accepted the OIDC identity for aletheia-firewall."
 
       - name: Publish the exact tested tarball to npm (Trusted Publishing -- no token; npm auto-detects the OIDC context and attaches provenance)
         working-directory: packages/fw-agent
