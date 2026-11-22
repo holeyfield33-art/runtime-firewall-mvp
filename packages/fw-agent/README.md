@@ -179,14 +179,7 @@ configuration.
   `require()` throws `[Firewall] Compilation denied …`. Plan for both behaviors.
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on detection.
 
-**Reloads and replay.** The file is re-verified every 60 seconds. A changed, validly signed policy
-is hot-reloaded and recorded as a `POLICY_RELOADED` audit event with the new file's SHA-256,
-its `signedAt`, the previous hash/`signedAt`, and `signedAtNotNewerThanPrevious`; the policy
-active at startup is recorded as `POLICY_LOADED`. **Any envelope authentically signed by the
-trusted key is accepted — including an older one.** Someone who can write `policy.signed.json`
-can replay a previously signed (e.g. less restrictive) policy, live or at restart. The audit
-events make that visible after the fact; they do **not** prevent it. Protect write access to the
-policy file and the directory it lives in.
+**Reloads and replay.** The file is re-verified every 60 seconds. `POLICY_RELOADED` records **applied rule-set changes only** (the rules hash differs from the currently applied set). Same-rules re-signing (different `signedAt` or envelope bytes) emits no reload event. The event carries the new file's SHA-256, its `signedAt`, the previous applied rule set’s hash/`signedAt` (`previousPolicyHash` / `previousSignedAt`), and `signedAtNotNewerThanPrevious`. The policy active at startup is recorded as `POLICY_LOADED`. **Any envelope authentically signed by the trusted key is accepted — including an older one with different rules.** Someone who can write `policy.signed.json` can replay a previously signed (e.g. less restrictive) policy, live or at restart. The audit events make applied changes visible after the fact; they do **not** prevent replay. Protect write access to the policy file and the directory it lives in.
 
 ### Key loss and key compromise
 

@@ -541,9 +541,11 @@ const policyWatcher = new PolicyWatcher(POLICY_PATH, {
       initialPolicyMeta = meta; // written as POLICY_LOADED once the audit log has started (below)
       return;
     }
-    // SRS-FW-004 P1: audit trail for every verified hot-reload. Diagnostic only -- any envelope
-    // authentically signed by the trusted key is accepted, including an older one (replay). This
-    // event records WHICH policy became active; it is not rollback prevention.
+    // SRS-FW-004: audit trail for applied rule-set changes only (rules hash differs).
+    // Same-rules re-signing produces no event. previousPolicyHash / previousSignedAt identify
+    // the envelope of the previously applied rule set. Diagnostic only — any authentic envelope
+    // signed by the trusted key is accepted, including an older one (replay). This event
+    // records WHICH rule set became active; it is not rollback prevention.
     auditLog.write({
       eventType: 'POLICY_RELOADED',
       policyPath: meta.policyPath,
