@@ -6,7 +6,66 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [Unreleased] — 0.6.3 candidate (SRS-FW-004; not released, version not bumped)
+
+### Added
+
+- **Package-owned policy tooling (`bin`).** `aletheia-policy-keygen` and `aletheia-policy-sign`
+  now ship in the npm package (`bin/`), so installed consumers can generate keys and sign
+  `policy.signed.json` without cloning the repository (0.6.2's README pointed at repo-only
+  `scripts/` files that were not in the tarball). `keygen` writes the private key to a 0600 file,
+  never prints it, and refuses to overwrite existing key files without `--force`. `sign`
+  self-verifies before writing and prints the public-key fingerprint. Zero new dependencies.
+- **One signing implementation.** `src/policy-signing.js` is the single signer; it builds the
+  signed bytes with `policy-watcher.js`'s own exported `canonicalPayload()`, so signer and
+  verifier can no longer drift. `scripts/sign-policy.js` and `scripts/generate-policy-key.js`
+  are kept as thin wrappers (same CLI argument contract; `generate-policy-key.js` now writes
+  files instead of printing both keys to stdout).
+- **Detection-only posture is reported.** With detection enabled and no `policy.signed.json` in
+  `process.cwd()`, the agent prints one `[Helios] DETECTION-ONLY` warning and writes one
+  `POLICY_ABSENT_DETECTION_ONLY` audit event (customer-signed rules and policy monitoring
+  inactive). Detection behavior is unchanged; invalid signatures still lock down.
+- **Policy audit trail.** `POLICY_LOADED` (startup) and `POLICY_RELOADED` (verified hot-reload)
+  audit events record the policy file SHA-256 and `signedAt` (reload also records the previous
+  values and `signedAtNotNewerThanPrevious`). This is diagnostic only — an older authentically
+  signed policy is still accepted (replay is a documented limitation, not prevented).
+  `PolicyWatcher`'s `onValidChange(rules)` callback now also receives a second `meta` argument.
+- Tests: `policy-signing-cli-test.js`, `policy-posture-test.js`, `quarantine-compat-test.js`, an
+  `FW_MODE=enforce`-vs-ESM-floor check in `esm-loader-test.js`, and four new installed-tarball
+  checks in `scripts/smoke-tarball.js` (keygen, sign + enforce, detection-only, ESM requirement).
+
+### Fixed (documentation)
+
+- `FW_MODE=enforce` was documented as making ESM-below-the-floor a hard failure; it does not
+  (it logs `[CRITICAL]` and continues). `FW_REQUIRE_ESM_COVERAGE=1` — the actual fail-closed
+  control — is now documented.
+- QUARANTINE behavior on Node ≥22.15.0 / ≥23.5.0 is documented: ESM loads and CommonJS loads with
+  a known format (`.cjs`, or `.js` under `"type": "commonjs"`) hard-BLOCK instead of returning
+  the logging Proxy.
+- The policy path (`process.cwd()`), key-loss / key-compromise recovery, and `FW_POLICY_PUBKEY`
+  as the production configuration are documented. Obsolete "the dev private key is public"
+  statements (docs and two runtime error messages) are corrected. Package README links now point
+  to the repository instead of files that are not in the package.
+- Root README no longer claims every release since 0.6.0 has SLSA provenance; it now lists
+  per-version registry-signature / provenance status.
+
+### CI
+
+- `publish.yml`: restores `registry-url` on `actions/setup-node` (as in the last successful
+  provenance publish, 0.6.0) and adds a pre-publish step that fails with an explicit message when
+  npm's OIDC token exchange is rejected, instead of npm's misleading `E404` / `ENEEDAUTH`. See
+  the PR for the Trusted Publishing root cause (npm trusted-publisher still bound to the
+  pre-transfer `holeyfield33-art/runtime-firewall-mvp` identity — owner action required on
+  npmjs.com).
+
+## [0.6.2] - 2026-11-21
+
+**Release integrity:** published to npm manually from the maintainer account after the Trusted
+Publishing step failed (workflow run 44889504824, `ENEEDAUTH`). 0.6.2 is **registry-signed**
+and was independently **byte-reproduced** from tag `v0.6.2` (commit `cf59c98`; tarball sha256
+`86497590eefdcfc3c7b6dcb1f7f8ae809863d6dd4dba66e62a2f57be3f06598b`), but it carries **no npm
+provenance (SLSA) attestation**. A registry signature is not equivalent to provenance.
+(`0.6.1` was tagged but never published to npm: its publish run failed with `E404`.)
 
 ### Security
 
