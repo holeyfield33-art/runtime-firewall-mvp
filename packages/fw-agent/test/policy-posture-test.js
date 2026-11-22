@@ -81,7 +81,7 @@ const MALICIOUS = "const cp = require('child_process'); eval('1+1'); cp.exec('tr
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  await check('invalid signature still locks down (no auto-downgrade to detection-only)', () => {
+  await check('invalid signature still locks down (no auto-downgrade to detection-only); no POLICY_LOADED or POLICY_ABSENT', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-posture-invalid-'));
     const signed = signPolicy({ 'some-pkg': 'BLOCK' }, PRIV);
     signed.rules['some-pkg'] = 'OBSERVE';
@@ -90,6 +90,10 @@ const MALICIOUS = "const cp = require('child_process'); eval('1+1'); cp.exec('tr
     const r = runAgent(dir, "try { require('./m.js'); console.log('LOADED'); } catch (e) { console.log('LOCKED'); }", { FW_POLICY_PUBKEY: PUB });
     assert.ok(/EMERGENCY LOCKDOWN/.test(r.stderr), r.stderr);
     assert.ok(!r.stderr.includes('DETECTION-ONLY'), 'must not report detection-only when a policy file exists:\n' + r.stderr);
+    const events = readAudit(path.join(dir, 'audit'));
+    assert.strictEqual(events.filter(e => e.eventType === 'POLICY_LOADED').length, 0, 'failed verification must not emit POLICY_LOADED');
+    assert.strictEqual(events.filter(e => e.eventType === 'POLICY_ABSENT_DETECTION_ONLY').length, 0, 'failed verification must not emit absence');
+    assert.ok(events.some(e => e.eventType === 'POLICY_TAMPER_LOCKDOWN'), 'lockdown event expected');
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

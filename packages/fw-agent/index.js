@@ -519,12 +519,11 @@ function buildPolicyMap(rules) {
 // Emergency lockdown: block ALL module loads
 let emergencyLockdown = false;
 
-// SRS-FW-004: record whether a policy file existed when the watcher started. PolicyWatcher.start()
-// returns early (no verification, no monitoring timer) when the file is absent, so the process runs
-// detection-only for its whole lifetime; this is surfaced once below as a warning + audit event.
-// The path is resolved from process.cwd() at startup (not configurable in this release).
-const policyFilePresentAtStartup = fs.existsSync(POLICY_PATH);
+// SRS-FW-004 / posture fix: reporting depends solely on the outcome of PolicyWatcher.start().
+// No separate existence snapshot. The watcher is the single source of truth for whether a
+// verified customer policy became active.
 let initialPolicyMeta = null;
+let startupPosture = null; // 'absent' | 'loaded' | 'failed'
 
 // PolicyWatcher verifies the Ed25519 signature on every interval tick.
 // onTamperDetected  → invalid/missing signature  → lockdown
@@ -558,7 +557,8 @@ const policyWatcher = new PolicyWatcher(POLICY_PATH, {
     });
   },
 });
-policyWatcher.start();
+const startResult = policyWatcher.start();
+startupPosture = startResult.status;
 
 // ── Detector ─────────────────────────────────────────────────────────────────────────────────
 const detector = new Detector(policyMap);
@@ -1152,9 +1152,9 @@ const fwModeEvent = fwMode === 'enforce' ? 'FW_MODE_ENFORCE' : 'FW_MODE_DEV';
 auditLog.write({ eventType: fwModeEvent, mode: fwMode, timestamp: Date.now() });
 emitTelemetry(fwModeEvent, null, null, { mode: fwMode });
 
-// SRS-FW-004 P1: make the policy posture explicit at startup. Runtime behavior is unchanged:
-// built-in signature/behavioral detection runs either way; this only reports what is (in)active.
-if (initialPolicyMeta) {
+// SRS-FW-004 P1 + posture fix: report the policy posture from the watcher’s actual start() result.
+// Runtime enforcement behavior is unchanged. Reporting matches what the watcher observed.
+if (startupPosture === 'loaded' && initialPolicyMeta) {
   auditLog.write({
     eventType: 'POLICY_LOADED',
     policyPath: initialPolicyMeta.policyPath,
@@ -1163,7 +1163,7 @@ if (initialPolicyMeta) {
     ruleCount: policyMap.size,
     timestamp: Date.now(),
   });
-} else if (!policyFilePresentAtStartup) {
+} else if (startupPosture === 'absent') {
   console.warn(
     `[Helios] DETECTION-ONLY: no policy file at ${POLICY_PATH} (resolved from process.cwd()). ` +
     'Built-in signature/behavioral detection is active, but customer-signed rules ' +
@@ -1182,6 +1182,7 @@ if (initialPolicyMeta) {
     timestamp: Date.now(),
   });
 }
+// startupPosture === 'failed': lockdown already emitted via onTamperDetected; no success or absence reporting.
 
 // Report the outcome of P0-4 child/worker re-injection now that auditLog + emitTelemetry exist.
 // Reuses fwMode (P0-3) rather than FW_STRICT_PRELOAD directly, now that both branches are merged
