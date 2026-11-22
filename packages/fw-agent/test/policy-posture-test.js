@@ -97,6 +97,40 @@ const MALICIOUS = "const cp = require('child_process'); eval('1+1'); cp.exec('tr
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  await check('same-rules re-sign emits no POLICY_RELOADED; subsequent genuine rule change emits exactly one with correct previous*', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-posture-samerules-'));
+    const p = path.join(dir, 'policy.signed.json');
+    const rules = { victim: 'BLOCK' };
+    const initial = signPolicy(rules, PRIV, '2026-11-21T00:00:00.000Z');
+    const sameRulesResigned = signPolicy(rules, PRIV, '2026-11-21T01:00:00.000Z'); // different signedAt, same rules
+    const changed = signPolicy({ victim: 'OBSERVE' }, PRIV, '2026-11-21T02:00:00.000Z');
+    fs.writeFileSync(p, JSON.stringify(initial));
+    const calls = [];
+    const w = new PolicyWatcher(p, { onValidChange: (rules, meta) => calls.push({ rules, meta }), onTamperDetected: () => {} }, { intervalMs: 40 });
+    const origLog = console.log; console.log = () => {};
+    try {
+      const startRes = w.start();
+      assert.strictEqual(startRes.status, 'loaded');
+      assert.strictEqual(calls.length, 1);
+      assert.strictEqual(calls[0].meta.reload, false);
+      // same-rules re-sign
+      fs.writeFileSync(p, JSON.stringify(sameRulesResigned));
+      await new Promise((r) => setTimeout(r, 150));
+      assert.strictEqual(calls.length, 1, 'same-rules re-sign must not emit reload');
+      // genuine rule change
+      fs.writeFileSync(p, JSON.stringify(changed));
+      await new Promise((r) => setTimeout(r, 150));
+      assert.strictEqual(calls.length, 2, 'genuine rule change emits exactly one reload');
+      const m = calls[1].meta;
+      assert.strictEqual(m.reload, true);
+      assert.strictEqual(calls[1].rules.victim, 'OBSERVE');
+      assert.strictEqual(m.previousPolicyHash, calls[0].meta.policyHash);
+      assert.strictEqual(m.previousSignedAt, '2026-11-21T00:00:00.000Z');
+      assert.strictEqual(m.signedAt, '2026-11-21T02:00:00.000Z');
+    } finally { w.stop(); console.log = origLog; }
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   await check('PolicyWatcher reload passes { reload, policyHash, signedAt, previous* }; an older authentic policy is ACCEPTED (replay limitation)', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fw-posture-reload-'));
     const p = path.join(dir, 'policy.signed.json');

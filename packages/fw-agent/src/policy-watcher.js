@@ -6,7 +6,12 @@
 //
 // The signature covers the canonical JSON of { version, rules (keys sorted), signedAt }.
 // An invalid or missing signature immediately triggers emergency lockdown.
-// A valid signature with changed rules triggers hot-reload via onValidChange().
+// A valid signature whose rules differ from the currently applied rule set triggers hot-reload
+// via onValidChange(rules, meta) with meta.reload=true. Re-signing the identical rules (different
+// signedAt or envelope bytes) does not emit a reload; POLICY_RELOADED records applied rule-set
+// changes only. previousPolicyHash / previousSignedAt identify the envelope of the previously
+// applied rule set. Any authentic envelope (including an older one) is accepted — this is not
+// rollback prevention.
 //
 // To sign a policy file, generate your own key pair (never commit the private key — see
 // SECURITY.md "Policy signing key management"), then sign with it. Both CLIs ship in the npm
@@ -326,8 +331,10 @@ class PolicyWatcher {
    * Start the periodic integrity check.
    * Verifies the policy on startup; calls onTamperDetected() if verification fails.
    * Calls onValidChange(rules, meta) with the initial rules on startup (meta.reload=false), then on
-   * every verified change (meta.reload=true). NOTE: any authentic envelope signed by the trusted key
-   * is accepted, including an OLDER one (replay); meta is for audit only, not rollback prevention.
+   * every verified change to the applied rule set (meta.reload=true). Same-rules re-signing does
+   * not fire the reload callback. NOTE: any authentic envelope signed by the trusted key is
+   * accepted, including an OLDER one (replay); meta is for audit only, not rollback prevention.
+   * previous* fields identify the previous applied rule set’s envelope.
    *
    * @returns {{status: 'absent'|'loaded'|'failed', meta?: object}} The actual outcome observed by this call.
    *   'absent'  — no policy file at start; no monitoring, detection-only.
