@@ -289,7 +289,7 @@ node monitor.js [path-to-target-project]   # defaults to the current directory
 ```
 
 Findings are appended as JSON lines to `research.log` at the repo root. See
-[`docs/MONITOR.md`](docs/MONITOR.md) for the full run manual, log format,
+See the package README for audit-log location and format.
 and troubleshooting.
 
 ---
@@ -373,13 +373,11 @@ verdict model, and the current inventory of documented firewall blind spots.
 
 ## Performance
 
-The v0.4.0 performance evidence is frozen in `PERFORMANCE.md`. This repo maintains a 25% median compilation overhead budget for the gate (`npm run gate`).
-
-**v0.4.0 measured evidence:** a first-party run on a 4-core machine measured **17.68% median overhead**, within budget. `PERFORMANCE.md` also documents a core-count sensitivity pattern across five environments spanning two release cycles: every run with 4+ confirmed logical cores has passed in the 16.47–17.68% band on the v0.4.0 commit, while lower-core/shared environments (2-core GitHub Codespaces on v0.4.0, plus an earlier pre-v0.4.0 audit sandbox) have failed in the 39–61% range. The gate's cold-process-spawn design is the suspected cause — baseline and agent subprocesses compete for scheduler time on constrained hardware — but this is a well-evidenced pattern across commits, not a same-commit controlled experiment or a proven root cause. `npm run gate` now prints a low-core-count warning when it fails on a machine with fewer than 4 logical cores.
+The repository maintains a 25% median compilation-overhead budget enforced by `npm run gate`. Run the gate on hardware with 4+ logical cores for a meaningful result. Historical measurements and methodology live in `results/`. The gate is currently manual (not wired into CI). See [docs/MAINTENANCE.md](docs/MAINTENANCE.md) for recovery and operational notes, and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the current trust-boundary and activation model.
 
 | Metric | Recorded budget | Enforced? |
 |--------|-----------------|-----------|
-| Median module-compile overhead | 25% | **Manual only — not yet wired into CI** (see `AUDIT.md` finding #4) |
+| Median module-compile overhead | 25% | Manual only — not yet wired into CI |
 | P95 overhead | 30% (informational only) | No |
 
 The gate is a **regression guard**, not a release performance claim. If a code change causes the median to exceed 25% *on hardware with at least 4 confirmed logical cores*, the gate is doing its job by catching a regression.
@@ -390,15 +388,15 @@ The gate is a **regression guard**, not a release performance claim. If a code c
 - full test suite: `results/full-test-v0.4.0-*.txt`
 - raw benchmark artifacts: `results/benchmarks/raw/bench-*.json`
 
-These, plus `PERFORMANCE.md`, are the authoritative current evidence.
+These, plus the contents of `results/`, are the authoritative current evidence.
 
 ### What this means
 
 - `Module._compile` interception cost is the primary steady-state performance factor.
 - `FW_ENABLE_DETECTION=0` remains zero-overhead for normal runtime operation.
-- Run the gate on hardware with 4+ logical cores for a meaningful result; see `PERFORMANCE.md`'s "Core-count sensitivity" section for the full cross-environment evidence before treating a low-core FAIL as a real regression.
+- Run the gate on hardware with 4+ logical cores for a meaningful result. Low-core environments can produce elevated numbers due to cold-process-spawn scheduler contention; treat a low-core FAIL as diagnostic, not automatically as a regression.
 
-For the latest baseline and detailed methodology, see `PERFORMANCE.md`.
+For the latest baseline and detailed methodology, see `results/` and `CONTRIBUTING.md`.
 
 ---
 

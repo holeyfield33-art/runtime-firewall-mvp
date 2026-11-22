@@ -36,11 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FW_MODE=enforce`-vs-ESM-floor check in `esm-loader-test.js`, and four new installed-tarball
   checks in `scripts/smoke-tarball.js` (keygen, sign + enforce, detection-only, ESM requirement).
 
-### Fixed
+### Changed
 
-- **Dashboard timestamps (fw-control).** Numeric epoch timestamps are validated at ingestion
-  against the JS Date range. Invalid incoming events are rejected before persistence. Legacy
-  invalid records are rendered safely (no 500 on the HTML logs page).
+- **Documentation cleanup.** Removed historical technical-debt documents (`PERFORMANCE.md`, `PHASE3_PERFORMANCE_ANALYSIS.md`, `AUDIT.md`, `FINDINGS-INBOX.md`, `docs/MONITOR.md`, `docs/BENCHMARK.md`). Added concise current `docs/ARCHITECTURE.md` (trust boundaries, activation, posture, signedAt contract) and `docs/MAINTENANCE.md` (recovery, gate, publishing). Updated README and package README references to point at the current documents and `results/`.
 
 ### Fixed (documentation)
 

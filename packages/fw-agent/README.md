@@ -233,12 +233,12 @@ The repo maintains a 25% median compilation-overhead gate budget, but this is a 
 
 | Metric | Budget | Enforced? |
 |--------|--------|-----------|
-| Median module-compile overhead | 25% | Manual only — the gate is not wired into CI (AUDIT.md finding #4) |
+| Median module-compile overhead | 25% | Manual only — the gate is not wired into CI |
 | P95 overhead | 30% (informational only) | No |
 
 The gate is a **regression guard**, not a performance target. If the median exceeds 25%, the change needs review.
 
-For the v0.4.0 frozen baseline and diagnostic evidence, see [`PERFORMANCE.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/PERFORMANCE.md) and `results/benchmarks/steady-state-compile-attr-*.json` in the repository. This is the most recent controlled performance freeze in the repo; no v0.5.0-specific freeze has been published yet, so treat these numbers as last-measured-at-v0.4.0, not as a v0.5.0 guarantee.
+For historical performance measurements see `results/` in the repository. The 25% median gate is enforced by `npm run gate`. See [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) and [docs/MAINTENANCE.md](../../docs/MAINTENANCE.md) for the current model and recovery paths.
 
 To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
