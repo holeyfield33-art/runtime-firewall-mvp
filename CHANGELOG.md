@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Documentation cleanup.** Removed historical technical-debt documents (`PERFORMANCE.md`, `PHASE3_PERFORMANCE_ANALYSIS.md`, `AUDIT.md`, `FINDINGS-INBOX.md`, `docs/MONITOR.md`, `docs/BENCHMARK.md`). Added concise current `docs/ARCHITECTURE.md` (trust boundaries, activation, posture, signedAt contract) and `docs/MAINTENANCE.md` (recovery, gate, publishing). Updated README and package README references to point at the current documents and `results/`.
+- **Documentation cleanup.** Removed historical technical-debt documents (`PERFORMANCE.md`, `PHASE3_PERFORMANCE_ANALYSIS.md`, `AUDIT.md`, `FINDINGS-INBOX.md`, `docs/MONITOR.md`, `docs/BENCHMARK.md`). Added concise current `docs/ARCHITECTURE.md` (trust boundaries, activation, posture, signedAt contract) and `docs/MAINTENANCE.md` (recovery, gate, publishing). Added `docs/SBOM.md` explaining the software bill of materials, the agent’s zero runtime dependencies, generation commands, and recommended implementation steps. Updated README and package README references.
 
 ### Fixed (documentation)
 

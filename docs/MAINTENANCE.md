@@ -34,6 +34,6 @@ There is no revocation list. Rotation + restart is the recovery mechanism.
 
 The repository maintains a 25% median compilation-overhead budget enforced by `npm run gate`. Run the gate on hardware with 4+ logical cores for a meaningful result. Historical v0.4.0 measurements and methodology live in `results/`. The gate is currently manual (not wired into CI).
 
-## Publishing
+## Software Bill of Materials
 
-Trusted Publishing (OIDC) is the intended path. No long-lived npm token is required in the repository. See `.github/workflows/publish.yml` and the package README for the current setup.
+See [docs/SBOM.md](SBOM.md) for the full explanation, current dependency inventory, generation commands, and recommended implementation steps. The published agent has zero runtime dependencies.
