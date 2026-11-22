@@ -519,6 +519,13 @@ function buildPolicyMap(rules) {
 // Emergency lockdown: block ALL module loads
 let emergencyLockdown = false;
 
+// SRS-FW-004: record whether a policy file existed when the watcher started. PolicyWatcher.start()
+// returns early (no verification, no monitoring timer) when the file is absent, so the process runs
+// detection-only for its whole lifetime; this is surfaced once below as a warning + audit event.
+// The path is resolved from process.cwd() at startup (not configurable in this release).
+const policyFilePresentAtStartup = fs.existsSync(POLICY_PATH);
+let initialPolicyMeta = null;
+
 // PolicyWatcher verifies the Ed25519 signature on every interval tick.
 // onTamperDetected  → invalid/missing signature  → lockdown
 // onValidChange     → valid signature + new rules → hot-reload policyMap
@@ -528,8 +535,27 @@ const policyWatcher = new PolicyWatcher(POLICY_PATH, {
     auditLog.write({ eventType: 'POLICY_TAMPER_LOCKDOWN', timestamp: Date.now() });
     emitTelemetry('POLICY_TAMPER_LOCKDOWN', 'policy.signed.json', null);
   },
-  onValidChange: (rules) => {
+  onValidChange: (rules, meta) => {
     policyMap = buildPolicyMap(rules);
+    if (!meta) return;
+    if (!meta.reload) {
+      initialPolicyMeta = meta; // written as POLICY_LOADED once the audit log has started (below)
+      return;
+    }
+    // SRS-FW-004 P1: audit trail for every verified hot-reload. Diagnostic only -- any envelope
+    // authentically signed by the trusted key is accepted, including an older one (replay). This
+    // event records WHICH policy became active; it is not rollback prevention.
+    auditLog.write({
+      eventType: 'POLICY_RELOADED',
+      policyPath: meta.policyPath,
+      policyHash: meta.policyHash,
+      signedAt: meta.signedAt,
+      previousPolicyHash: meta.previousPolicyHash,
+      previousSignedAt: meta.previousSignedAt,
+      signedAtNotNewerThanPrevious: !(Date.parse(meta.signedAt) > Date.parse(meta.previousSignedAt)),
+      ruleCount: policyMap.size,
+      timestamp: Date.now(),
+    });
   },
 });
 policyWatcher.start();
@@ -1125,6 +1151,37 @@ auditLog.write({ eventType: 'AGENT_START', timestamp: Date.now(), logPath: audit
 const fwModeEvent = fwMode === 'enforce' ? 'FW_MODE_ENFORCE' : 'FW_MODE_DEV';
 auditLog.write({ eventType: fwModeEvent, mode: fwMode, timestamp: Date.now() });
 emitTelemetry(fwModeEvent, null, null, { mode: fwMode });
+
+// SRS-FW-004 P1: make the policy posture explicit at startup. Runtime behavior is unchanged:
+// built-in signature/behavioral detection runs either way; this only reports what is (in)active.
+if (initialPolicyMeta) {
+  auditLog.write({
+    eventType: 'POLICY_LOADED',
+    policyPath: initialPolicyMeta.policyPath,
+    policyHash: initialPolicyMeta.policyHash,
+    signedAt: initialPolicyMeta.signedAt,
+    ruleCount: policyMap.size,
+    timestamp: Date.now(),
+  });
+} else if (!policyFilePresentAtStartup) {
+  console.warn(
+    `[Helios] DETECTION-ONLY: no policy file at ${POLICY_PATH} (resolved from process.cwd()). ` +
+    'Built-in signature/behavioral detection is active, but customer-signed rules ' +
+    '(BLOCK/QUARANTINE/OBSERVE) and policy integrity monitoring are INACTIVE for this process; ' +
+    'a policy file added later is not picked up until restart. To enable them, create one with ' +
+    '`npx aletheia-policy-keygen` and `npx aletheia-policy-sign`, set FW_POLICY_PUBKEY, and start ' +
+    'the process from the directory containing policy.signed.json.'
+  );
+  auditLog.write({
+    eventType: 'POLICY_ABSENT_DETECTION_ONLY',
+    policyPath: POLICY_PATH,
+    policyPathResolvedFrom: 'process.cwd()',
+    customerRulesActive: false,
+    policyMonitoringActive: false,
+    detectionActive: true,
+    timestamp: Date.now(),
+  });
+}
 
 // Report the outcome of P0-4 child/worker re-injection now that auditLog + emitTelemetry exist.
 // Reuses fwMode (P0-3) rather than FW_STRICT_PRELOAD directly, now that both branches are merged

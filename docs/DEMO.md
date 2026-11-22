@@ -80,16 +80,16 @@ Expected output:
 # verification and triggers emergency lockdown). There is no bundled/committed dev private
 # key -- generate your own local-only key first. A key matching the bundled
 # DEV_PUBLIC_KEY_PEM default requires FW_ALLOW_DEV_POLICY_KEY=1.
-node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
+node scripts/generate-policy-key.js   # writes aletheia-policy-{private,public}.pem; never prints the private key
 echo '{ "untrusted.js": "QUARANTINE", "evil.js": "BLOCK" }' > rules.json
-node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
+node scripts/sign-policy.js aletheia-policy-private.pem rules.json policy.signed.json
 
 # BLOCK: module never executes
 cat > /tmp/evil.js << 'EOF'
 console.log("I should never run");
 EOF
 
-FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent /tmp/evil.js
+FW_ENABLE_DETECTION=1 FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)" node --require ./packages/fw-agent /tmp/evil.js
 # Expected: [Firewall] Compilation denied for module: "evil.js"
 
 # QUARANTINE: module is replaced with a logging Proxy
@@ -102,21 +102,21 @@ const m = require('/tmp/untrusted.js');
 console.log(m.steal());
 EOF
 
-FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent /tmp/app.js
+FW_ENABLE_DETECTION=1 FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)" node --require ./packages/fw-agent /tmp/app.js
 # Expected: [Quarantine Intercept] warning; m.steal() returns null, not "stealing secrets"
 
-rm -f policy.signed.json rules.json
+rm -f policy.signed.json rules.json aletheia-policy-private.pem aletheia-policy-public.pem
 ```
 
 ## 5. Policy tamper detection
 
 ```bash
 # Start from a validly signed (empty-rules) policy.
-node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
+node scripts/generate-policy-key.js --force   # replaces the demo key pair from step 4
 echo '{}' > rules.json
-node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
+node scripts/sign-policy.js aletheia-policy-private.pem rules.json policy.signed.json
 
-FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-agent -e "
+FW_ENABLE_DETECTION=1 FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)" node --require ./packages/fw-agent -e "
   // Overwriting the signed file with an unsigned/tampered one makes the next 60s watcher
   // tick fail signature verification → emergency lockdown (all module loads throw).
   const fs = require('fs');
@@ -124,7 +124,7 @@ FW_ENABLE_DETECTION=1 FW_ALLOW_DEV_POLICY_KEY=1 node --require ./packages/fw-age
   console.log('Policy watcher started. Tamper detection active (60s interval).');
   process.exit(0);
 "
-rm -f policy.signed.json rules.json
+rm -f policy.signed.json rules.json aletheia-policy-private.pem aletheia-policy-public.pem
 ```
 
 ## 6. Audit log

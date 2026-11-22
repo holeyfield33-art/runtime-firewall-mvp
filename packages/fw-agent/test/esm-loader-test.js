@@ -124,6 +124,22 @@ check(REGISTER_HOOKS_AVAILABLE
   }
 });
 
+// SRS-FW-004 P1: FW_MODE=enforce ALONE is not an ESM guarantee. Below the registerHooks() floor it
+// discloses the gap loudly (CRITICAL + ESM_HOOK_UNAVAILABLE audit) but does NOT exit, and ESM
+// imports run unprotected; only FW_REQUIRE_ESM_COVERAGE=1 fails closed. Pinned so docs and
+// behavior cannot drift apart again (SRS-FW-003 V-02 found the README claiming a hard failure).
+check(REGISTER_HOOKS_AVAILABLE
+  ? `FW_MODE=enforce on Node ${process.version} (ESM hooks available): starts and intercepts the malicious static import`
+  : `FW_MODE=enforce alone on Node ${process.version} (below ESM floor): starts, discloses CRITICAL, and the ESM import runs UNPROTECTED`, () => {
+  const res = spawnFixture('static-import-sentinel.mjs', { FW_MODE: 'enforce' });
+  if (REGISTER_HOOKS_AVAILABLE) {
+    assert.notStrictEqual(res.status, 0, 'malicious static import must be blocked when hooks are available: ' + res.status + '\nstderr:\n' + res.stderr);
+  } else {
+    assert.strictEqual(res.status, 0, 'FW_MODE=enforce must not become a Node-version startup failure: ' + res.status + '\nstderr:\n' + res.stderr);
+    assert.ok(/\[CRITICAL\] \[Helios\] ESM static\/dynamic import interception not active/.test(res.stderr), 'expected CRITICAL disclosure:\n' + res.stderr);
+  }
+});
+
 check('FW_REQUIRE_ESM_COVERAGE unset (default) leaves ESM-unavailable behavior unchanged from before this flag existed', () => {
   const res = spawnFixture('benign.mjs');
   assert.strictEqual(res.status, 0, 'agent must start cleanly regardless of registerHooks() availability when the flag is unset: ' + res.status + '\nstderr:\n' + res.stderr);

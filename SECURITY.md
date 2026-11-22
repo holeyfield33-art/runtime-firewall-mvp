@@ -247,15 +247,34 @@ anyone — it exists only so `policy.signed.json` fixtures the project ships (em
 files) can carry a valid signature, and so `FW_ALLOW_DEV_POLICY_KEY=1` has something concrete to
 gate. Before deploying to production:
 
-1. Run `node scripts/generate-policy-key.js` and keep the private key on your own machine —
-   never commit it, never share it, and never write it to a path inside this repository.
-2. Either set `FW_POLICY_PUBKEY` to your new public key at runtime (recommended — no source
-   change needed), or replace `DEV_PUBLIC_KEY_PEM` in `packages/fw-agent/src/policy-watcher.js`
-   for your own fork.
-3. If you edited `policy-watcher.js`, regenerate `.helios-baseline`: `npm run baseline` (from
-   the repo root). Do not hand-roll the hashing snippet — `scripts/generate-baseline.js` is the
-   single source of truth for the hashed file list and hashing method; see `CONTRIBUTING.md`.
-4. Sign your policy rules: `node scripts/sign-policy.js your-private-key.pem rules.json`.
+1. Run `npx aletheia-policy-keygen` (shipped in the npm package; from a repo checkout,
+   `node scripts/generate-policy-key.js` is an equivalent wrapper). It writes the private key to a
+   0600 file, never prints it, and refuses to overwrite existing key files without `--force`.
+   Keep the private key on your own machine — never commit it, never share it, and never write it
+   to a path inside this repository or onto production hosts.
+2. Set `FW_POLICY_PUBKEY` to your new public key at runtime. **This is the supported production
+   configuration** for npm consumers. (Only for your own fork of the source may you instead
+   replace `DEV_PUBLIC_KEY_PEM` in `packages/fw-agent/src/policy-watcher.js`.)
+3. If you edited `policy-watcher.js` in a fork, regenerate `.helios-baseline`: `npm run baseline`
+   (from the repo root). Do not hand-roll the hashing snippet — `scripts/generate-baseline.js` is
+   the single source of truth for the hashed file list and hashing method; see `CONTRIBUTING.md`.
+4. Sign your policy rules: `npx aletheia-policy-sign your-private-key.pem rules.json policy.signed.json`.
+
+#### Key loss and key compromise (incident response)
+
+There is no revocation list: the trusted key is exactly what `FW_POLICY_PUBKEY` contains in each
+running process, and **any** envelope authentically signed by that key is accepted — including an
+older one (replay; see the package README). Consequently:
+
+- **Lost key:** generate a new pair, re-sign the current rules, deploy the new
+  `policy.signed.json` and new `FW_POLICY_PUBKEY` together, and restart. A process that still
+  trusts the old key rejects the new signature and enters emergency lockdown (fail-closed).
+- **Compromised key:** distrust every policy signed under it (yours included). Generate a new
+  pair on a trusted machine, re-sign and review the intended rules, replace `FW_POLICY_PUBKEY`
+  everywhere and restart every protected process, remove old-key policy files and backups from
+  deployment paths, review audit logs for `POLICY_LOADED` / `POLICY_RELOADED` `policyHash` values
+  you did not deploy, and destroy old private-key copies. Rotation (changing `FW_POLICY_PUBKEY`)
+  is the only thing that invalidates old signatures.
 
 #### Key revocation record (F-62, 2026-08-20)
 

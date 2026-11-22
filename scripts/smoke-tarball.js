@@ -23,6 +23,11 @@
 //   5. enforcement mode  — FW_MODE=enforce without a real --require preload -> non-zero
 //   6. ESM interception  — import() a malicious file:// .mjs -> blocked on supported Node,
 //                          or a clean skip with a logged reason below the ESM version floor
+//   7. detection-only    — no policy file -> one warning + one POLICY_ABSENT_DETECTION_ONLY event
+//   8. keygen (bin)      — installed aletheia-policy-keygen: files written, private key never printed,
+//                          no silent overwrite
+//   9. sign + enforce    — installed aletheia-policy-sign + FW_POLICY_PUBKEY -> BLOCK enforced
+//  10. ESM requirement   — FW_REQUIRE_ESM_COVERAGE=1 starts on supported Node, exits 1 below floor
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 const assert = require('assert');
@@ -152,6 +157,60 @@ check('blocks (or cleanly skips below floor) a malicious ESM module', () => {
     assert.ok(/ESM static\/dynamic import interception not active|run unprotected/i.test(res.stderr), 'below the ESM floor the agent must emit its specific ESM-uncovered warning:\n' + res.stderr);
     console.log('    (Node ' + process.versions.node + ' is below the ESM hook floor — coverage is CJS-only here, by design)');
   }
+});
+
+// ── SRS-FW-004: installed-package onboarding (no source repo) ───────────────────────────────
+// 7-10 exercise ONLY what an npm consumer has: the installed package, its bin/ CLIs, and env vars.
+const binDir = path.join(projectDir, 'node_modules', '.bin');
+function runBin(name, args, cwd) {
+  const link = path.join(binDir, name);
+  assert.ok(fs.existsSync(link), `installed package must expose the "${name}" bin at ${link}`);
+  return spawnSync(process.execPath, [fs.realpathSync(link), ...args], { cwd, encoding: 'utf8', timeout: 30000 });
+}
+const onboardDir = path.join(projectDir, 'onboarding');
+fs.mkdirSync(onboardDir, { recursive: true });
+
+// 7: detection-only posture is reported once (no policy file in cwd).
+check('no policy file: one DETECTION-ONLY warning + one POLICY_ABSENT_DETECTION_ONLY audit event', () => {
+  const logDir = path.join(onboardDir, 'audit-absent');
+  const res = run([`--require=${agentPath}`, '-e', "console.log('RAN')"], { FW_MODE: 'dev', HELIOS_LOG_DIR: logDir }, { cwd: onboardDir });
+  assert.strictEqual(res.status, 0, res.stderr);
+  assert.strictEqual(res.stderr.split('\n').filter((l) => l.includes('DETECTION-ONLY')).length, 1, 'expected exactly one warning:\n' + res.stderr);
+  const events = fs.readFileSync(path.join(logDir, 'audit.log'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  assert.strictEqual(events.filter((e) => e.eventType === 'POLICY_ABSENT_DETECTION_ONLY').length, 1);
+});
+
+// 8: package-owned key generation never prints the private key and refuses to overwrite.
+check('installed aletheia-policy-keygen writes key files, never prints the private key, refuses overwrite', () => {
+  const g = runBin('aletheia-policy-keygen', [], onboardDir);
+  assert.strictEqual(g.status, 0, g.stderr);
+  assert.ok(!/PRIVATE KEY/.test(g.stdout + g.stderr), 'private key must not be printed');
+  assert.ok(fs.existsSync(path.join(onboardDir, 'aletheia-policy-private.pem')));
+  assert.ok(fs.existsSync(path.join(onboardDir, 'aletheia-policy-public.pem')));
+  const again = runBin('aletheia-policy-keygen', [], onboardDir);
+  assert.strictEqual(again.status, 1, 'second run must refuse to overwrite, got ' + again.status);
+});
+
+// 9: package-owned signing + enforcement with the consumer's own key via FW_POLICY_PUBKEY.
+check('installed aletheia-policy-sign + FW_POLICY_PUBKEY: BLOCK rule enforced from the installed package', () => {
+  fs.writeFileSync(path.join(onboardDir, 'blocked-mod.js'), "module.exports = 'BLOCKED-MOD-RAN';\n");
+  fs.writeFileSync(path.join(onboardDir, 'rules.json'), JSON.stringify({ 'blocked-mod.js': 'BLOCK' }));
+  const s = runBin('aletheia-policy-sign', ['aletheia-policy-private.pem', 'rules.json', 'policy.signed.json'], onboardDir);
+  assert.strictEqual(s.status, 0, s.stderr);
+  const env = { FW_MODE: 'dev', FW_POLICY_PUBKEY: fs.readFileSync(path.join(onboardDir, 'aletheia-policy-public.pem'), 'utf8'), FW_ALLOW_DEV_POLICY_KEY: '0', HELIOS_LOG_DIR: path.join(onboardDir, 'audit-policy') };
+  const res = run([`--require=${agentPath}`, '-e', "try { console.log(require('./blocked-mod.js')); } catch (e) { console.log('DENIED: ' + e.message); }"], env, { cwd: onboardDir });
+  assert.strictEqual(res.status, 0, res.stderr);
+  assert.ok(/DENIED: \[Firewall\] Compilation denied/.test(res.stdout), 'BLOCK rule must be enforced:\n' + res.stdout + res.stderr);
+  assert.ok(!res.stderr.includes('DETECTION-ONLY'), 'must not report detection-only when a valid policy is loaded:\n' + res.stderr);
+});
+
+// 10: FW_REQUIRE_ESM_COVERAGE=1 is the fail-closed control for ESM coverage.
+check('FW_REQUIRE_ESM_COVERAGE=1: starts on a supported Node, refuses to start below the ESM floor', () => {
+  const [maj, min] = process.versions.node.split('.').map(Number);
+  const esmSupported = (maj > 23) || (maj === 23 && min >= 5) || (maj === 22 && min >= 15);
+  const res = run([`--require=${agentPath}`, '-e', "console.log('RAN')"], { FW_MODE: 'dev', FW_REQUIRE_ESM_COVERAGE: '1' });
+  if (esmSupported) assert.strictEqual(res.status, 0, res.stderr);
+  else { assert.strictEqual(res.status, 1, 'expected exit 1 below the ESM floor, got ' + res.status); assert.ok(/FW_REQUIRE_ESM_COVERAGE=1 is set/.test(res.stderr), res.stderr); }
 });
 
 console.log(`\n[smoke] all tarball smoke checks passed (${passed}).`);

@@ -8,13 +8,12 @@
 // An invalid or missing signature immediately triggers emergency lockdown.
 // A valid signature with changed rules triggers hot-reload via onValidChange().
 //
-// To sign a policy file, generate your own local dev key first (never commit it — see
-// SECURITY.md "Policy signing key management"), then sign with it:
-//   node scripts/generate-policy-key.js > /tmp/my-dev-key.txt   # keep the private key local-only
-//   node scripts/sign-policy.js <your-private-key.pem> rules.json policy.signed.json
-//
-// To generate a production key pair:
-//   node scripts/generate-policy-key.js
+// To sign a policy file, generate your own key pair (never commit the private key — see
+// SECURITY.md "Policy signing key management"), then sign with it. Both CLIs ship in the npm
+// package (bin/), backed by the single signing implementation in src/policy-signing.js:
+//   npx aletheia-policy-keygen          # writes aletheia-policy-{private,public}.pem; never prints the private key
+//   npx aletheia-policy-sign aletheia-policy-private.pem rules.json policy.signed.json
+// Production: set FW_POLICY_PUBKEY to the public key PEM.
 
 const fs = require('fs');
 const crypto = require('crypto');
@@ -97,8 +96,9 @@ const USING_DEV_POLICY_KEY = PUBLIC_KEY_PEM.trim() === DEV_PUBLIC_KEY_PEM.trim()
 //     patched parse changes which object is under scrutiny but cannot decouple bytes-verified
 //     from object-returned; the worst it can do is cause a fail-closed rejection, never a
 //     forgery. (crypto.verify/createHash are already pristine-captured above under F-62.)
-// The signing side (scripts/sign-policy.js) runs offline in a trusted process and keeps its own
-// byte-identical canonicalPayload; these captures are the running-firewall verification side.
+// The signing side (src/policy-signing.js, wrapped by bin/aletheia-policy-sign.js and the repo's
+// scripts/sign-policy.js) imports this file's canonicalPayload() directly, so signer and verifier
+// share one implementation; these captures are the running-firewall verification side.
 const pristineStringify = JSON.stringify;
 const pristineKeys = Object.keys;
 const pristineSort = Array.prototype.sort;
@@ -219,8 +219,8 @@ function assertProductionKeyConfig(env = process.env, exit = process.exit) {
   if (env.NODE_ENV === 'production' && USING_DEV_POLICY_KEY && env.FW_ALLOW_DEV_POLICY_KEY !== '1') {
     console.error(
       '[CRITICAL] Running in production (NODE_ENV=production) with the bundled development ' +
-      'policy key. The matching private key is public, so any attacker can forge a policy ' +
-      'signature. Set FW_POLICY_PUBKEY to your production public key. Refusing to start.'
+      'policy key. It is a shared, published key (not your own trust anchor) and must not be ' +
+      'trusted in production. Set FW_POLICY_PUBKEY to your production public key. Refusing to start.'
     );
     exit(1);
     return true;
@@ -231,7 +231,8 @@ function assertProductionKeyConfig(env = process.env, exit = process.exit) {
 class PolicyWatcher {
   /**
    * @param {string} policyPath   - Absolute path to policy.signed.json
-   * @param {object} callbacks    - { onTamperDetected(), onValidChange(rules) }
+   * @param {object} callbacks    - { onTamperDetected(), onValidChange(rules, meta) }
+   *   meta = { reload, signedAt, policyHash, policyPath[, previousSignedAt, previousPolicyHash] }
    * @param {object} [options]    - { intervalMs }
    */
   constructor(policyPath, callbacks, options = {}) {
@@ -295,7 +296,10 @@ class PolicyWatcher {
       return null;
     }
 
-    return { version, rules, signedAt };
+    // SRS-FW-004: hash of the exact verified file bytes, for the reload audit trail (diagnostic
+    // only -- it identifies WHICH authentic policy is active; it does not prevent replay).
+    const policyHash = pristineCreateHash('sha256').update(content, 'utf8').digest('hex');
+    return { version, rules, signedAt, policyHash };
   }
 
   /**
@@ -321,18 +325,21 @@ class PolicyWatcher {
   /**
    * Start the periodic integrity check.
    * Verifies the policy on startup; calls onTamperDetected() if verification fails.
-   * Calls onValidChange(rules) with the initial rules on startup, then on every verified change.
+   * Calls onValidChange(rules, meta) with the initial rules on startup (meta.reload=false), then on
+   * every verified change (meta.reload=true). NOTE: any authentic envelope signed by the trusted key
+   * is accepted, including an OLDER one (replay); meta is for audit only, not rollback prevention.
    */
   start() {
     if (!fs.existsSync(this.policyPath)) return;
 
     // F-02a: refuse to verify a policy file against the bundled dev key in production.
-    // The dev private key is public (committed to the repo), so any attacker can forge
-    // a valid signature. Only allow the dev key when FW_ALLOW_DEV_POLICY_KEY=1.
+    // The bundled dev PUBLIC key is a shared, published value, not the deployer's own trust
+    // anchor (the pre-F-62 dev private key was committed and revoked; see SECURITY.md). Only
+    // allow it when FW_ALLOW_DEV_POLICY_KEY=1.
     if (USING_DEV_POLICY_KEY && process.env.FW_ALLOW_DEV_POLICY_KEY !== '1') {
       console.error(
         '[CRITICAL] Policy file found but FW_POLICY_PUBKEY is missing or set to the bundled ' +
-        'development key. The matching private key is public, making this unsafe. Set ' +
+        'development key, which is a shared published key and not a production trust anchor. Set ' +
         'FW_POLICY_PUBKEY to your production public key, or set FW_ALLOW_DEV_POLICY_KEY=1 ' +
         'for local/dev/CI use. Refusing to run.'
       );
@@ -348,7 +355,11 @@ class PolicyWatcher {
     }
 
     this._lastRulesHash = this._hashRules(initial.rules);
-    this.onValidChange(initial.rules);
+    this._lastSignedAt = initial.signedAt;
+    this._lastPolicyHash = initial.policyHash;
+    this.onValidChange(initial.rules, {
+      reload: false, signedAt: initial.signedAt, policyHash: initial.policyHash, policyPath: this.policyPath,
+    });
 
     this.timer = setInterval(() => {
       if (this.locked) return;
@@ -363,9 +374,19 @@ class PolicyWatcher {
 
       const newHash = this._hashRules(result.rules);
       if (newHash !== this._lastRulesHash) {
+        const meta = {
+          reload: true,
+          signedAt: result.signedAt,
+          policyHash: result.policyHash,
+          previousSignedAt: this._lastSignedAt,
+          previousPolicyHash: this._lastPolicyHash,
+          policyPath: this.policyPath,
+        };
         this._lastRulesHash = newHash;
-        console.log('[PolicyWatcher] Valid policy update detected \u2014 hot-reloading rules.');
-        this.onValidChange(result.rules);
+        this._lastSignedAt = result.signedAt;
+        this._lastPolicyHash = result.policyHash;
+        console.log(`[PolicyWatcher] Valid policy update detected \u2014 hot-reloading rules (signedAt ${result.signedAt}, sha256 ${result.policyHash}).`);
+        this.onValidChange(result.rules, meta);
       }
     }, this._intervalMs);
 

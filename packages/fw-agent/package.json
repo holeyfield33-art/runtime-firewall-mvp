@@ -3,6 +3,10 @@
   "version": "0.6.2",
   "description": "Zero-dependency, opt-in runtime enforcement for supported Node.js module-loading paths (require()/file:// ESM): signature, behavioral, and opt-in AST obfuscation detection with signed-policy enforcement. Defense-in-depth, not a comprehensive malware blocker.",
   "main": "index.js",
+  "bin": {
+    "aletheia-policy-keygen": "bin/aletheia-policy-keygen.js",
+    "aletheia-policy-sign": "bin/aletheia-policy-sign.js"
+  },
   "license": "Apache-2.0",
   "author": "Aletheia contributors",
   "homepage": "https://github.com/Enkidagoat/runtime-firewall-mvp#readme",
@@ -25,6 +29,7 @@
   "files": [
     "index.js",
     "src/",
+    "bin/",
     "sync-worker.js",
     ".helios-baseline",
     "README.md",
