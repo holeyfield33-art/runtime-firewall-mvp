@@ -328,9 +328,16 @@ class PolicyWatcher {
    * Calls onValidChange(rules, meta) with the initial rules on startup (meta.reload=false), then on
    * every verified change (meta.reload=true). NOTE: any authentic envelope signed by the trusted key
    * is accepted, including an OLDER one (replay); meta is for audit only, not rollback prevention.
+   *
+   * @returns {{status: 'absent'|'loaded'|'failed', meta?: object}} The actual outcome observed by this call.
+   *   'absent'  — no policy file at start; no monitoring, detection-only.
+   *   'loaded'  — verified policy loaded and monitoring started.
+   *   'failed'  — signature invalid or load failed; lockdown triggered.
    */
   start() {
-    if (!fs.existsSync(this.policyPath)) return;
+    if (!fs.existsSync(this.policyPath)) {
+      return { status: 'absent' };
+    }
 
     // F-02a: refuse to verify a policy file against the bundled dev key in production.
     // The bundled dev PUBLIC key is a shared, published value, not the deployer's own trust
@@ -351,15 +358,16 @@ class PolicyWatcher {
       this.locked = true;
       console.error('\n[CRITICAL] Policy file failed signature verification on startup. EMERGENCY LOCKDOWN ACTIVE.');
       this.onTamperDetected();
-      return;
+      return { status: 'failed' };
     }
 
     this._lastRulesHash = this._hashRules(initial.rules);
     this._lastSignedAt = initial.signedAt;
     this._lastPolicyHash = initial.policyHash;
-    this.onValidChange(initial.rules, {
+    const meta = {
       reload: false, signedAt: initial.signedAt, policyHash: initial.policyHash, policyPath: this.policyPath,
-    });
+    };
+    this.onValidChange(initial.rules, meta);
 
     this.timer = setInterval(() => {
       if (this.locked) return;
@@ -374,7 +382,7 @@ class PolicyWatcher {
 
       const newHash = this._hashRules(result.rules);
       if (newHash !== this._lastRulesHash) {
-        const meta = {
+        const reloadMeta = {
           reload: true,
           signedAt: result.signedAt,
           policyHash: result.policyHash,
@@ -386,11 +394,13 @@ class PolicyWatcher {
         this._lastSignedAt = result.signedAt;
         this._lastPolicyHash = result.policyHash;
         console.log(`[PolicyWatcher] Valid policy update detected \u2014 hot-reloading rules (signedAt ${result.signedAt}, sha256 ${result.policyHash}).`);
-        this.onValidChange(result.rules, meta);
+        this.onValidChange(result.rules, reloadMeta);
       }
     }, this._intervalMs);
 
     if (this.timer.unref) this.timer.unref();
+
+    return { status: 'loaded', meta };
   }
 
   stop() {
