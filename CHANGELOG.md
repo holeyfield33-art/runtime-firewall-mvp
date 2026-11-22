@@ -26,9 +26,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `POLICY_ABSENT_DETECTION_ONLY` audit event (customer-signed rules and policy monitoring
   inactive). Detection behavior is unchanged; invalid signatures still lock down.
 - **Policy audit trail.** `POLICY_LOADED` (startup) and `POLICY_RELOADED` (applied rule-set change only) audit events. `POLICY_RELOADED` is emitted when the rules hash differs from the currently applied set; same-rules re-signing emits no event. `previousPolicyHash` / `previousSignedAt` identify the previous applied rule set’s envelope. Diagnostic only — an older authentically signed policy with different rules is still accepted (replay is a documented limitation, not prevented). `PolicyWatcher`'s `onValidChange(rules)` callback now also receives a second `meta` argument.
+- **Consistent `signedAt` validation.** Accepted format is UTC ISO-8601 with milliseconds
+  (`YYYY-MM-DDTHH:mm:ss.sssZ`, the CLI default from `new Date().toISOString()`). Shared
+  `isValidSignedAt` checks type, syntax, and calendar validity in `signPolicy`,
+  `verifyPolicyEnvelope`, and the runtime watcher. Omitted signer argument receives the default;
+  explicitly invalid values are rejected. Original timestamp and canonical bytes are preserved
+  for accepted envelopes. Valid older timestamps in the accepted format remain accepted.
 - Tests: `policy-signing-cli-test.js`, `policy-posture-test.js`, `quarantine-compat-test.js`, an
   `FW_MODE=enforce`-vs-ESM-floor check in `esm-loader-test.js`, and four new installed-tarball
   checks in `scripts/smoke-tarball.js` (keygen, sign + enforce, detection-only, ESM requirement).
+
+### Fixed
+
+- **Dashboard timestamps (fw-control).** Numeric epoch timestamps are validated at ingestion
+  against the JS Date range. Invalid incoming events are rejected before persistence. Legacy
+  invalid records are rendered safely (no 500 on the HTML logs page).
 
 ### Fixed (documentation)
 

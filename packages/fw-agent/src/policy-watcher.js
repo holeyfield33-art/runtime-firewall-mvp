@@ -2,7 +2,13 @@
 // Continuous policy integrity verification using Ed25519 asymmetric signatures.
 //
 // policy.signed.json format:
-//   { "version": 1, "rules": {...}, "signedAt": "ISO-8601", "signature": "base64url" }
+//   { "version": 1, "rules": {...}, "signedAt": "YYYY-MM-DDTHH:mm:ss.sssZ", "signature": "base64url" }
+//
+// signedAt must be a UTC ISO-8601 timestamp with milliseconds (the exact format produced by
+// the CLI's `new Date().toISOString()`). Type, syntax, and calendar validity are checked
+// consistently in signing, envelope verification, and the runtime watcher. The original
+// timestamp string is preserved for accepted envelopes so canonical signed bytes are unchanged.
+// Valid older timestamps in this format remain accepted.
 //
 // The signature covers the canonical JSON of { version, rules (keys sorted), signedAt }.
 // An invalid or missing signature immediately triggers emergency lockdown.
@@ -203,6 +209,24 @@ function canonicalPayload(version, rules, signedAt) {
 }
 
 /**
+ * Accepted signedAt format: UTC ISO-8601 with milliseconds, matching the CLI default
+ * (`new Date().toISOString()` → "YYYY-MM-DDTHH:mm:ss.sssZ").
+ * Validates type (string), syntax, and calendar validity. Preserves the original value
+ * for accepted envelopes so canonical bytes remain unchanged.
+ * @param {*} ts
+ * @returns {boolean}
+ */
+function isValidSignedAt(ts) {
+  if (typeof ts !== 'string') return false;
+  // Strict match for the CLI's UTC ISO timestamp with milliseconds
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(ts)) return false;
+  const ms = Date.parse(ts);
+  if (!Number.isFinite(ms)) return false;
+  // Calendar validity: reconstructed ISO must match the original (rejects 2026-02-31 etc.)
+  return new Date(ms).toISOString() === ts;
+}
+
+/**
  * F-33: production dev-key guard that does NOT depend on a policy file being present.
  *
  * The in-`start()` guard below only fires when a policy.signed.json exists (start() returns
@@ -274,8 +298,8 @@ class PolicyWatcher {
 
     const { version, rules, signedAt, signature } = policy;
 
-    if (version !== 1 || !rules || typeof rules !== 'object' || !signedAt || !signature) {
-      console.error('[PolicyWatcher] Policy file is missing required fields (version, rules, signedAt, signature).');
+    if (version !== 1 || !rules || typeof rules !== 'object' || !isValidSignedAt(signedAt) || !signature) {
+      console.error('[PolicyWatcher] Policy file is missing required fields or has invalid signedAt (must be UTC ISO-8601 with milliseconds, e.g. 2026-11-21T00:00:00.000Z).');
       return null;
     }
 
@@ -422,5 +446,5 @@ class PolicyWatcher {
   }
 }
 
-module.exports = { PolicyWatcher, canonicalPayload, assertProductionKeyConfig };
+module.exports = { PolicyWatcher, canonicalPayload, isValidSignedAt, assertProductionKeyConfig };
 

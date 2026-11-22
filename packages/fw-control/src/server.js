@@ -110,7 +110,12 @@ const telemetryEventSchema = {
     eventType: { type: 'string', enum: TELEMETRY_EVENT_TYPES },
     packageName: { type: 'string', maxLength: MAX_TELEMETRY_STRING_LENGTH },
     parentPackage: { type: ['string', 'null'], maxLength: MAX_TELEMETRY_STRING_LENGTH },
-    timestamp: { type: 'number' },
+    timestamp: {
+      type: 'number',
+      // JS Date range is roughly ±8.64e15 ms. Reject non-finite and out-of-range values at ingestion.
+      minimum: -8640000000000000,
+      maximum: 8640000000000000,
+    },
   },
   additionalProperties: {
     anyOf: [
@@ -209,9 +214,16 @@ fastify.get('/logs', async (request, reply) => {
   const accept = request.headers.accept || '';
   if (accept.includes('text/html')) {
     const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    const rows = events.map(e =>
-      `<tr><td>${esc(new Date(e.timestamp).toISOString())}</td><td>${esc(e.eventType)}</td><td>${esc(e.packageName)}</td><td>${esc(e.agentId || '')}</td></tr>`
-    ).join('\n');
+    const rows = events.map(e => {
+      let timeStr = 'invalid';
+      try {
+        const d = new Date(e.timestamp);
+        if (Number.isFinite(d.getTime())) timeStr = d.toISOString();
+      } catch (err) {
+        // legacy malformed timestamps must not crash the dashboard
+      }
+      return `<tr><td>${esc(timeStr)}</td><td>${esc(e.eventType)}</td><td>${esc(e.packageName)}</td><td>${esc(e.agentId || '')}</td></tr>`;
+    }).join('\n');
     return reply
       .code(200)
       .header('Content-Type', 'text/html; charset=utf-8')
