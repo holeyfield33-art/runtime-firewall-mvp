@@ -3,7 +3,7 @@
 [![CI](https://img.shields.io/github/actions/workflow/status/Enkidagoat/runtime-firewall-mvp/ci.yml?branch=main&label=CI)](https://github.com/Enkidagoat/runtime-firewall-mvp/actions/workflows/ci.yml)
 [![CodeQL](https://img.shields.io/github/actions/workflow/status/Enkidagoat/runtime-firewall-mvp/dynamic/github-code-scanning/codeql?branch=main&label=CodeQL)](https://github.com/Enkidagoat/runtime-firewall-mvp/security/code-scanning)
 [![npm version](https://img.shields.io/npm/v/aletheia-firewall)](https://www.npmjs.com/package/aletheia-firewall)
-[![Provenance: SLSA](https://img.shields.io/badge/provenance-SLSA%20attested-2ea44f)](https://www.npmjs.com/package/aletheia-firewall?activeTab=code)
+[![Provenance](https://img.shields.io/badge/provenance-see%20Release%20integrity-lightgrey)](#provenance--supply-chain-security)
 
 A runtime security firewall for Node.js that intercepts module compilation to detect and block malicious packages through behavioral analysis, Aho-Corasick signature scanning, and policy enforcement.
 
@@ -33,11 +33,18 @@ API) for the ES module loader. This means:
 **ESM version floor:** `module.registerHooks()` — the non-deprecated, synchronous ESM hook API —
 requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`>=18.0.0`) covers
 its CommonJS functionality; below the ESM-specific floor, `import`/`import()` runs
-**unprotected**, with a loud, logged warning (`FW_MODE=enforce` treats it as a hard failure) —
-never silently claimed as covered. ESM policy `QUARANTINE` also has no equivalent to CJS's live
+**unprotected**, with a loud, logged warning — never silently claimed as covered. Under
+`FW_MODE=enforce` the warning becomes `[CRITICAL]` plus an `ESM_HOOK_UNAVAILABLE` audit event,
+but the process **still starts** and ESM still runs unprotected: `FW_MODE=enforce` alone does not
+guarantee ESM protection. Set `FW_REQUIRE_ESM_COVERAGE=1` to refuse to start (exit 1) when ESM
+interception is unavailable. ESM policy `QUARANTINE` also has no equivalent to CJS's live
 export-stub substitution (there's no module object to swap mid-evaluation from inside a load
 hook) and degrades to `BLOCK` instead — the module still never runs, it just isn't handed a
-fake, inert replacement export the way CJS `QUARANTINE` is.
+fake, inert replacement export the way CJS `QUARANTINE` is. On Node ≥22.15.0 / ≥23.5.0 the same
+applies to CommonJS loads whose format Node knows up front (a `.cjs` file, or a `.js` file under
+`"type": "commonjs"`, which `npm init -y` writes on npm ≥11): they pass through the ESM load hook,
+so `QUARANTINE` acts as a hard `BLOCK` (`require()` throws). Only a `.js` file with no `"type"`
+field (or any CJS load on older Node) gets the Proxy stub.
 
 **`require.cache` pre-seeding:** `Module._load()` — the real `require()` entry point — checks
 `require.cache` *before* `Module.prototype._compile` ever runs, so wrapping only `_compile` left
@@ -116,21 +123,24 @@ plain rules file and sign it:
 # rules.json — just the rule map
 echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
 
-# Sign it into policy.signed.json. There is no bundled/committed dev private key -- generate
-# your own local-only key first (never commit it), then sign with it. For local/dev/CI you
-# must also set FW_ALLOW_DEV_POLICY_KEY=1 at runtime to accept a key matching the bundled
-# DEV_PUBLIC_KEY_PEM default; in production, set FW_POLICY_PUBKEY to your own public key instead.
-node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only
-node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
+# Generate your own key pair and sign. Both CLIs ship in the npm package (no repo checkout needed);
+# from a repo checkout, `node scripts/generate-policy-key.js` / `node scripts/sign-policy.js` are
+# thin wrappers around the same implementation. The private key is written to a 0600 file and is
+# never printed; existing key files are not overwritten without --force.
+npx aletheia-policy-keygen
+npx aletheia-policy-sign aletheia-policy-private.pem rules.json policy.signed.json
+# Production: trust your own public key. Start the process from the directory holding
+# policy.signed.json -- the path is resolved from process.cwd().
+export FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)"
 ```
 
 The resulting `policy.signed.json` is a signed envelope: `{ version, rules, signedAt, signature }`.
 
 - **BLOCK**: Throws immediately, module code never runs.
-- **QUARANTINE**: Module code does not run; exports replaced with a `Proxy` stub that logs all access attempts. The quarantined module cannot load any child modules.
+- **QUARANTINE**: Module code does not run; exports replaced with a `Proxy` stub that logs all access attempts. The quarantined module cannot load any child modules. **Version caveat:** on Node ≥22.15.0 / ≥23.5.0, ESM loads and CommonJS loads with a known format (`.cjs`, or `.js` under `"type": "commonjs"`) hard-BLOCK instead (see the ESM version-floor note).
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on any detection.
 
-> **Naming note:** `policy.signed.json` carries a real **Ed25519 signature** over its canonical payload (`{ version, rules (keys sorted), signedAt }`). The public key is compiled into `src/policy-watcher.js` (override with `FW_POLICY_PUBKEY`); sign policy files with `scripts/sign-policy.js`. Since v0.2.0 this replaces the earlier SHA-256 trust-on-first-use baseline.
+> **Naming note:** `policy.signed.json` carries a real **Ed25519 signature** over its canonical payload (`{ version, rules (keys sorted), signedAt }`). The public key is compiled into `src/policy-watcher.js` (override with `FW_POLICY_PUBKEY`); sign policy files with `npx aletheia-policy-sign` (repo: `scripts/sign-policy.js`). A missing policy file means detection-only (one `DETECTION-ONLY` warning + `POLICY_ABSENT_DETECTION_ONLY` audit event); verified reloads are audited as `POLICY_RELOADED` with hash + `signedAt`, and an older authentically signed policy is still accepted (replay is a documented limitation, not prevented). Since v0.2.0 this replaces the earlier SHA-256 trust-on-first-use baseline.
 
 ### 4. Continuous Policy Integrity Verification
 
@@ -297,12 +307,13 @@ and troubleshooting.
 | `FW_TELEMETRY_MAX_EVENTS` | `500` | Maximum events accepted in one `/v1/telemetry` batch (fw-control only) |
 | `FW_TELEMETRY_MAX_QUEUE_ITEMS` | `5000` | Maximum queued telemetry requests awaiting background processing (fw-control only) |
 | `FW_TELEMETRY_MAX_QUEUE_BYTES` | `10485760` (10 MB) | Maximum total bytes of queued-but-unprocessed telemetry requests (fw-control only); admission requires both the item and byte budgets to have room |
-| `FW_MODE` | `dev` | `enforce` fails closed (exits) when not preloaded via `--require`; `dev` warns and continues. See "Enforcement mode vs Development mode" above. |
+| `FW_MODE` | `dev` | `enforce` fails closed (exits) when not preloaded via `--require`; `dev` warns and continues. `enforce` does not make an unsupported Node version fatal for ESM — see `FW_REQUIRE_ESM_COVERAGE`. See "Enforcement mode vs Development mode" above. |
+| `FW_REQUIRE_ESM_COVERAGE` | `0` | Set to `1` to exit at startup when ESM interception is unavailable (Node below ≥22.15.0 / ≥23.5.0). Independent of `FW_MODE`. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze `Object/Array/Function/Promise/RegExp` prototypes on load (hardens against prototype pollution; may break libraries that extend built-ins) |
 | `FW_HARDEN_MODULE_PRIMITIVES` | `0` | Set to `1` to freeze `Module.prototype._compile` non-writable/non-configurable after the agent patches it, raising the cost of a later monkeypatch. Complementary to `FW_CACHE_POLICY` below, not a substitute — does nothing against `require.cache` poisoning. Same compatibility caveat as `FW_FREEZE_PROTOTYPES`: may break loaders/instrumentation/transpilers that legitimately re-patch `_compile`. |
 | `FW_CACHE_POLICY` | `block` under `FW_MODE=enforce`, `audit` otherwise | Controls what happens when `require()` finds a `require.cache` entry for a `.js`/`.cjs` path the firewall never verified via `_compile` (possible cache-substitution attack, or legitimate cache pre-seeding by test-mocking/HMR tooling — cache state alone can't tell these apart). `block` refuses the load; `audit` allows it but logs a visible `CACHE_SUBSTITUTION_DETECTED` event (console + persistent audit log); `allow` allows it silently to the console (still logged to disk). |
-| `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key used to verify `policy.signed.json`. **Must be set to your own key in production** — there is no shared, committed dev key any more (see `SECURITY.md`); generate your own with `node scripts/generate-policy-key.js`. |
+| `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key used to verify `policy.signed.json`. **This is the production configuration — set it to your own public key.** The bundled default is a shared, published dev *public* key with no private key held by anyone (the earlier committed dev private key was revoked, see `SECURITY.md`); it is for local/dev/CI only. Generate your own with `npx aletheia-policy-keygen`. |
 | `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the bundled dev key when `FW_POLICY_PUBKEY` is unset (local dev / CI only). The agent refuses to start with a policy file and no production key unless this flag is explicitly set. |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_DASHBOARD_TOKEN` | *(none)* | Bearer token for the `/logs` dashboard endpoint (fw-control only) |
@@ -455,9 +466,17 @@ curl -H "Accept: text/html" -H "Authorization: Bearer mysecret" http://localhost
 
 This is about how **this package itself** is published, distinct from the detection features above.
 
-Every release from `v0.6.0` onward is published via [npm Trusted Publishing](https://docs.npmjs.com/generating-provenance-statements) — a tag-triggered GitHub Actions workflow (`.github/workflows/publish.yml`) that negotiates a short-lived OIDC token with npm at publish time. There is no long-lived npm token stored anywhere, and the exact tarball that passes CI is the one published — no manual `npm publish` step in the release path.
+Releases are intended to be published via [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers) — a tag-triggered GitHub Actions workflow (`.github/workflows/publish.yml`) that negotiates a short-lived OIDC token with npm at publish time, with no long-lived npm token stored in the repository, publishing the exact tarball that passed CI.
 
-This produces a [SLSA provenance](https://slsa.dev/provenance/v1) attestation, publicly verifiable on the npm package page or via:
+**Per-version status (check before relying on it):**
+
+| Version | npm registry signature | npm provenance (SLSA) attestation | Notes |
+|---|---|---|---|
+| 0.5.0, 0.6.0 | ✅ | ✅ | Published by the Trusted Publishing workflow. |
+| 0.6.1 | — | — | Never published (workflow failed; see CHANGELOG). |
+| 0.6.2 | ✅ | ❌ **none** | Trusted Publishing failed after the repository transfer, and 0.6.2 was published manually from the maintainer account. Independently **byte-reproduced** from tag `v0.6.2` (`cf59c98`; tarball sha256 `86497590eefdcfc3c7b6dcb1f7f8ae809863d6dd4dba66e62a2f57be3f06598b`), but there is no attestation linking it to a commit or workflow. |
+
+A registry signature (`npm audit signatures`) and a provenance attestation are **not equivalent**: the signature shows the npm registry is serving the bytes an authenticated publisher account uploaded; the provenance attestation additionally records *which repository, commit, and workflow* built them. Where present, the [SLSA provenance](https://slsa.dev/provenance/v1) attestation is publicly verifiable on the npm package page or via:
 
 ```bash
 npm view aletheia-firewall@0.6.0 dist.attestations
@@ -469,7 +488,7 @@ or
 npm audit signatures
 ```
 
-after installing. This tells you the package was built by this repo's own CI from a specific, inspectable commit — not hand-published from someone's laptop.
+after installing (`npm audit signatures` verifies registry signatures and, where they exist, attestations). For a version **with** an attestation, this tells you the package was built by this repo's own CI from a specific, inspectable commit; for 0.6.2 it does not.
 
 ---
 

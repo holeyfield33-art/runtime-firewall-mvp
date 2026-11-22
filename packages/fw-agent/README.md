@@ -27,7 +27,28 @@ FW_ENABLE_DETECTION=1 BUN_PRELOAD=aletheia-firewall bun app.js
 
 > **ESM coverage requires Node ≥22.15.0 / ≥23.5.0.** Below that floor, CommonJS `require()`
 > coverage is unaffected, but `import`/`import()` runs unprotected — see the version-floor note
-> below.
+> below. If your deployment depends on ESM coverage, set **`FW_REQUIRE_ESM_COVERAGE=1`** so the
+> agent refuses to start where ESM interception is unavailable. `FW_MODE=enforce` on its own does
+> **not** guarantee ESM protection.
+
+## Quick start: signed policy (no source checkout needed)
+
+The key-generation and signing tools ship in this package as CLI commands:
+
+```bash
+npx aletheia-policy-keygen      # writes aletheia-policy-private.pem (0600) + aletheia-policy-public.pem
+                                # the private key is never printed; existing key files are never overwritten
+echo '{ "some-package": "BLOCK" }' > rules.json
+npx aletheia-policy-sign aletheia-policy-private.pem rules.json policy.signed.json
+
+# Production configuration: trust YOUR public key via FW_POLICY_PUBKEY.
+export FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)"
+FW_ENABLE_DETECTION=1 node --require aletheia-firewall app.js   # run from the directory holding policy.signed.json
+```
+
+Keep the private key off production hosts and out of source control — the runtime only needs the
+public key. `policy.signed.json` is read from **`process.cwd()`** at startup (see
+[Policy File](#policy-file)).
 
 ## Coverage & Limitations
 
@@ -47,14 +68,18 @@ API) for the ES module loader. This means:
 **ESM version floor:** `module.registerHooks()` — the non-deprecated, synchronous ESM hook API —
 requires Node ≥22.15.0 or ≥23.5.0. The package's declared `engines` floor (`>=18.0.0`) covers
 its CommonJS functionality; below the ESM-specific floor, `import`/`import()` runs
-**unprotected**, with a loud, logged warning (`FW_MODE=enforce` treats it as a hard failure) —
-never silently claimed as covered.
+**unprotected**, with a loud warning — never silently claimed as covered. Under
+`FW_MODE=enforce` that warning is escalated to a `[CRITICAL]` message and an
+`ESM_HOOK_UNAVAILABLE` audit event, **but the process still starts and ESM still runs
+unprotected** (`FW_MODE=enforce` governs the preload requirement, not the Node version). To fail
+closed when ESM coverage is unavailable, set `FW_REQUIRE_ESM_COVERAGE=1`: the agent then exits
+with code 1 at startup on an unsupported Node version, and starts normally on a supported one.
 
 **ESM module-URL scheme:** even on a supported Node version, ESM coverage only applies to
 `file://` module URLs. The load hook returns before the detector runs for any other scheme, so
 `import()` of a `data:`, `http:`, `https:`, or `blob:` URL is **unprotected on every Node
 version**, floor or no floor — this is a separate gap from the version floor above, not covered
-by it. See `docs/THREAT-COVERAGE.md`'s execution-path table for the full breakdown.
+by it. See [`docs/THREAT-COVERAGE.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/docs/THREAT-COVERAGE.md)'s execution-path table for the full breakdown.
 
 Aletheia is a **runtime enforcement layer**: it watches what a dependency does once it's
 already in your CommonJS require graph, after `npm install` has finished. It is not an
@@ -82,8 +107,8 @@ flood of harmless decoy spans placed ahead of it. If a genuinely high-risk span 
 because the budget was exhausted, the scan is reported *incomplete* and `FW_AST_INCOMPLETE_POLICY`
 decides what happens (see the environment-variable table).
 
-Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md) and the monorepo's
-`docs/THREAT-COVERAGE.md`.
+Every bypass class is listed in [`red-team/README.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/red-team/README.md) and the monorepo's
+[`docs/THREAT-COVERAGE.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/docs/THREAT-COVERAGE.md).
 
 ## Environment Variables
 
@@ -98,11 +123,12 @@ Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md)
 | `FW_TELEMETRY` | `0` | Set to `1` to start a telemetry worker that POSTs events to `FW_CONTROL_PORT`; with no control plane running it fails open and delivers nothing. |
 | `FW_CONTROL_PORT` | `3000` | Port for the control plane telemetry ingestion endpoint (`fw-control`). Used by the telemetry worker when `FW_TELEMETRY=1`. |
 | `FW_TELEMETRY_TOKEN` | *(none)* | Bearer token sent with every `/v1/telemetry` request when `FW_TELEMETRY=1`. Must match the control plane's own `FW_TELEMETRY_TOKEN`; required if the control plane is reachable beyond the local host. |
-| `FW_MODE` | `dev` | `enforce` fails closed (`process.exit(1)`) when not preloaded via `--require`; `dev` (default) warns loudly and continues. See the root README's "Enforcement mode vs Development mode" section. |
+| `FW_MODE` | `dev` | `enforce` fails closed (`process.exit(1)`) when not preloaded via `--require`; `dev` (default) warns loudly and continues. `enforce` does **not** make an unsupported Node version fatal for ESM (it logs `[CRITICAL]` and continues) — use `FW_REQUIRE_ESM_COVERAGE=1` for that. See the [root README](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/README.md)'s "Enforcement mode vs Development mode" section. |
+| `FW_REQUIRE_ESM_COVERAGE` | `0` | Set to `1` to refuse to start (`process.exit(1)`) when ESM interception is unavailable (Node below ≥22.15.0 / ≥23.5.0, or hook registration failed). Independent of `FW_MODE`. Recommended for any deployment that loads ESM dependencies. |
 | `FW_STRICT_PRELOAD` | `0` | Set to `1` to exit if not loaded via `--require` (backward-compatible alias for `FW_MODE=enforce`) |
 | `FW_FREEZE_PROTOTYPES` | `0` | Set to `1` to freeze built-in prototypes (prototype-pollution hardening; opt-in because it breaks some polyfills and test frameworks) |
-| `FW_POLICY_PUBKEY` | *(dev key)* | PEM-encoded Ed25519 SPKI public key for verifying `policy.signed.json`. **Must be set in production** — the bundled dev private key is public. |
-| `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the dev key when `FW_POLICY_PUBKEY` is unset (local/dev/CI). Agent refuses to start with a policy file present and no production key unless this flag is set. |
+| `FW_POLICY_PUBKEY` | *(bundled dev public key)* | PEM-encoded Ed25519 SPKI public key for verifying `policy.signed.json`. **This is the production configuration — set it to your own public key** (e.g. `export FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)"`). The bundled default is a shared, published dev *public* key; no one holds its private key (an earlier, committed dev private key was revoked under F-62 — see SECURITY.md in the repository), but it is not your trust anchor and must not be relied on in production. |
+| `FW_ALLOW_DEV_POLICY_KEY` | `0` | Set to `1` to allow the bundled dev public key when `FW_POLICY_PUBKEY` is unset (local/dev/CI only). The agent refuses to start with a policy file present and no `FW_POLICY_PUBKEY` unless this flag is set. |
 | `HELIOS_LOG_DIR` | `/var/log/helios` | Audit log directory |
 | `HELIOS_BLOCK_SCRIPTS` | `1` | Set to `0` to warn instead of block suspicious npm scripts |
 | `BUN_PRELOAD` | *(none)* | Must include `aletheia-firewall` when running under Bun; the agent exits with code 1 if absent |
@@ -112,30 +138,99 @@ Every bypass class is listed in [`red-team/README.md`](../../red-team/README.md)
 
 ## Policy File
 
+**Location:** the agent reads `policy.signed.json` from **`process.cwd()` at startup** — the
+directory the Node process is started from, not the directory of your app or of `node_modules`.
+The path is not configurable in this release. Start your process from the directory that holds the
+policy file.
+
+**No policy file = detection-only.** If detection is enabled and no file exists at that path, the
+agent prints one `[Helios] DETECTION-ONLY` warning and writes one `POLICY_ABSENT_DETECTION_ONLY`
+audit event: built-in signature/behavioral detection stays active, but your signed
+BLOCK/QUARANTINE/OBSERVE rules and policy integrity monitoring are **inactive** for that process
+(a file added later is not picked up until restart). This is reported the same way under
+`FW_MODE=enforce`; it is not an error.
+
 `policy.signed.json` must be a **signed envelope** (`{ version, rules, signedAt, signature }`) —
-an unsigned `{ "rules": … }` object fails verification on startup and triggers emergency lockdown.
-Author a plain rules file and sign it:
+an unsigned `{ "rules": … }` object, a tampered file, or a signature from a key other than
+`FW_POLICY_PUBKEY` fails verification and triggers **emergency lockdown** (all module loads
+blocked). It never silently downgrades to detection-only. Author a plain rules file and sign it
+with the CLIs shipped in this package:
 
 ```bash
-node scripts/generate-policy-key.js   # prints a fresh keypair; keep the private key local-only, never commit it
+npx aletheia-policy-keygen [--private-key <file>] [--public-key <file>] [--force]
 echo '{ "malware.js": "BLOCK", "untrusted-pkg.js": "QUARANTINE", "noisy-lib.js": "OBSERVE" }' > rules.json
-node scripts/sign-policy.js /path/to/your-private-key.pem rules.json policy.signed.json
+npx aletheia-policy-sign aletheia-policy-private.pem rules.json policy.signed.json
+export FW_POLICY_PUBKEY="$(cat aletheia-policy-public.pem)"
 ```
 
-There is no bundled/committed dev private key (see `SECURITY.md`). If your key matches the
-bundled `DEV_PUBLIC_KEY_PEM` default you must also run with `FW_ALLOW_DEV_POLICY_KEY=1`; in
-production, set `FW_POLICY_PUBKEY` to your own public key instead.
+`aletheia-policy-keygen` writes the private key with mode 0600, never prints it, and refuses to
+overwrite an existing key file unless `--force` is given. `aletheia-policy-sign` self-verifies
+the signature before writing and prints the public-key fingerprint it verifies under. Do not edit
+files under `node_modules` to change the trusted key — `FW_POLICY_PUBKEY` is the supported
+configuration.
 
-- **BLOCK**: Module never runs.
-- **QUARANTINE**: Exports replaced with a logging Proxy; child requires blocked.
+- **BLOCK**: Module never runs; `require()`/`import` throws.
+- **QUARANTINE**: Module never runs. On Node **below** 22.15.0 / 23.5.0 (and, on any Node, for a
+  `.js` file whose nearest `package.json` has no `"type"` field) the exports are replaced with a
+  logging Proxy and child requires are blocked. On Node **≥22.15.0 / ≥23.5.0**, a CommonJS load
+  whose format Node knows up front — a `.cjs` file, or a `.js` file under `"type": "commonjs"`
+  (which `npm init -y` writes by default on npm ≥11) — and every ESM load goes through the ESM load
+  hook, which cannot substitute exports, so **QUARANTINE acts as a hard BLOCK** there:
+  `require()` throws `[Firewall] Compilation denied …`. Plan for both behaviors.
 - **OBSERVE** (default): Full behavioral + signature scan; blocks on detection.
+
+**Reloads and replay.** The file is re-verified every 60 seconds. A changed, validly signed policy
+is hot-reloaded and recorded as a `POLICY_RELOADED` audit event with the new file's SHA-256,
+its `signedAt`, the previous hash/`signedAt`, and `signedAtNotNewerThanPrevious`; the policy
+active at startup is recorded as `POLICY_LOADED`. **Any envelope authentically signed by the
+trusted key is accepted — including an older one.** Someone who can write `policy.signed.json`
+can replay a previously signed (e.g. less restrictive) policy, live or at restart. The audit
+events make that visible after the fact; they do **not** prevent it. Protect write access to the
+policy file and the directory it lives in.
+
+### Key loss and key compromise
+
+The trusted key is whatever `FW_POLICY_PUBKEY` contains; there is no revocation list.
+
+- **Private key lost** (no compromise): run `npx aletheia-policy-keygen` (use `--force` only if you
+  intend to replace the old files), re-sign your rules with the new private key, deploy the new
+  `policy.signed.json` **and** the new `FW_POLICY_PUBKEY` together, then restart. A process still
+  trusting the old key will reject the new signature and enter emergency lockdown — it fails
+  closed, not open — so roll out both values at once.
+- **Private key compromised** (or suspected): treat every policy signed under that key as
+  untrusted, including ones you signed yourself, because an attacker can mint or replay them.
+  1. Generate a new key pair on a trusted machine; do not reuse the old key files.
+  2. Re-sign the current intended rules with the new key and review them before deploying.
+  3. Replace `FW_POLICY_PUBKEY` everywhere it is set (environment, secrets store, container
+     images, CI) and restart every protected process — a running process keeps trusting the key
+     it started with.
+  4. Remove old policy files and backups signed by the compromised key from deployment paths; after
+     rotation they fail verification (lockdown) rather than load.
+  5. Review audit logs for `POLICY_LOADED` / `POLICY_RELOADED` events whose `policyHash` you did not
+     deploy, and for `POLICY_TAMPER_LOCKDOWN`.
+  6. Destroy the old private key copies.
 
 > **Signing:** `policy.signed.json` carries a real **Ed25519 signature** over its canonical
 > payload `{ version, rules (keys sorted), signedAt }`, re-verified every 60 seconds. An invalid
-> or missing signature triggers emergency lockdown. The verifying public key is compiled into
-> `src/policy-watcher.js` and overridable via `FW_POLICY_PUBKEY`; author a rules file and sign it
-> with `scripts/sign-policy.js`. (Since v0.2.0 this replaced the earlier SHA-256 trust-on-first-use
-> baseline — earlier docs describing SHA-256-only monitoring are obsolete.)
+> signature on a present file triggers emergency lockdown; an absent file means detection-only
+> (above). The verifying key is `FW_POLICY_PUBKEY` (a bundled dev public key is the fallback for
+> local/dev/CI only); sign with `npx aletheia-policy-sign`. (Since v0.2.0 this replaced the earlier
+> SHA-256 trust-on-first-use baseline — earlier docs describing SHA-256-only monitoring are obsolete.)
+
+## Release integrity
+
+- **v0.6.2** on npm is **registry-signed** (verify with `npm audit signatures`) and was
+  independently **byte-reproduced** from tag `v0.6.2` (commit `cf59c98`, tarball sha256
+  `86497590eefdcfc3c7b6dcb1f7f8ae809863d6dd4dba66e62a2f57be3f06598b`), but it has **no npm
+  provenance (SLSA) attestation**: it was published manually after the Trusted Publishing step
+  failed. A registry signature proves the registry is serving the bytes it received from an
+  authenticated publisher account; it does **not** prove which source commit or CI workflow built
+  them — that is what a provenance attestation adds.
+- **v0.5.0 and v0.6.0** carry npm provenance attestations
+  (`npm view aletheia-firewall@0.6.0 dist.attestations`).
+- Later releases are intended to be published only through the repository's Trusted Publishing
+  workflow with provenance; check `dist.attestations` for the version you install rather than
+  assuming it.
 
 ## Performance
 
@@ -150,7 +245,7 @@ The repo maintains a 25% median compilation-overhead gate budget, but this is a 
 
 The gate is a **regression guard**, not a performance target. If the median exceeds 25%, the change needs review.
 
-For the v0.4.0 frozen baseline and diagnostic evidence, see `PERFORMANCE.md` and `results/benchmarks/steady-state-compile-attr-*.json`. This is the most recent controlled performance freeze in the repo; no v0.5.0-specific freeze has been published yet, so treat these numbers as last-measured-at-v0.4.0, not as a v0.5.0 guarantee.
+For the v0.4.0 frozen baseline and diagnostic evidence, see [`PERFORMANCE.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/PERFORMANCE.md) and `results/benchmarks/steady-state-compile-attr-*.json` in the repository. This is the most recent controlled performance freeze in the repo; no v0.5.0-specific freeze has been published yet, so treat these numbers as last-measured-at-v0.4.0, not as a v0.5.0 guarantee.
 
 To reproduce, run the 900-module gate from the GitHub repo: `npm run gate`.
 
@@ -177,7 +272,7 @@ tier: default (signature + behavioral) and `FW_ENABLE_AST=1` (the opt-in AST tie
 | AST span-exhaustion: real payload hidden behind >40 decoy spans | `FW_ENABLE_AST=1`: **BLOCKED** (highest-risk-first span scheduling; incomplete scans governed by `FW_AST_INCOMPLETE_POLICY`) |
 | WASM payloads, env-sourced config, network+process-exec taint chains, low-and-slow C2 | **BYPASSES even with `FW_ENABLE_AST=1`** — architectural limits of static/AST analysis; need runtime/dataflow instrumentation |
 
-See the monorepo's `docs/THREAT-COVERAGE.md` for the full, test-backed protection/bypass matrix.
+See the monorepo's [`docs/THREAT-COVERAGE.md`](https://github.com/Enkidagoat/runtime-firewall-mvp/blob/main/docs/THREAT-COVERAGE.md) for the full, test-backed protection/bypass matrix.
 
 ## Behavioral Detection Notes
 
@@ -203,4 +298,4 @@ npm test                  # all
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0 — see `LICENSE` (included in this package).
