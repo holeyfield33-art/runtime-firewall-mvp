@@ -19,7 +19,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { canonicalPayload } = require('./policy-watcher');
+const { canonicalPayload, isValidSignedAt } = require('./policy-watcher');
 
 // Same capture discipline as policy-watcher.js: the signer's own key-sort copy reads pristine
 // primitives captured at module load (F-80/F-83/F-84). The sorted copy becomes BOTH the input to
@@ -50,7 +50,11 @@ function signPolicy(rules, privateKeyPem, signedAt) {
   if (!rules || typeof rules !== 'object' || Array.isArray(rules)) {
     throw new TypeError('rules must be a JSON object mapping module/package keys to BLOCK | QUARANTINE | OBSERVE');
   }
-  const ts = signedAt || new Date().toISOString();
+  // Omitted argument → CLI default (UTC ISO with ms). Explicit invalid value is rejected.
+  const ts = signedAt === undefined || signedAt === null ? new Date().toISOString() : signedAt;
+  if (!isValidSignedAt(ts)) {
+    throw new Error(`signedAt must be a UTC ISO-8601 timestamp with milliseconds (e.g. 2026-11-21T00:00:00.000Z); received: ${JSON.stringify(signedAt)}`);
+  }
   const sorted = sortedRulesCopy(rules);
   const payload = canonicalPayload(POLICY_VERSION, sorted, ts);
   const sigBuffer = pristineSign(null, payload, { key: privateKeyPem, format: 'pem', type: 'pkcs8' });
@@ -59,7 +63,7 @@ function signPolicy(rules, privateKeyPem, signedAt) {
 
 /** Verify an envelope against an SPKI PEM public key using the agent's canonical payload. */
 function verifyPolicyEnvelope(envelope, publicKeyPem) {
-  if (!envelope || envelope.version !== POLICY_VERSION || !envelope.rules || !envelope.signedAt || !envelope.signature) return false;
+  if (!envelope || envelope.version !== POLICY_VERSION || !envelope.rules || !isValidSignedAt(envelope.signedAt) || !envelope.signature) return false;
   try {
     return pristineVerify(null, canonicalPayload(envelope.version, envelope.rules, envelope.signedAt),
       { key: publicKeyPem, format: 'pem', type: 'spki' }, Buffer.from(envelope.signature, 'base64url'));
